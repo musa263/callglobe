@@ -16,6 +16,38 @@ function getAllowedOrigin() {
   return new URL(appBaseUrl).origin;
 }
 
+function base64urlEncode(value: string) {
+  return btoa(value)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function createSignedPayload(payload: Record<string, unknown>, secret: string) {
+  const encoder = new TextEncoder();
+  const payloadB64 = base64urlEncode(JSON.stringify(payload));
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    encoder.encode(payloadB64),
+  );
+
+  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  return `${payloadB64}.${signatureB64}`;
+}
+
 // Twilio JWT helper — we build the token manually since Deno doesn't have the twilio SDK
 // Access Token structure: Header.Payload.Signature (JWT)
 async function createAccessToken(
@@ -120,6 +152,7 @@ serve(async (req) => {
     const apiKeySid = getRequiredEnv("TWILIO_API_KEY_SID");
     const apiKeySecret = getRequiredEnv("TWILIO_API_KEY_SECRET");
     const twimlAppSid = getRequiredEnv("TWILIO_TWIML_APP_SID");
+    const twilioAuthToken = getRequiredEnv("TWILIO_AUTH_TOKEN");
 
     // Generate access token
     const token = await createAccessToken(
@@ -130,7 +163,15 @@ serve(async (req) => {
       twimlAppSid
     );
 
-    return new Response(JSON.stringify({ token }), {
+    const callToken = await createSignedPayload(
+      {
+        sub: user.id,
+        exp: Math.floor(Date.now() / 1000) + 300,
+      },
+      twilioAuthToken,
+    );
+
+    return new Response(JSON.stringify({ token, call_token: callToken }), {
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": getAllowedOrigin(),

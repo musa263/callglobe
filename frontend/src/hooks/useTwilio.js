@@ -10,6 +10,8 @@ import {
 } from '../lib/twilio';
 import { supabase } from '../lib/supabase';
 
+let currentCallToken = null;
+
 async function fetchTwilioToken() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.access_token) {
@@ -35,10 +37,15 @@ async function fetchTwilioToken() {
     throw new Error(payload.error || `Token fetch failed (${response.status})`);
   }
 
-  const { token } = payload;
+  const { token, call_token: callToken } = payload;
   if (!token) {
     throw new Error('Twilio access token missing from server response.');
   }
+  if (!callToken) {
+    throw new Error('Call authorization token missing from server response.');
+  }
+
+  currentCallToken = callToken;
 
   return token;
 }
@@ -160,6 +167,7 @@ export function useTwilio(userId) {
       setError(null);
 
       const call = await twilioMakeCall(fullNumber, {
+        call_token: currentCallToken,
         country_code: countryCode,
       });
 

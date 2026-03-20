@@ -68,6 +68,12 @@ function timingSafeEqual(a: string, b: string) {
   return mismatch === 0;
 }
 
+function decodeBase64url(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  return atob(padded);
+}
+
 async function computeTwilioSignature(url: string, params: TwilioParams, authToken: string) {
   const payload = Object.keys(params)
     .sort((a, b) => a.localeCompare(b))
@@ -88,6 +94,47 @@ async function computeTwilioSignature(url: string, params: TwilioParams, authTok
   );
 
   return btoa(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+async function verifySignedPayload(token: string | undefined) {
+  if (!token) return null;
+
+  const [payloadB64, signatureB64] = token.split(".");
+  if (!payloadB64 || !signatureB64) return null;
+
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  if (!authToken) return null;
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(authToken),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(payloadB64),
+  );
+
+  const expectedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  if (!timingSafeEqual(signatureB64, expectedSignature)) {
+    return null;
+  }
+
+  const payload = JSON.parse(decodeBase64url(payloadB64));
+  const exp = Number(payload.exp ?? 0);
+  if (!exp || exp < Math.floor(Date.now() / 1000)) {
+    return null;
+  }
+
+  return typeof payload.sub === "string" ? payload.sub : null;
 }
 
 async function verifyTwilioSignature(req: Request, params: TwilioParams) {
@@ -329,10 +376,11 @@ async function finalizeLegacyCompletedCall(
 async function handleVoiceRequest(
   supabase: ReturnType<typeof createClient>,
   params: TwilioParams,
+  authenticatedUserId: string | null,
 ) {
   const providerCallId = params.CallSid;
   const destinationNumber = params.destination ?? params.Destination ?? params.To;
-  const userId = parseIdentity(params.From);
+  const userId = authenticatedUserId ?? parseIdentity(params.From);
   const selectedCountryCode = normalizeCountryCode(params.country_code);
 
   if (!providerCallId || !destinationNumber || !userId) {
@@ -489,11 +537,17 @@ async function handleStatusCallback(
 serve(async (req) => {
   try {
     const params = await readTwilioParams(req);
-    const signatureValid = await verifyTwilioSignature(req, params);
+    const isVoiceRequest = Boolean((params.destination ?? params.Destination ?? params.To) && !params.CallStatus);
+    const authenticatedUserId = isVoiceRequest
+      ? await verifySignedPayload(params.call_token)
+      : null;
 
-    if (!signatureValid) {
-      console.error("Rejected Twilio webhook with invalid signature");
-      return new Response("Forbidden", { status: 403 });
+    if (!authenticatedUserId) {
+      const signatureValid = await verifyTwilioSignature(req, params);
+      if (!signatureValid) {
+        console.error("Rejected Twilio webhook with invalid signature");
+        return new Response("Forbidden", { status: 403 });
+      }
     }
 
     const supabase = createClient(
@@ -501,8 +555,8 @@ serve(async (req) => {
       getRequiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
     );
 
-    if (params.To && !params.CallStatus) {
-      return await handleVoiceRequest(supabase, params);
+    if (isVoiceRequest) {
+      return await handleVoiceRequest(supabase, params, authenticatedUserId);
     }
 
     return await handleStatusCallback(supabase, params);
