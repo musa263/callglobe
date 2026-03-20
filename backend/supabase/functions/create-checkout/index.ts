@@ -5,37 +5,72 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@13.10.0?target=deno";
 
-const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, { apiVersion: "2023-10-16" });
+function getRequiredEnv(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+function getCorsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": new URL(getRequiredEnv("APP_BASE_URL")).origin,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  };
+}
 
-serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+  });
+}
+
+function resolveReturnUrl(rawUrl: string | null | undefined, statusParam: "success" | "canceled") {
+  const appBaseUrl = new URL(getRequiredEnv("APP_BASE_URL"));
+  const fallback = new URL(`/?tab=recharge&${statusParam}=true`, appBaseUrl);
+
+  if (!rawUrl) return fallback.toString();
 
   try {
+    const candidate = new URL(rawUrl);
+    if (candidate.origin !== appBaseUrl.origin) return fallback.toString();
+    return candidate.toString();
+  } catch {
+    return fallback.toString();
+  }
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: getCorsHeaders() });
+
+  try {
+    const stripe = new Stripe(getRequiredEnv("STRIPE_SECRET_KEY"), { apiVersion: "2023-10-16" });
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
     // Verify user is authenticated
     const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+      getRequiredEnv("SUPABASE_URL"),
+      getRequiredEnv("SUPABASE_ANON_KEY"),
+      { global: { headers: { Authorization: authHeader } } }
     );
 
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Unauthorized" }, 401);
     }
 
     const { package_id, success_url, cancel_url } = await req.json();
+    if (!package_id) {
+      return jsonResponse({ error: "Missing package_id" }, 400);
+    }
 
     // Get package details
     const adminSupabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      getRequiredEnv("SUPABASE_URL"),
+      getRequiredEnv("SUPABASE_SERVICE_ROLE_KEY")
     );
 
     const { data: pkg, error: pkgError } = await adminSupabase
@@ -46,16 +81,20 @@ serve(async (req) => {
       .single();
 
     if (pkgError || !pkg) {
-      return new Response(JSON.stringify({ error: "Package not found" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Package not found" }, 404);
     }
+
+    const successUrl = resolveReturnUrl(success_url, "success");
+    const cancelUrl = resolveReturnUrl(cancel_url, "canceled");
 
     // Create Stripe Checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: [
-        {
+        pkg.stripe_price_id ? {
+          price: pkg.stripe_price_id,
+          quantity: 1,
+        } : {
           price_data: {
             currency: "usd",
             product_data: {
@@ -70,8 +109,10 @@ serve(async (req) => {
         },
       ],
       mode: "payment",
-      success_url: success_url || `${req.headers.get("origin")}/recharge?success=true`,
-      cancel_url: cancel_url || `${req.headers.get("origin")}/recharge?canceled=true`,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: user.id,
+      customer_email: user.email,
       metadata: {
         user_id: user.id,
         package_id: pkg.id,
@@ -79,13 +120,9 @@ serve(async (req) => {
       },
     });
 
-    return new Response(JSON.stringify({ url: session.url, session_id: session.id }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ url: session.url, session_id: session.id });
   } catch (err) {
     console.error("Checkout error:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: err.message }, 500);
   }
 });

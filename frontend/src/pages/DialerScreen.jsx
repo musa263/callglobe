@@ -4,15 +4,16 @@ import CountryPicker from '../components/CountryPicker';
 
 export default function DialerScreen({
   balance, estimatedMinutes, selectedCountry, onSelectCountry,
-  dialNumber, onDialNumber, onCall, rates, voiceReady,
+  dialNumber, onDialNumber, onCall, rates, voiceReady, callError,
 }) {
   const [showPicker, setShowPicker] = useState(false);
+  const hasMinimumBalance = selectedCountry ? balance >= Number(selectedCountry.rate_per_min || 0) : false;
 
   const dialPad = (digit) => {
     if (dialNumber.length < 15) onDialNumber(dialNumber + digit);
   };
 
-  const canCall = dialNumber && balance > 0 && voiceReady;
+  const canCall = Boolean(dialNumber && voiceReady && hasMinimumBalance);
 
   return (
     <div style={{ padding: '0 20px', paddingBottom: 100 }}>
@@ -38,6 +39,21 @@ export default function DialerScreen({
           <p style={{ color: '#f0a030', fontSize: 11, marginTop: 8 }}>Connecting to call server...</p>
         )}
       </div>
+
+      {callError && (
+        <div style={{
+          marginBottom: 16,
+          padding: '12px 14px',
+          borderRadius: 14,
+          border: '1px solid rgba(255,107,107,0.25)',
+          background: 'rgba(255,107,107,0.08)',
+          color: '#ff6b6b',
+          fontSize: 13,
+          fontWeight: 500,
+        }}>
+          {callError}
+        </div>
+      )}
 
       {/* Country + number */}
       <div style={{
@@ -69,9 +85,16 @@ export default function DialerScreen({
           )}
         </div>
         {dialNumber && selectedCountry && (
-          <p style={{ color: '#5a6a7a', fontSize: 12, marginTop: 8, marginLeft: 4 }}>
-            Rate: ${selectedCountry.rate_per_min}/min to {selectedCountry.country_name}
-          </p>
+          <>
+            <p style={{ color: '#5a6a7a', fontSize: 12, marginTop: 8, marginLeft: 4 }}>
+              Rate: ${selectedCountry.rate_per_min}/min to {selectedCountry.country_name}
+            </p>
+            {!hasMinimumBalance && (
+              <p style={{ color: '#f0a030', fontSize: 12, marginTop: 6, marginLeft: 4 }}>
+                Add more balance to place at least one billed minute.
+              </p>
+            )}
+          </>
         )}
       </div>
 

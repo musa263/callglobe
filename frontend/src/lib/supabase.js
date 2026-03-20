@@ -1,8 +1,16 @@
 // src/lib/supabase.js
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+function getRequiredEnv(name) {
+  const value = import.meta.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+const supabaseUrl = getRequiredEnv('VITE_SUPABASE_URL');
+const supabaseAnonKey = getRequiredEnv('VITE_SUPABASE_ANON_KEY');
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
@@ -44,8 +52,36 @@ export async function getProfile(userId) {
   return { data, error };
 }
 
+export async function normalizePromotionalBalance() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    return { data: null, error: new Error('Unauthorized') };
+  }
+
+  const response = await fetch(
+    `${supabaseUrl}/functions/v1/normalize-profile`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+      },
+    }
+  );
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return {
+      data: null,
+      error: new Error(result.error || 'Unable to normalize profile balance.'),
+    };
+  }
+
+  return { data: result, error: null };
+}
+
 export async function getBalance(userId) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('profiles')
     .select('balance')
     .eq('id', userId)
@@ -115,29 +151,6 @@ export async function getCallHistory(userId, limit = 50) {
   return { data: data || [], error };
 }
 
-export async function createCallLog(userId, destinationNumber, countryCode, ratePerMin) {
-  const { data, error } = await supabase
-    .from('call_logs')
-    .insert({
-      user_id: userId,
-      destination_number: destinationNumber,
-      destination_country_code: countryCode,
-      rate_per_min: ratePerMin,
-      status: 'initiated',
-    })
-    .select()
-    .single();
-  return { data, error };
-}
-
-export async function updateCallLog(callLogId, updates) {
-  const { data, error } = await supabase
-    .from('call_logs')
-    .update(updates)
-    .eq('id', callLogId);
-  return { data, error };
-}
-
 // ============================================================
 // TRANSACTIONS
 // ============================================================
@@ -156,6 +169,9 @@ export async function getTransactions(userId, limit = 50) {
 // ============================================================
 export async function createCheckoutSession(packageId) {
   const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error('You must be signed in to recharge.');
+  }
 
   const response = await fetch(
     `${supabaseUrl}/functions/v1/create-checkout`,
@@ -163,7 +179,7 @@ export async function createCheckoutSession(packageId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session?.access_token}`,
+        'Authorization': `Bearer ${session.access_token}`,
       },
       body: JSON.stringify({
         package_id: packageId,
@@ -173,9 +189,15 @@ export async function createCheckoutSession(packageId) {
     }
   );
 
-  const result = await response.json();
-  if (result.url) {
-    window.location.href = result.url; // Redirect to Stripe Checkout
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || 'Unable to start checkout.');
   }
+
+  if (!result.url) {
+    throw new Error('Checkout URL missing from server response.');
+  }
+
+  window.location.assign(result.url);
   return result;
 }

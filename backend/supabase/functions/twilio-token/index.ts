@@ -4,6 +4,18 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+function getRequiredEnv(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
+
+function getAllowedOrigin() {
+  const appBaseUrl = Deno.env.get("APP_BASE_URL");
+  if (!appBaseUrl) return "*";
+  return new URL(appBaseUrl).origin;
+}
+
 // Twilio JWT helper — we build the token manually since Deno doesn't have the twilio SDK
 // Access Token structure: Header.Payload.Signature (JWT)
 async function createAccessToken(
@@ -75,13 +87,17 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": getAllowedOrigin(),
         "Access-Control-Allow-Headers": "authorization, content-type",
       },
     });
   }
 
   try {
+    if (req.method !== "POST") {
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
     // Verify the user is authenticated
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -89,8 +105,8 @@ serve(async (req) => {
     }
 
     const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
+      getRequiredEnv("SUPABASE_URL"),
+      getRequiredEnv("SUPABASE_ANON_KEY"),
       { global: { headers: { Authorization: authHeader } } }
     );
 
@@ -100,10 +116,10 @@ serve(async (req) => {
     }
 
     // Get Twilio credentials from environment
-    const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID")!;
-    const apiKeySid = Deno.env.get("TWILIO_API_KEY_SID")!;
-    const apiKeySecret = Deno.env.get("TWILIO_API_KEY_SECRET")!;
-    const twimlAppSid = Deno.env.get("TWILIO_TWIML_APP_SID")!;
+    const accountSid = getRequiredEnv("TWILIO_ACCOUNT_SID");
+    const apiKeySid = getRequiredEnv("TWILIO_API_KEY_SID");
+    const apiKeySecret = getRequiredEnv("TWILIO_API_KEY_SECRET");
+    const twimlAppSid = getRequiredEnv("TWILIO_TWIML_APP_SID");
 
     // Generate access token
     const token = await createAccessToken(
@@ -117,7 +133,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ token }), {
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": getAllowedOrigin(),
       },
     });
   } catch (err) {

@@ -1,6 +1,16 @@
 // src/hooks/useAuth.js
 import { useState, useEffect, useCallback } from 'react';
-import { supabase, signUp, signIn, signOut, getProfile, subscribeToBalance } from '../lib/supabase';
+import {
+  supabase,
+  signUp,
+  signIn,
+  signOut,
+  getProfile,
+  normalizePromotionalBalance,
+  subscribeToBalance,
+} from '../lib/supabase';
+
+const AUTH_BOOT_TIMEOUT_MS = 4000;
 
 export function useAuth() {
   const [user, setUser] = useState(null);
@@ -9,48 +19,125 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Check session on mount
-  useEffect(() => {
-    const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        setUser(session.user);
-        const { data: prof } = await getProfile(session.user.id);
-        if (prof) {
-          setProfile(prof);
-          setBalance(prof.balance);
+  const resetAuthState = useCallback(() => {
+    setUser(null);
+    setProfile(null);
+    setBalance(0);
+  }, []);
+
+  const loadProfile = useCallback(async (userId) => {
+    try {
+      const { data: prof, error: profileError } = await getProfile(userId);
+      if (profileError) {
+        throw profileError;
+      }
+
+      let nextProfile = prof;
+      if (
+        nextProfile
+        && Number(nextProfile.balance || 0) === 2.5
+        && Number(nextProfile.total_recharged || 0) === 0
+        && Number(nextProfile.total_spent || 0) === 0
+      ) {
+        const { data: normalizedResult, error: normalizeError } = await normalizePromotionalBalance();
+        if (normalizeError) {
+          console.error('Failed to normalize promotional balance:', normalizeError);
+        } else if (normalizedResult?.profile) {
+          nextProfile = normalizedResult.profile;
         }
       }
-      setLoading(false);
+
+      if (nextProfile) {
+        setProfile(nextProfile);
+        setBalance(Number(nextProfile.balance || 0));
+      }
+
+      return nextProfile;
+    } catch (profileLoadError) {
+      console.error('Failed to load profile:', profileLoadError);
+      setProfile(null);
+      setBalance(0);
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const finishLoading = () => {
+      if (isMounted) {
+        setLoading(false);
+      }
     };
+
+    const initAuth = async () => {
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        if (!isMounted) return;
+
+        if (session?.user) {
+          setUser(session.user);
+          await loadProfile(session.user.id);
+        } else {
+          resetAuthState();
+        }
+      } catch (authInitError) {
+        console.error('Auth initialization failed:', authInitError);
+        if (isMounted) {
+          setError('Unable to initialize authentication.');
+          resetAuthState();
+        }
+      } finally {
+        finishLoading();
+      }
+    };
+
+    const loadingTimer = setTimeout(() => {
+      console.warn('Auth initialization timed out. Continuing without blocking the UI.');
+      finishLoading();
+    }, AUTH_BOOT_TIMEOUT_MS);
 
     initAuth();
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const handleAuthChange = async (session) => {
+      if (!isMounted) return;
+
+      setError(null);
+
       if (session?.user) {
         setUser(session.user);
-        const { data: prof } = await getProfile(session.user.id);
-        if (prof) {
-          setProfile(prof);
-          setBalance(prof.balance);
-        }
+        await loadProfile(session.user.id);
       } else {
-        setUser(null);
-        setProfile(null);
-        setBalance(0);
+        resetAuthState();
       }
+
+      finishLoading();
+    };
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setTimeout(() => {
+        void handleAuthChange(session);
+      }, 0);
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      isMounted = false;
+      clearTimeout(loadingTimer);
+      subscription.unsubscribe();
+    };
+  }, [loadProfile, resetAuthState]);
 
-  // Subscribe to real-time balance updates
   useEffect(() => {
-    if (!user) return;
+    if (!user) return undefined;
 
     const channel = subscribeToBalance(user.id, (newBalance) => {
-      setBalance(newBalance);
+      setBalance(Number(newBalance || 0));
     });
 
     return () => {
@@ -60,9 +147,9 @@ export function useAuth() {
 
   const handleSignUp = useCallback(async (email, password, name) => {
     setError(null);
-    const { data, error: err } = await signUp(email, password, name);
-    if (err) {
-      setError(err.message);
+    const { error: signUpError } = await signUp(email, password, name);
+    if (signUpError) {
+      setError(signUpError.message);
       return false;
     }
     return true;
@@ -70,9 +157,9 @@ export function useAuth() {
 
   const handleSignIn = useCallback(async (email, password) => {
     setError(null);
-    const { data, error: err } = await signIn(email, password);
-    if (err) {
-      setError(err.message);
+    const { error: signInError } = await signIn(email, password);
+    if (signInError) {
+      setError(signInError.message);
       return false;
     }
     return true;
@@ -80,19 +167,13 @@ export function useAuth() {
 
   const handleSignOut = useCallback(async () => {
     await signOut();
-    setUser(null);
-    setProfile(null);
-    setBalance(0);
-  }, []);
+    resetAuthState();
+  }, [resetAuthState]);
 
   const refreshBalance = useCallback(async () => {
     if (!user) return;
-    const { data: prof } = await getProfile(user.id);
-    if (prof) {
-      setBalance(prof.balance);
-      setProfile(prof);
-    }
-  }, [user]);
+    await loadProfile(user.id);
+  }, [loadProfile, user]);
 
   return {
     user,

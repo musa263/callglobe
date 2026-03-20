@@ -84,7 +84,7 @@ export default function AuthScreen({ auth }) {
 
       {mode === 'signup' && (
         <p style={{ textAlign: 'center', marginTop: 16, color: '#5a6a7a', fontSize: 13 }}>
-          Get $2.50 free credit on signup!
+          Add balance after signup to start calling.
         </p>
       )}
     </div>

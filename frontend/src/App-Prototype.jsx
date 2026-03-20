@@ -236,7 +236,7 @@ export default function CallGlobeApp() {
     }
   };
 
-  // Simulate incoming call (in production, this comes via Telnyx WebRTC push notification)
+  // Simulate incoming call (in production, this comes via the voice provider)
   const simulateIncomingCall = (toNumber) => {
     const callers = [
       { from: "+234 805 111 2233", fromName: "Mum (Lagos)" },
@@ -262,7 +262,7 @@ export default function CallGlobeApp() {
   };
 
   const purchaseNumber = (num) => {
-    // In production: Telnyx API to provision number
+    // In production: provider API to provision number
     const purchased = { ...num, purchasedAt: new Date().toISOString(), active: true };
     setMyNumbers(prev => [...prev, purchased]);
     // Remove from available

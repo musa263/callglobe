@@ -9,12 +9,12 @@ import {
   destroyTwilioDevice,
 } from '../lib/twilio';
 import { supabase } from '../lib/supabase';
-import { createCallLog, updateCallLog } from '../lib/supabase';
 
-// Fetch Twilio access token from our Supabase edge function
-async function fetchTwilioToken(userId) {
+async function fetchTwilioToken() {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) return null;
+  if (!session?.access_token) {
+    throw new Error('You must be signed in to place calls.');
+  }
 
   const response = await fetch(
     `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/twilio-token`,
@@ -24,187 +24,166 @@ async function fetchTwilioToken(userId) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ identity: userId }),
     }
   );
 
+  const payload = await response.json().catch(async () => ({
+    error: await response.text().catch(() => 'Unable to read token response.'),
+  }));
+
   if (!response.ok) {
-    console.error('Token fetch failed:', response.status);
-    return null;
+    throw new Error(payload.error || `Token fetch failed (${response.status})`);
   }
 
-  const { token } = await response.json();
+  const { token } = payload;
+  if (!token) {
+    throw new Error('Twilio access token missing from server response.');
+  }
+
   return token;
 }
 
 export function useTwilio(userId) {
   const [isReady, setIsReady] = useState(false);
-  const [callState, setCallState] = useState(null); // null, 'initiating', 'ringing', 'connected', 'ended'
+  const [callState, setCallState] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState(null);
 
   const timerRef = useRef(null);
-  const callLogIdRef = useRef(null);
   const callStartRef = useRef(null);
   const callRef = useRef(null);
+  const resetTimeoutRef = useRef(null);
 
-  // Initialize Twilio Device on mount
-  useEffect(() => {
-    if (!userId) return;
+  const clearTimers = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
 
-    initTwilioDevice({
-      getToken: () => fetchTwilioToken(userId),
-      onReady: () => {
-        console.log('Twilio ready');
-        setIsReady(true);
-        setError(null);
-      },
-      onError: (err) => {
-        console.error('Twilio error:', err);
-        setError(typeof err === 'string' ? err : 'Connection error');
-      },
-      onIncoming: (call) => {
-        // For future incoming call support
-        console.log('Incoming call:', call);
-      },
-    });
+    if (resetTimeoutRef.current) {
+      clearTimeout(resetTimeoutRef.current);
+      resetTimeoutRef.current = null;
+    }
+  }, []);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      destroyTwilioDevice();
-    };
-  }, [userId]);
+  const handleCallEnd = useCallback(() => {
+    clearTimers();
+    setCallState('ended');
+    callRef.current = null;
 
-  // Attach call event listeners
+    resetTimeoutRef.current = setTimeout(() => {
+      setCallState(null);
+      setCallDuration(0);
+      setIsMuted(false);
+      callStartRef.current = null;
+    }, 500);
+  }, [clearTimers]);
+
   const attachCallEvents = useCallback((call) => {
     callRef.current = call;
 
     call.on('ringing', () => {
-      console.log('Call ringing');
       setCallState('ringing');
     });
 
     call.on('accept', () => {
-      console.log('Call connected');
       setCallState('connected');
       callStartRef.current = Date.now();
+      clearTimers();
       timerRef.current = setInterval(() => {
         setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000));
       }, 1000);
     });
 
-    call.on('disconnect', () => {
-      console.log('Call ended');
+    call.on('disconnect', handleCallEnd);
+    call.on('cancel', handleCallEnd);
+    call.on('reject', handleCallEnd);
+    call.on('error', (callError) => {
+      console.error('Call error:', callError);
+      setError(callError.message || 'Call failed');
       handleCallEnd();
     });
+  }, [clearTimers, handleCallEnd]);
 
-    call.on('cancel', () => {
-      console.log('Call canceled');
-      handleCallEnd();
-    });
-
-    call.on('reject', () => {
-      console.log('Call rejected');
-      handleCallEnd();
-    });
-
-    call.on('error', (error) => {
-      console.error('Call error:', error);
-      setError(error.message || 'Call failed');
-      handleCallEnd();
-    });
-  }, []);
-
-  const handleCallEnd = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    // Update call log with final duration
-    if (callLogIdRef.current && callStartRef.current) {
-      const duration = Math.floor((Date.now() - callStartRef.current) / 1000);
-      updateCallLog(callLogIdRef.current, {
-        status: 'completed',
-        duration_seconds: duration,
-        ended_at: new Date().toISOString(),
-      });
-    }
-
-    setCallState('ended');
-    callRef.current = null;
-
-    // Reset after a brief delay
-    setTimeout(() => {
+  useEffect(() => {
+    if (!userId) {
+      setIsReady(false);
       setCallState(null);
       setCallDuration(0);
       setIsMuted(false);
-      callLogIdRef.current = null;
-      callStartRef.current = null;
-    }, 500);
-  }, []);
+      setError(null);
+      return undefined;
+    }
 
-  // Make a call
-  const startCall = useCallback(async (fullNumber, countryCode, ratePerMin) => {
+    setIsReady(false);
+    setError(null);
+
+    initTwilioDevice({
+      getToken: fetchTwilioToken,
+      onReady: () => {
+        setIsReady(true);
+        setError(null);
+      },
+      onError: (deviceError) => {
+        console.error('Twilio error:', deviceError);
+        setIsReady(false);
+        setError(typeof deviceError === 'string' ? deviceError : 'Connection error');
+      },
+      onIncoming: (call) => {
+        console.log('Incoming call:', call);
+      },
+    });
+
+    return () => {
+      clearTimers();
+      destroyTwilioDevice();
+      callRef.current = null;
+      callStartRef.current = null;
+    };
+  }, [clearTimers, userId]);
+
+  const startCall = useCallback(async (fullNumber, countryCode) => {
     if (!isReady || !userId) {
-      setError('Not ready to make calls');
+      setError('Calling is not ready yet.');
+      return false;
+    }
+
+    if (callRef.current) {
+      setError('A call is already in progress.');
       return false;
     }
 
     try {
-      // Create call log in database first
-      const { data: callLog, error: logError } = await createCallLog(
-        userId,
-        fullNumber,
-        countryCode,
-        ratePerMin
-      );
-
-      if (logError) {
-        console.error('Failed to create call log:', logError);
-      } else {
-        callLogIdRef.current = callLog.id;
-      }
-
-      // Make the actual call via Twilio WebRTC
       setCallState('initiating');
       setCallDuration(0);
       setError(null);
 
-      const call = await twilioMakeCall(fullNumber, import.meta.env.VITE_TWILIO_CALLER_ID, {
-        user_id: userId,
-        call_log_id: callLog?.id || '',
+      const call = await twilioMakeCall(fullNumber, {
+        country_code: countryCode,
       });
 
       attachCallEvents(call);
-
       return true;
     } catch (err) {
       console.error('Call failed:', err);
-      setError('Failed to initiate call');
+      setError(err instanceof Error ? err.message : 'Failed to initiate call.');
       setCallState(null);
       return false;
     }
-  }, [isReady, userId, attachCallEvents]);
+  }, [attachCallEvents, isReady, userId]);
 
-  // Hang up
   const endCall = useCallback(() => {
     twilioHangup();
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
+    clearTimers();
+  }, [clearTimers]);
 
-  // Toggle mute
   const toggleMute = useCallback(() => {
-    const newMuted = !isMuted;
-    twilioMute(newMuted);
-    setIsMuted(newMuted);
+    const nextMuted = !isMuted;
+    twilioMute(nextMuted);
+    setIsMuted(nextMuted);
   }, [isMuted]);
 
-  // Send DTMF tone
   const sendDigit = useCallback((digit) => {
     twilioDTMF(digit);
   }, []);
@@ -219,6 +198,6 @@ export function useTwilio(userId) {
     endCall,
     toggleMute,
     sendDigit,
-    isInCall: callState && callState !== 'ended',
+    isInCall: Boolean(callState && callState !== 'ended'),
   };
 }

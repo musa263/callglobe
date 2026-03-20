@@ -31,7 +31,7 @@ callglobe-complete/
 │   │   └── manifest.json                   ← PWA manifest
 │   ├── src/
 │   │   ├── main.jsx                        ← React entry point
-│   │   ├── App.jsx                         ← Production app (Supabase + Telnyx)
+│   │   ├── App.jsx                         ← Production app (Supabase + Twilio)
 │   │   ├── App-Prototype.jsx               ← Interactive prototype (standalone)
 │   │   ├── components/
 │   │   │   ├── CountryPicker.jsx           ← Country selection modal
@@ -39,10 +39,10 @@ callglobe-complete/
 │   │   │   └── TabBar.jsx                  ← Bottom navigation (5 tabs)
 │   │   ├── hooks/
 │   │   │   ├── useAuth.js                  ← Authentication state management
-│   │   │   └── useTelnyx.js                ← WebRTC calling engine hook
+│   │   │   └── useTwilio.js                ← WebRTC calling engine hook
 │   │   ├── lib/
 │   │   │   ├── supabase.js                 ← Supabase client + API functions
-│   │   │   └── telnyx.js                   ← Telnyx WebRTC wrapper
+│   │   │   └── twilio.js                   ← Twilio Voice SDK wrapper
 │   │   ├── pages/
 │   │   │   ├── SplashScreen.jsx            ← Animated splash (2s)
 │   │   │   ├── AuthScreen.jsx              ← Login / Signup
@@ -59,13 +59,20 @@ callglobe-complete/
 └── backend/                                 ← Backend (Supabase)
     └── supabase/
         ├── migrations/
-        │   └── 001_initial.sql             ← Full database schema + seed data
+        │   ├── 001_initial.sql             ← Base database schema + seed data
+        │   ├── 002_security_and_runtime_hardening.sql
+        │                                    ← RPC hardening, Stripe idempotency,
+        │                                      Twilio billing safety
+        │   └── 003_remove_promotional_signup_credit.sql
+        │                                    ← Removes legacy signup credit defaults
         └── functions/
             ├── create-checkout/
             │   └── index.ts                ← Stripe checkout session creator
             ├── webhook-stripe/
             │   └── index.ts                ← Payment success → add balance
-            └── webhook-telnyx/
+            ├── twilio-token/
+            │   └── index.ts                ← Twilio access token generator
+            └── webhook-twilio/
                 └── index.ts                ← Call events → log CDR, deduct balance
 ```
 
@@ -79,14 +86,14 @@ callglobe-complete/
 │                  (React PWA / Capacitor Native)                  │
 │                                                                  │
 │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
-│   │  Dialer  │  │ Recharge │  │  History  │  │ Telnyx WebRTC │  │
+│   │  Dialer  │  │ Recharge │  │  History  │  │ Twilio Voice  │  │
 │   │  Screen  │  │  Screen  │  │  Screen   │  │ SDK (voice)   │  │
 │   └────┬─────┘  └────┬─────┘  └────┬─────┘  └───────┬───────┘  │
 └────────┼──────────────┼─────────────┼────────────────┼──────────┘
          │              │             │                │
          ▼              │             │                ▼
 ┌─────────────────┐     │             │     ┌──────────────────────┐
-│    Supabase     │     │             │     │     Telnyx Cloud     │
+│    Supabase     │     │             │     │     Twilio Cloud     │
 │    Platform     │     │             │     │                      │
 │                 │     │             │     │  ┌────────────────┐  │
 │  ┌───────────┐  │     │             │     │  │  SIP / WebRTC  │  │
@@ -123,10 +130,10 @@ callglobe-complete/
 **Data Flow Summary:**
 1. **User → Frontend**: React PWA with dark-mode UI, dialer, recharge, history
 2. **Frontend → Supabase**: Auth (JWT), database reads/writes, edge function calls
-3. **Frontend → Telnyx**: WebRTC voice calls directly from browser/native app
-4. **Telnyx → PSTN**: Routes calls to any phone number worldwide
+3. **Frontend → Twilio**: WebRTC voice calls directly from browser/native app
+4. **Twilio → PSTN**: Routes calls to any phone number worldwide
 5. **Stripe → Supabase**: Webhook on payment success → adds balance
-6. **Telnyx → Supabase**: Webhook on call events → logs CDR, deducts balance
+6. **Twilio → Supabase**: Signed webhooks log CDRs and finalize charging
 
 ---
 
@@ -137,7 +144,7 @@ callglobe-complete/
 | Attribute | Detail |
 |-----------|--------|
 | **Purpose** | Mobile-first VoIP calling interface |
-| **Technologies** | React 18, Vite 5, React Router 6, Telnyx WebRTC SDK, Stripe.js |
+| **Technologies** | React 18, Vite 5, React Router 6, Twilio Voice SDK |
 | **Deployment** | Vercel (static hosting with CDN) |
 | **Native Wrapper** | Capacitor (iOS + Android app store builds) |
 | **Design** | Dark-mode-first, DM Sans typography, #00D4AA primary accent |
@@ -160,16 +167,17 @@ callglobe-complete/
 **Edge Functions:**
 | Function | Trigger | Purpose |
 |----------|---------|---------|
-| `create-checkout` | User taps recharge | Creates Stripe Checkout session with package metadata |
-| `webhook-stripe` | `checkout.session.completed` | Adds credit to user balance via `add_balance()` RPC |
-| `webhook-telnyx` | Call events (initiated, answered, hangup) | Updates call logs, calculates cost, deducts balance |
+| `create-checkout` | User taps recharge | Creates Stripe Checkout session with validated return URLs |
+| `twilio-token` | Twilio device boot | Generates access tokens for the authenticated user |
+| `webhook-stripe` | `checkout.session.completed` | Idempotently credits balance from the checkout session |
+| `webhook-twilio` | Call events (initiated, answered, hangup) | Verifies Twilio signatures, logs calls, finalizes billing |
 
-### 3.3 Telephony — Telnyx WebRTC + PSTN
+### 3.3 Telephony — Twilio Voice + PSTN
 
 | Attribute | Detail |
 |-----------|--------|
 | **Purpose** | Voice calling engine (browser-to-phone) |
-| **Technologies** | Telnyx WebRTC SDK (`@telnyx/webrtc`), SIP Credential Connection |
+| **Technologies** | Twilio Voice SDK (`@twilio/voice-sdk`), TwiML App, Voice webhooks |
 | **Features** | Outbound calls, inbound calls (DID), caller ID selection |
 | **Encryption** | SRTP/DTLS (end-to-end encrypted) |
 
@@ -218,7 +226,7 @@ Used for live balance updates during active calls. Frontend subscribes to `profi
 
 | Service | Purpose | Integration Method |
 |---------|---------|-------------------|
-| **Telnyx** | Voice calls (WebRTC → PSTN), DID provisioning, caller ID | WebRTC SDK (frontend), REST API (backend), Webhooks |
+| **Twilio** | Voice calls (WebRTC → PSTN), caller ID, Voice webhooks | Voice SDK (frontend), TwiML App, Webhooks |
 | **Stripe** | Payment processing (PCI DSS compliant) | Stripe.js (frontend), Stripe API (edge function), Webhooks |
 | **Supabase Auth** | User authentication (email/password) | JWT tokens, `@supabase/supabase-js` client |
 | **Firebase Cloud Messaging** | Push notifications for incoming calls (planned) | FCM SDK (Capacitor plugin) |
@@ -233,7 +241,7 @@ Used for live balance updates during active calls. Frontend subscribes to `profi
 |-------|---------|---------|
 | **Frontend Hosting** | Vercel | Static site CDN, automatic deploys from Git |
 | **Backend** | Supabase Cloud | Managed PostgreSQL, Auth, Edge Functions, Realtime |
-| **Telephony** | Telnyx Cloud | WebRTC gateway, PSTN routing, DID management |
+| **Telephony** | Twilio Cloud | Voice SDK gateway, PSTN routing, caller ID |
 | **Payments** | Stripe | PCI-compliant checkout, webhook events |
 | **Domain** | `callglobe.app` | Primary application domain |
 | **Native Build** | Capacitor | iOS (Xcode) + Android (Android Studio) app builds |
@@ -253,8 +261,8 @@ Supabase CLI → `supabase functions deploy` (Edge Functions)
 |------|-------------|-------|
 | Supabase | $0 | Free tier (50K MAU) |
 | Vercel | $0 | Free tier (100GB bandwidth) |
-| Telnyx (minutes) | Variable | ~40% of call revenue |
-| Telnyx (DIDs) | ~$1–2/number | Covered by user subscriptions |
+| Twilio (minutes) | Variable | Depends on destination and routing |
+| Twilio number / caller ID | Variable | Verified outbound identity requirement |
 | Stripe | 2.9% + $0.30/txn | ~4–5% effective on $10–20 recharges |
 | Domain | $12/year | `callglobe.app` |
 | App Stores | $124/year | Google Play ($25 one-time) + Apple ($99/year) |
@@ -276,7 +284,7 @@ Supabase CLI → `supabase functions deploy` (Edge Functions)
 - **Secrets**: Stored as Supabase Edge Function secrets, never in client code
 
 ### Key Security Rules
-- Telnyx API keys and Stripe secret keys stored as server-side secrets only
+- Twilio API secrets and Stripe secret keys stored as server-side secrets only
 - Frontend only has access to `SUPABASE_ANON_KEY` (public, RLS-protected) and `STRIPE_PUBLISHABLE_KEY`
 - Balance operations (`add_balance`, `deduct_balance`) are `SECURITY DEFINER` functions — run with elevated privileges, callable only through controlled paths
 - CORS headers configured on edge functions
@@ -301,9 +309,11 @@ npm run dev                    # http://localhost:3000
 npm install -g supabase
 supabase login
 supabase link --project-ref YOUR_PROJECT_REF
+supabase db push
 supabase functions deploy create-checkout
+supabase functions deploy twilio-token
 supabase functions deploy webhook-stripe
-supabase functions deploy webhook-telnyx
+supabase functions deploy webhook-twilio
 ```
 
 ### Environment Variables
@@ -313,18 +323,20 @@ supabase functions deploy webhook-telnyx
 |----------|-------------|
 | `VITE_SUPABASE_URL` | Supabase project URL |
 | `VITE_SUPABASE_ANON_KEY` | Supabase anonymous (public) key |
-| `VITE_TELNYX_LOGIN_TOKEN` | Telnyx credential connection login |
-| `VITE_TELNYX_PASSWORD` | Telnyx credential connection password |
-| `VITE_TELNYX_CALLER_ID` | Default outbound caller ID |
-| `VITE_STRIPE_PUBLISHABLE_KEY` | Stripe publishable key |
 | `VITE_APP_URL` | App URL (http://localhost:3000 for dev) |
 
 **Backend (Supabase Secrets):**
 | Variable | Description |
 |----------|-------------|
+| `APP_BASE_URL` | Public frontend origin used for Stripe return URLs |
 | `STRIPE_SECRET_KEY` | Stripe secret key |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
-| `TELNYX_API_KEY` | Telnyx API key |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID |
+| `TWILIO_API_KEY_SID` | Twilio API key SID |
+| `TWILIO_API_KEY_SECRET` | Twilio API key secret |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token for webhook verification |
+| `TWILIO_CALLER_ID` | Verified outbound caller ID |
+| `TWILIO_TWIML_APP_SID` | Twilio TwiML App SID |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
 
 ### Testing Frameworks
@@ -347,7 +359,7 @@ supabase functions deploy webhook-telnyx
 - `App-Prototype.jsx` is a 1700+ line monolith (prototype only, not used in production)
 - CORS is set to `*` on edge functions (should be restricted to app domain)
 - No rate limiting on edge functions
-- Telnyx webhook does not verify webhook signatures
+- Frontend bundle is still a single large chunk and should be split before scale-up
 
 ### Planned Features (from PRD)
 | Feature | Priority | Target |
@@ -365,7 +377,7 @@ supabase functions deploy webhook-telnyx
 - Consider migrating to Next.js for SSR benefits and Vercel optimization
 - Add Vitest + Playwright test suites
 - Tighten CORS to production domain only
-- Add Telnyx webhook signature verification
+- Add rate limiting and observability around edge functions
 
 ---
 
@@ -385,7 +397,7 @@ supabase functions deploy webhook-telnyx
 | **WebRTC** | Web Real-Time Communication — browser-native voice/video protocol |
 | **Caller ID** | The phone number displayed to the recipient when making an outbound call |
 | **Corridor** | A calling route (e.g., Saudi Arabia → Nigeria) representing a diaspora market |
-| **Telnyx** | Cloud communications provider for VoIP, SIP trunking, and phone numbers |
+| **Twilio** | Cloud communications provider for Voice SDK, PSTN termination, and caller ID |
 | **Capacitor** | Cross-platform native runtime by Ionic — wraps web apps for iOS/Android |
 
 ---
@@ -401,7 +413,7 @@ supabase functions deploy webhook-telnyx
 | **Status** | Final (pre-launch) |
 | **Target Launch** | Q2 2026 |
 | **Platform** | Mobile PWA + Native (Capacitor) |
-| **Backend** | Supabase + Telnyx + Stripe |
+| **Backend** | Supabase + Twilio + Stripe |
 | **Frontend Hosting** | Vercel |
 | **Domain** | callglobe.app |
 | **Last Updated** | March 2026 |

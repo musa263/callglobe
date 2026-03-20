@@ -14,7 +14,7 @@ create table public.profiles (
   email text not null,
   full_name text,
   phone text,
-  balance numeric(10,4) default 2.5000,  -- Welcome credit $2.50
+  balance numeric(10,4) default 0,
   total_recharged numeric(10,2) default 0,
   total_spent numeric(10,4) default 0,
   currency text default 'USD',
@@ -62,7 +62,7 @@ create table public.call_rates (
   dial_code text not null,           -- e.g. +91
   flag text,                         -- emoji flag
   rate_per_min numeric(6,4) not null, -- USD cost to USER
-  cost_per_min numeric(6,4) not null, -- USD cost to US (Telnyx)
+  cost_per_min numeric(6,4) not null, -- USD cost to us (voice provider)
   is_active boolean default true,
   created_at timestamptz default now()
 );
@@ -160,7 +160,7 @@ create policy "Users can view own transactions"
 create table public.call_logs (
   id uuid default uuid_generate_v4() primary key,
   user_id uuid references public.profiles(id) on delete cascade not null,
-  telnyx_call_id text,                  -- Telnyx call control ID
+  telnyx_call_id text,                  -- Legacy provider call ID, renamed in 002
   destination_number text not null,
   destination_country text,
   destination_country_code text,

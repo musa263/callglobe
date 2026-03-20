@@ -69,14 +69,13 @@ export async function initTwilioDevice({ getToken, onReady, onError, onCallUpdat
 // ============================================================
 // MAKE A CALL
 // ============================================================
-export async function makeCall(destinationNumber, callerIdNumber, params = {}) {
+export async function makeCall(destinationNumber, params = {}) {
   if (!device) {
     throw new Error('Twilio device not initialized');
   }
 
   const callParams = {
     To: destinationNumber,
-    CallerId: callerIdNumber,
     ...params,
   };
 

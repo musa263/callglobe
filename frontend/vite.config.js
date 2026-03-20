@@ -10,5 +10,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('@twilio/voice-sdk')) return 'twilio';
+          if (id.includes('@supabase/supabase-js')) return 'supabase';
+          return 'vendor';
+        },
+      },
+    },
   },
 });
