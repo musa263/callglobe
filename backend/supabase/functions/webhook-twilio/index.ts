@@ -331,7 +331,7 @@ async function handleVoiceRequest(
   params: TwilioParams,
 ) {
   const providerCallId = params.CallSid;
-  const destinationNumber = params.To;
+  const destinationNumber = params.destination ?? params.Destination ?? params.To;
   const userId = parseIdentity(params.From);
   const selectedCountryCode = normalizeCountryCode(params.country_code);
 

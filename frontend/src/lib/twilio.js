@@ -75,7 +75,7 @@ export async function makeCall(destinationNumber, params = {}) {
   }
 
   const callParams = {
-    To: destinationNumber,
+    destination: destinationNumber,
     ...params,
   };
 
