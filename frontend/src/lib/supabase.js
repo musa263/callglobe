@@ -31,6 +31,10 @@ async function parseFunctionResponse(response) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function getAccessToken({ forceRefresh = false } = {}) {
   if (forceRefresh) {
     const { data, error } = await supabase.auth.refreshSession();
@@ -115,12 +119,45 @@ export async function invokeAuthenticatedFunction(
 // AUTH
 // ============================================================
 export async function signUp(email, password, fullName) {
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { full_name: fullName } },
+  const response = await fetch(`${supabaseUrl}/functions/v1/register-user`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      full_name: fullName,
+    }),
   });
-  return { data, error };
+
+  const result = await parseFunctionResponse(response);
+  if (!response.ok) {
+    return {
+      data: null,
+      error: new Error(getFunctionErrorMessage(result, 'Unable to create account.')),
+    };
+  }
+
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const signInResult = await supabase.auth.signInWithPassword({ email, password });
+    if (!signInResult.error) {
+      return signInResult;
+    }
+
+    lastError = signInResult.error;
+    if (!/invalid login credentials/i.test(signInResult.error.message)) {
+      break;
+    }
+
+    await sleep(300 * (attempt + 1));
+  }
+
+  return {
+    data: null,
+    error: lastError || new Error('Account created, but automatic sign-in failed. Please log in.'),
+  };
 }
 
 export async function signIn(email, password) {
