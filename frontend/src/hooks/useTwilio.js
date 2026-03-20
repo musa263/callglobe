@@ -8,34 +8,14 @@ import {
   sendDTMF as twilioDTMF,
   destroyTwilioDevice,
 } from '../lib/twilio';
-import { supabase } from '../lib/supabase';
+import { invokeAuthenticatedFunction } from '../lib/supabase';
 
 let currentCallToken = null;
 
 async function fetchTwilioToken() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    throw new Error('You must be signed in to place calls.');
-  }
-
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/twilio-token`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-    }
-  );
-
-  const payload = await response.json().catch(async () => ({
-    error: await response.text().catch(() => 'Unable to read token response.'),
-  }));
-
-  if (!response.ok) {
-    throw new Error(payload.error || `Token fetch failed (${response.status})`);
-  }
+  const payload = await invokeAuthenticatedFunction('twilio-token', {
+    unauthenticatedMessage: 'You must be signed in to place calls.',
+  });
 
   const { token, call_token: callToken } = payload;
   if (!token) {
@@ -115,6 +95,7 @@ export function useTwilio(userId) {
 
   useEffect(() => {
     if (!userId) {
+      currentCallToken = null;
       setIsReady(false);
       setCallState(null);
       setCallDuration(0);
@@ -144,6 +125,7 @@ export function useTwilio(userId) {
 
     return () => {
       clearTimers();
+      currentCallToken = null;
       destroyTwilioDevice();
       callRef.current = null;
       callStartRef.current = null;

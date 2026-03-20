@@ -14,6 +14,103 @@ const supabaseAnonKey = getRequiredEnv('VITE_SUPABASE_ANON_KEY');
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+function getFunctionErrorMessage(result, fallbackMessage) {
+  if (!result) return fallbackMessage;
+  if (typeof result === 'string') return result;
+  return result.error || result.message || fallbackMessage;
+}
+
+async function parseFunctionResponse(response) {
+  const text = await response.text();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export async function getAccessToken({ forceRefresh = false } = {}) {
+  if (forceRefresh) {
+    const { data, error } = await supabase.auth.refreshSession();
+    if (error) {
+      throw error;
+    }
+    return data.session?.access_token || null;
+  }
+
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!session) {
+    return null;
+  }
+
+  const expiresSoon = session.expires_at
+    ? (session.expires_at * 1000) - Date.now() < 60_000
+    : false;
+
+  if (!expiresSoon) {
+    return session.access_token;
+  }
+
+  const { data, error: refreshError } = await supabase.auth.refreshSession();
+  if (refreshError) {
+    console.warn('Session refresh failed before calling edge function:', refreshError);
+    return session.access_token;
+  }
+
+  return data.session?.access_token || session.access_token;
+}
+
+export async function invokeAuthenticatedFunction(
+  functionName,
+  {
+    method = 'POST',
+    body,
+    unauthenticatedMessage = 'You must be signed in.',
+  } = {}
+) {
+  async function execute(forceRefresh = false) {
+    const accessToken = await getAccessToken({ forceRefresh });
+    if (!accessToken) {
+      throw new Error(unauthenticatedMessage);
+    }
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
+      method,
+      headers: {
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+
+    const result = await parseFunctionResponse(response);
+
+    if (response.status === 401 && !forceRefresh) {
+      return execute(true);
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        getFunctionErrorMessage(result, `Request failed (${response.status})`)
+      );
+    }
+
+    return result;
+  }
+
+  return execute(false);
+}
+
 // ============================================================
 // AUTH
 // ============================================================
@@ -53,31 +150,19 @@ export async function getProfile(userId) {
 }
 
 export async function normalizePromotionalBalance() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    return { data: null, error: new Error('Unauthorized') };
-  }
-
-  const response = await fetch(
-    `${supabaseUrl}/functions/v1/normalize-profile`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-    }
-  );
-
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  try {
+    const data = await invokeAuthenticatedFunction('normalize-profile', {
+      unauthenticatedMessage: 'Unauthorized',
+    });
+    return { data, error: null };
+  } catch (error) {
     return {
       data: null,
-      error: new Error(result.error || 'Unable to normalize profile balance.'),
+      error: error instanceof Error
+        ? error
+        : new Error('Unable to normalize profile balance.'),
     };
   }
-
-  return { data: result, error: null };
 }
 
 export async function getBalance(userId) {
@@ -168,31 +253,14 @@ export async function getTransactions(userId, limit = 50) {
 // STRIPE CHECKOUT
 // ============================================================
 export async function createCheckoutSession(packageId) {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    throw new Error('You must be signed in to recharge.');
-  }
-
-  const response = await fetch(
-    `${supabaseUrl}/functions/v1/create-checkout`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        package_id: packageId,
-        success_url: `${window.location.origin}/?tab=recharge&success=true`,
-        cancel_url: `${window.location.origin}/?tab=recharge&canceled=true`,
-      }),
-    }
-  );
-
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(result.error || 'Unable to start checkout.');
-  }
+  const result = await invokeAuthenticatedFunction('create-checkout', {
+    unauthenticatedMessage: 'You must be signed in to recharge.',
+    body: {
+      package_id: packageId,
+      success_url: `${window.location.origin}/?tab=recharge&success=true`,
+      cancel_url: `${window.location.origin}/?tab=recharge&canceled=true`,
+    },
+  });
 
   if (!result.url) {
     throw new Error('Checkout URL missing from server response.');
