@@ -12,9 +12,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const extensionId = await verifyEnrollmentToken(enrollmentToken);
     const extension = await getExtension(extensionId);
     if (extension.status !== 'active') return res.status(403).json({ error: 'This extension is not active.' });
-    const token = await createExtensionSession({ id: extension.id, email: extension.email, name: extension.name, role: extension.role, extension: extension.extension });
+    const token = await createExtensionSession({ id: extension.id, email: extension.email, name: extension.name, role: extension.role, extension: extension.extension, organizationId: extension.organizationId });
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ token, profile: { id: extension.id, email: extension.email, full_name: extension.name, currency: 'USD', extension: extension.extension, role: extension.role } });
+    return res.status(200).json({ token, profile: { id: extension.id, email: extension.email, full_name: extension.name, currency: 'USD', extension: extension.extension, role: extension.role, organization_id: extension.organizationId } });
   } catch (error) {
     if (error instanceof Error && /expired|enrollment|extension/i.test(error.message)) return res.status(400).json({ error: 'This enrollment QR code is invalid or has expired.' });
     return res.status(500).json({ error: publicError(error) });

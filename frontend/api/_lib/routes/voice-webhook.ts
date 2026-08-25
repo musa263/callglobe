@@ -10,6 +10,8 @@ import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, saveOutboundCallPair } from '../outbound-call-store.js';
 import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
+import { bridgeOutboundCalls } from '../outbound-bridge.js';
+import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 
 type VoiceEvent = {
   data?: {
@@ -46,8 +48,24 @@ function customHeader(payload: VoicePayload | undefined, name: string) {
   return (match?.value || match?.header_value || '').trim();
 }
 
+async function speakPrompt(callControlId: string, input: { payload: string; voice: string; [key: string]: unknown }) {
+  const audioUrl = await renderVocivoPrompt(input.payload, input.voice);
+  const { payload, voice, payload_type: _payloadType, ...shared } = input;
+  return audioUrl
+    ? callAction(callControlId, 'playback_start', { ...shared, audio_url: audioUrl, audio_type: 'wav', cache_audio: true })
+    : callAction(callControlId, 'speak', { ...shared, payload, voice: carrierFallbackVoice(voice), payload_type: 'text' });
+}
+
+async function gatherPrompt(callControlId: string, input: { payload: string; invalid_payload: string; voice: string; [key: string]: unknown }) {
+  const [audioUrl, invalidAudioUrl] = await Promise.all([renderVocivoPrompt(input.payload, input.voice), renderVocivoPrompt(input.invalid_payload, input.voice)]);
+  const { payload, invalid_payload, voice, payload_type: _payloadType, ...shared } = input;
+  return audioUrl
+    ? callAction(callControlId, 'gather_using_audio', { ...shared, audio_url: audioUrl, ...(invalidAudioUrl ? { invalid_audio_url: invalidAudioUrl } : {}) })
+    : callAction(callControlId, 'gather_using_speak', { ...shared, payload, invalid_payload, voice: carrierFallbackVoice(voice), payload_type: 'text' });
+}
+
 async function routeToAgent(callControlId: string, department: string, waitingMessage: string, voice: string, eventId: string, destination = requiredEnv('TELNYX_SIP_URI'), targetExtensionId?: string, timeoutSeconds = 45, callerNumber?: string, callerName?: string) {
-  await callAction(callControlId, 'speak', { payload: waitingMessage, voice, payload_type: 'text', command_id: `${eventId}-wait` });
+  await speakPrompt(callControlId, { payload: waitingMessage, voice, command_id: `${eventId}-wait` });
   await dialCall({
     to: destination,
     state: { flow: 'agent', department, parentCallControlId: callControlId, targetExtensionId, callerNumber, callerName },
@@ -129,10 +147,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           stop: 'all',
           command_id: `${eventId}-stop-ringback`,
         }).catch(() => undefined);
-        await callAction(parentCallControlId, 'bridge', {
-          call_control_id: callControlId,
-          command_id: `${eventId}-bridge`,
-        });
+        await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
         return res.status(200).json({ received: true });
       }
     }
@@ -173,17 +188,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const cause = (payload?.hangup_cause || '').toLowerCase();
       const unanswered = ['timeout', 'no_answer', 'user_busy', 'call_rejected'].includes(cause);
       if (config.voicemailEnabled && unanswered && payload?.hangup_source !== 'caller') {
-        await callAction(state.parentCallControlId, 'speak', {
+        await speakPrompt(state.parentCallControlId, {
           payload: config.voicemailGreeting,
           voice: config.voice,
-          payload_type: 'text',
           client_state: encodeVoiceState({ flow: 'voicemail_prompt', callerNumber: state.callerNumber, callerName: state.callerName }),
           command_id: `${eventId}-voicemail-prompt`,
         });
       }
     }
 
-    if (eventType === 'call.speak.ended' && state?.flow === 'voicemail_prompt') {
+    if (['call.speak.ended', 'call.playback.ended'].includes(eventType) && state?.flow === 'voicemail_prompt') {
       await callAction(callControlId, 'record_start', {
         format: 'mp3',
         channels: 'single',
@@ -260,11 +274,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const options = config.departments.map((department, index) => `For ${department}, press ${index + 1}.`).join(' ');
         const validDigits = `${config.departments.map((_, index) => String(index + 1)).join('')}${hasExtensions ? '9' : ''}`;
         const prompt = `${config.greeting} ${options}${hasExtensions ? ' If you know your party extension, press 9.' : ''}`;
-        await callAction(callControlId, 'gather_using_speak', {
+        await gatherPrompt(callControlId, {
           payload: prompt,
           invalid_payload: `That selection was not recognized. Please press one of these options: ${validDigits.split('').join(', ')}.`,
           voice: config.voice,
-          payload_type: 'text',
           minimum_digits: 1,
           maximum_digits: 1,
           valid_digits: validDigits,
@@ -280,11 +293,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const config = await readBusinessVoiceConfig();
       const digit = Number(payload?.digits || payload?.result || '1');
       if (digit === 9 && (await listExtensions()).length) {
-        await callAction(callControlId, 'gather_using_speak', {
+        await gatherPrompt(callControlId, {
           payload: 'Please enter the extension number now.',
           invalid_payload: 'That extension was not recognized.',
           voice: config.voice,
-          payload_type: 'text',
           minimum_digits: 2,
           maximum_digits: 5,
           timeout_millis: 8000,
@@ -304,7 +316,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (extension) {
         await routeToAgent(callControlId, `${extension.name}, extension ${extension.extension}`, config.waitingMessage, config.voice, eventId, `sip:${extension.sipUsername}@sip.telnyx.com`, extension.id, config.voicemailDelaySeconds, state.callerNumber, state.callerName);
       } else {
-        await callAction(callControlId, 'speak', { payload: 'That extension is not available. We will connect you to the main line.', voice: config.voice, payload_type: 'text', command_id: `${eventId}-extension-missing` });
+        await speakPrompt(callControlId, { payload: 'That extension is not available. We will connect you to the main line.', voice: config.voice, command_id: `${eventId}-extension-missing` });
         await routeToAgent(callControlId, config.companyName, config.waitingMessage, config.voice, eventId, undefined, undefined, config.voicemailDelaySeconds, state.callerNumber, state.callerName);
       }
     }

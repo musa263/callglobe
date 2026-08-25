@@ -11,6 +11,7 @@ import { RatePicker } from '../components/RatePicker';
 import { flagFromCode } from '../data/fallbackRates';
 import { useAuth } from '../context/AuthContext';
 import { useVoice } from '../context/VoiceContext';
+import { api } from '../lib/api';
 import type { CallRate, NavigationTarget } from '../types';
 import { colors, shadow } from '../theme';
 
@@ -19,7 +20,7 @@ const sanitize = (value: string) => value.replace(/[^0-9*#]/g, '').slice(0, 18);
 export function DialerScreen({ onWallet, onConference, target }: { onWallet: () => void; onConference: () => void; target: NavigationTarget | null }) {
   const insets = useSafeAreaInsets();
   const { profile, rates, callerNumbers } = useAuth();
-  const { isReady, error, startCall } = useVoice();
+  const { isReady, error, startCall, startInternalCall } = useVoice();
   const [selected, setSelected] = useState<CallRate>(() => rates.find((rate) => rate.country_code === 'SA') ?? rates[0]!);
   const [number, setNumber] = useState('');
   const [showRates, setShowRates] = useState(false);
@@ -30,10 +31,11 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const balance = Number(profile?.balance ?? 0);
   const minutes = selected.rate_per_min ? Math.floor(balance / selected.rate_per_min) : null;
   const fullNumber = `${selected.dial_code}${number}`;
+  const internalCandidate = Boolean(profile?.extension && /^\d{2,5}$/.test(number));
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
-  const routeRisk = selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
+  const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
-  const canCall = number.length >= 4 && balance > 0;
+  const canCall = internalCandidate ? number !== profile?.extension : number.length >= 4 && balance > 0;
   const displayNumber = useMemo(() => number.replace(/(.{3})/g, '$1 ').trim(), [number]);
 
   useEffect(() => {
@@ -64,7 +66,14 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
     try {
       Keyboard.dismiss();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await startCall(fullNumber, selected, selectedCaller, contactName);
+      if (internalCandidate) {
+        const result = await api.get<{ users: Array<{ extension: string; name: string; sipUsername: string; photoUrl?: string }> }>(`/api/voice/directory?extension=${encodeURIComponent(number)}`);
+        const colleague = result.users[0];
+        if (!colleague?.sipUsername) throw new Error(`Extension ${number} is not available in your organization.`);
+        await startInternalCall(colleague.sipUsername, colleague.extension, colleague.name, colleague.photoUrl);
+      } else {
+        await startCall(fullNumber, selected, selectedCaller, contactName);
+      }
     } catch (startError) {
       setCallError(startError instanceof Error ? startError.message : 'The call could not be started.');
     }
@@ -81,33 +90,33 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
 
       <View style={styles.destinationBlock}>
         <Text style={styles.eyebrow}>CALLING</Text>
-        <Pressable onPress={() => setShowRates(true)} style={styles.countryButton}>
-          <Text style={styles.flag}>{flagFromCode(selected.country_code)}</Text>
-          <Text style={styles.country}>{selected.country_name}</Text>
-          <ChevronDown size={18} color={colors.textMuted} />
+        <Pressable disabled={internalCandidate} onPress={() => setShowRates(true)} style={styles.countryButton}>
+          <Text style={styles.flag}>{internalCandidate ? 'EXT' : flagFromCode(selected.country_code)}</Text>
+          <Text style={styles.country}>{internalCandidate ? 'Company extension' : selected.country_name}</Text>
+          {!internalCandidate && <ChevronDown size={18} color={colors.textMuted} />}
         </Pressable>
       </View>
 
       <View style={styles.callerRow}>
-        <Text style={styles.callerLabel}>CALLING FROM</Text>
-        <Pressable disabled={!callerNumbers.length} onPress={() => setShowCallerIds(true)} style={styles.callerButton}>
-          <Text style={[styles.callerNumber, !selectedCaller && styles.callerUnavailable]}>{selectedCaller?.phone_number ?? 'Network default'}</Text>
-          {!!callerNumbers.length && <ChevronDown size={15} color={colors.textMuted} />}
+        <Text style={styles.callerLabel}>{internalCandidate ? 'INTERNAL CALL FROM' : 'CALLING FROM'}</Text>
+        <Pressable disabled={internalCandidate || !callerNumbers.length} onPress={() => setShowCallerIds(true)} style={styles.callerButton}>
+          <Text style={[styles.callerNumber, !selectedCaller && !internalCandidate && styles.callerUnavailable]}>{internalCandidate ? `Extension ${profile?.extension}` : selectedCaller?.phone_number ?? 'Network default'}</Text>
+          {!internalCandidate && !!callerNumbers.length && <ChevronDown size={15} color={colors.textMuted} />}
         </Pressable>
       </View>
 
-      <View accessibilityLabel={`${selected.dial_code} ${number || 'Phone number'}`} style={styles.numberRow}>
-        <Text style={styles.dialCode}>{selected.dial_code}</Text>
-        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[styles.numberInput, !number && styles.numberPlaceholder]}>{displayNumber || 'Phone number'}</Text>
+      <View accessibilityLabel={`${internalCandidate ? 'Extension' : selected.dial_code} ${number || 'Phone number or extension'}`} style={styles.numberRow}>
+        <Text style={styles.dialCode}>{internalCandidate ? 'EXT' : selected.dial_code}</Text>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[styles.numberInput, !number && styles.numberPlaceholder]}>{displayNumber || 'Phone number or extension'}</Text>
         <Pressable accessibilityLabel="Delete last digit" onPress={() => { setContactName(undefined); setNumber((value) => value.slice(0, -1)); }} onLongPress={() => { setContactName(undefined); setNumber(''); }} style={styles.delete}>
           <Delete size={22} color={number ? colors.textMuted : colors.textFaint} />
         </Pressable>
       </View>
 
       <View style={styles.rateLine}>
-        <Text style={styles.rate}>{selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)}/min est.` : 'Live Telnyx rate'}</Text>
+        <Text style={styles.rate}>{internalCandidate ? 'Free internal call' : selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)}/min est.` : 'Live Telnyx rate'}</Text>
         <View style={styles.dividerDot} />
-        <Text style={styles.minutes}>{minutes ? `about ${minutes.toLocaleString()} minutes available` : 'charged to your Telnyx balance'}</Text>
+        <Text style={styles.minutes}>{internalCandidate ? 'No phone number required' : minutes ? `about ${minutes.toLocaleString()} minutes available` : 'charged to your Telnyx balance'}</Text>
       </View>
 
       {routeRisk && <View style={styles.routeWarning}><AlertTriangle size={17} color={colors.amber} /><View style={styles.routeCopy}><Text style={styles.routeTitle}>Caller ID may not ring locally</Text><Text style={styles.routeText}>Some countries filter same-country caller IDs arriving through international routes.</Text></View>{ownedFallback && <Pressable onPress={() => { setSelectedCaller(ownedFallback); setCallError(''); }} style={styles.routeButton}><Text style={styles.routeButtonText}>Use +1 line</Text></Pressable>}</View>}
@@ -120,7 +129,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         <Pressable accessibilityLabel="Start call" disabled={!canCall} onPress={call} style={({ pressed }) => [styles.callButton, !canCall && styles.callDisabled, pressed && canCall && styles.callPressed]}>
           <Phone size={29} color={colors.ink} fill={colors.ink} strokeWidth={1.5} />
         </Pressable>
-        <Text style={styles.callHint}>{!canCall && number.length >= 4 ? 'Add balance to call' : 'Tap to call'}</Text>
+        <Text style={styles.callHint}>{internalCandidate ? (canCall ? 'Call extension' : 'Choose another extension') : !canCall && number.length >= 4 ? 'Add balance to call' : 'Tap to call'}</Text>
       </View>
 
       <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={setSelected} onClose={() => setShowRates(false)} />

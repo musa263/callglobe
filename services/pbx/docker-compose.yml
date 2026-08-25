@@ -1,0 +1,20 @@
+services:
+  asterisk:
+    build: ./asterisk
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./asterisk/config/pjsip_extensions.conf:/etc/asterisk/pjsip_extensions.conf:ro
+      - ./asterisk/config/voicemail_users.conf:/etc/asterisk/voicemail_users.conf:ro
+      - asterisk-data:/var/lib/asterisk
+      - asterisk-logs:/var/log/asterisk
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show uptime"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  asterisk-data:
+  asterisk-logs:

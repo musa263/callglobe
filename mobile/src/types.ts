@@ -75,6 +75,7 @@ export type Profile = {
   balance: number;
   currency: string;
   extension?: string;
+  organization_id?: string;
   role?: 'owner' | 'admin' | 'manager' | 'user';
   photo_url?: string;
   job_title?: string;

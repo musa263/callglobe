@@ -3,6 +3,7 @@ import { requireOwner } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import { telnyx } from '../telnyx.js';
+import { carrierFallbackVoice } from '../voice-catalog.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -17,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       name: ai.name.trim(), description: 'Vocivo interactive company receptionist',
       instructions: `${ai.instructions.trim()}\n\nApproved company information:\n${ai.knowledge.trim() || 'No additional company information has been approved.'}\n\n${ai.transferEnabled ? `When a human is needed, offer transfer to extension ${ai.fallbackExtension || 'the main line'}.` : 'Do not attempt to transfer calls.'}`,
       greeting: ai.greeting.trim(), enabled_features: ['telephony'],
-      voice_settings: { voice: ai.voice },
+      voice_settings: { voice: carrierFallbackVoice(ai.voice) },
       transcription: { model: ai.language === 'en' ? 'deepgram/flux' : 'deepgram/nova-3', language: ai.language },
       post_conversation_settings: { enabled: ai.summariesEnabled },
     };

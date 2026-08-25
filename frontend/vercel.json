@@ -6,6 +6,7 @@
     }
   },
   "rewrites": [
-    { "source": "/admin", "destination": "/" }
+    { "source": "/admin", "destination": "/" },
+    { "source": "/api/health", "destination": "/api/platform/health" }
   ]
 }

@@ -26,10 +26,11 @@ export type VocivoSession = JWTPayload & {
   role?: 'owner' | 'admin' | 'manager' | 'user';
   extensionId?: string;
   extension?: string;
+  organizationId?: string;
 };
 
-export async function createExtensionSession(input: { id: string; email: string; name: string; role: 'admin' | 'manager' | 'user'; extension: string }) {
-  return new SignJWT({ email: input.email, name: input.name, role: input.role, extensionId: input.id, extension: input.extension })
+export async function createExtensionSession(input: { id: string; email: string; name: string; role: 'admin' | 'manager' | 'user'; extension: string; organizationId: string }) {
+  return new SignJWT({ email: input.email, name: input.name, role: input.role, extensionId: input.id, extension: input.extension, organizationId: input.organizationId })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(`vocivo-extension:${input.id}`)
     .setIssuer(issuer)

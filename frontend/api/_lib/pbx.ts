@@ -1,5 +1,6 @@
 import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
+import { readPbxConfig } from './pbx-config-store.js';
 
 const extensionTag = 'vocivo_extension';
 const legacyExtensionTag = ['call', 'globe_extension'].join('');
@@ -13,6 +14,7 @@ export type ExtensionUser = {
   name: string;
   email: string;
   mobile: string;
+  organizationId: string;
   department: string;
   role: 'admin' | 'manager' | 'user';
   sipUsername: string;
@@ -40,12 +42,12 @@ function normalizeRole(value: unknown): ExtensionUser['role'] {
 }
 
 function encodeName(input: Partial<ExtensionUser>) {
-  return [credentialPrefix, clean(input.extension, 5), clean(input.name, 50), clean(input.department, 30), normalizeRole(input.role), clean(input.email, 70), clean(input.mobile, 24)].join('|');
+  return [credentialPrefix, clean(input.extension, 5), clean(input.name, 50), clean(input.department, 30), normalizeRole(input.role), clean(input.email, 70), clean(input.mobile, 24), clean(input.organizationId, 50) || 'primary'].join('|');
 }
 
 function parseCredential(item: CredentialResource): ExtensionUser | null {
   if (![extensionTag, legacyExtensionTag].includes(item.tag || '') || item.resource_id !== connectionResource()) return null;
-  const [prefix, extension, name, department, role, email, mobile] = (item.name || '').split('|');
+  const [prefix, extension, name, department, role, email, mobile, organizationId] = (item.name || '').split('|');
   if (![credentialPrefix, legacyCredentialPrefix].includes(prefix || '') || !/^\d{2,5}$/.test(extension || '')) return null;
   return {
     id: item.id,
@@ -55,30 +57,46 @@ function parseCredential(item: CredentialResource): ExtensionUser | null {
     role: normalizeRole(role),
     email: email || '',
     mobile: mobile || '',
+    organizationId: organizationId || 'primary',
     sipUsername: item.sip_username || '',
     status: item.expired ? 'expired' : 'active',
     createdAt: item.created_at,
   };
 }
 
-export async function listExtensions(): Promise<ExtensionUser[]> {
+export async function listExtensions(organizationId?: string): Promise<ExtensionUser[]> {
   const query = new URLSearchParams({ 'page[size]': '250', 'filter[resource_id]': connectionResource() });
   const response = await telnyx(`/telephony_credentials?${query}`);
   const payload = await response.json() as { data?: CredentialResource[] };
-  return (payload.data ?? []).map(parseCredential).filter((item): item is ExtensionUser => Boolean(item)).sort((a, b) => Number(a.extension) - Number(b.extension));
+  return (payload.data ?? []).map(parseCredential).filter((item): item is ExtensionUser => Boolean(item) && (!organizationId || item?.organizationId === organizationId)).sort((a, b) => Number(a.extension) - Number(b.extension));
 }
 
-function validateExtensionInput(input: Partial<ExtensionUser>) {
-  const extension = clean(input.extension, 5);
+function validateExtensionInput(input: Partial<ExtensionUser>, extension: string) {
   const name = clean(input.name, 50);
   if (!/^\d{2,5}$/.test(extension)) throw new Error('Extension must contain 2 to 5 digits.');
   if (!name) throw new Error('User name is required.');
-  return { ...input, extension, name, department: clean(input.department, 30) || 'General', email: clean(input.email, 70), mobile: clean(input.mobile, 24), role: normalizeRole(input.role) };
+  return { ...input, extension, name, organizationId: clean(input.organizationId, 50) || 'primary', department: clean(input.department, 30) || 'General', email: clean(input.email, 70), mobile: clean(input.mobile, 24), role: normalizeRole(input.role) };
+}
+
+async function extensionForCreate(input: Partial<ExtensionUser>) {
+  const config = await readPbxConfig();
+  const organizationId = clean(input.organizationId, 50) || config.activeOrganizationId;
+  const organization = config.organizations.find((item) => item.id === organizationId && item.status === 'active');
+  if (!organization) throw new Error('Organization is not active.');
+  if (organization.extensionEnd < organization.extensionStart || organization.extensionEnd - organization.extensionStart > 9999) throw new Error('Organization extension range is invalid.');
+  const existing = await listExtensions(organizationId);
+  const requested = clean(input.extension, 5);
+  const extension = requested || Array.from({ length: organization.extensionEnd - organization.extensionStart + 1 }, (_, index) => String(organization.extensionStart + index)).find((candidate) => !existing.some((item) => item.extension === candidate)) || '';
+  if (!extension) throw new Error('This organization has no available extension slots.');
+  const numeric = Number(extension);
+  if (!Number.isInteger(numeric) || numeric < organization.extensionStart || numeric > organization.extensionEnd) throw new Error(`Extension must be between ${organization.extensionStart} and ${organization.extensionEnd}.`);
+  return { extension, organizationId, existing };
 }
 
 export async function createExtension(input: Partial<ExtensionUser>) {
-  const value = validateExtensionInput(input);
-  if ((await listExtensions()).some((item) => item.extension === value.extension)) throw new Error(`Extension ${value.extension} already exists.`);
+  const allocated = await extensionForCreate(input);
+  const value = validateExtensionInput({ ...input, organizationId: allocated.organizationId }, allocated.extension);
+  if (allocated.existing.some((item) => item.extension === value.extension)) throw new Error(`Extension ${value.extension} already exists.`);
   const response = await telnyx('/telephony_credentials', {
     method: 'POST',
     body: JSON.stringify({ connection_id: requiredEnv('TELNYX_CONNECTION_ID'), name: encodeName(value), tag: extensionTag }),
@@ -115,8 +133,14 @@ export async function getExtensionCredentials(id: string) {
 
 export async function updateExtension(id: string, input: Partial<ExtensionUser>) {
   const existing = await requireManagedCredential(id);
-  const value = validateExtensionInput({ ...existing, ...input });
-  const duplicate = (await listExtensions()).find((item) => item.extension === value.extension && item.id !== id);
+  const value = validateExtensionInput({ ...existing, ...input }, clean(input.extension, 5) || existing.extension);
+  const config = await readPbxConfig();
+  const organization = config.organizations.find((item) => item.id === value.organizationId && item.status === 'active');
+  if (!organization) throw new Error('Organization is not active.');
+  const numeric = Number(value.extension);
+  const extensionChanged = value.extension !== existing.extension || value.organizationId !== existing.organizationId;
+  if (extensionChanged && (numeric < organization.extensionStart || numeric > organization.extensionEnd)) throw new Error(`Extension must be between ${organization.extensionStart} and ${organization.extensionEnd}.`);
+  const duplicate = (await listExtensions(value.organizationId)).find((item) => item.extension === value.extension && item.id !== id);
   if (duplicate) throw new Error(`Extension ${value.extension} already exists.`);
   const response = await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name: encodeName(value), tag: extensionTag }) });
   const payload = await response.json() as { data?: CredentialResource };
@@ -128,6 +152,6 @@ export async function deleteExtension(id: string) {
   await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
-export async function findExtension(number: string) {
-  return (await listExtensions()).find((item) => item.extension === number && item.status === 'active') ?? null;
+export async function findExtension(number: string, organizationId?: string) {
+  return (await listExtensions(organizationId)).find((item) => item.extension === number && item.status === 'active') ?? null;
 }

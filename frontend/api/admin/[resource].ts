@@ -7,8 +7,11 @@ import enrollments from '../_lib/routes/admin-enrollments.js';
 import pbx from '../_lib/routes/admin-pbx.js';
 import ai from '../_lib/routes/admin-ai.js';
 import events from '../_lib/routes/admin-events.js';
+import numbers from '../_lib/routes/admin-numbers.js';
+import voices from '../_lib/routes/admin-voices.js';
+import apiKeys from '../_lib/routes/admin-api-keys.js';
 
-const routes = { background, extensions, overview, trunks, enrollments, pbx, ai, events } as const;
+const routes = { background, extensions, overview, trunks, enrollments, pbx, ai, events, numbers, voices, 'api-keys': apiKeys } as const;
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const resource = Array.isArray(req.query.resource) ? req.query.resource[0] : req.query.resource;

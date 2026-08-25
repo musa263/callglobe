@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireOwner } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { telnyx } from '../telnyx.js';
+import { deleteTrunkPolicy, normalizeTrunkPolicy, readTrunkPolicies, saveTrunkPolicy, type TrunkPolicy } from '../trunk-policy-store.js';
 
 type UacConnection = {
   id: string;
@@ -13,8 +14,8 @@ type UacConnection = {
   internal_uac_settings?: { destination_uri?: string };
 };
 
-function safeUac(item: UacConnection) {
-  return { id: item.id, name: item.connection_name || 'SIP trunk', active: Boolean(item.active), fqdn: item.fqdn || '', registrationStatus: item.registration_status || 'Unknown', proxy: item.external_uac_settings?.proxy || '', username: item.external_uac_settings?.username || '', transport: item.external_uac_settings?.transport || 'UDP', destinationUri: item.internal_uac_settings?.destination_uri || '' };
+function safeUac(item: UacConnection, policy?: TrunkPolicy) {
+  return { id: item.id, name: item.connection_name || 'SIP trunk', active: Boolean(item.active), fqdn: item.fqdn || '', registrationStatus: item.registration_status || 'Unknown', proxy: item.external_uac_settings?.proxy || '', username: item.external_uac_settings?.username || '', transport: item.external_uac_settings?.transport || 'UDP', destinationUri: item.internal_uac_settings?.destination_uri || '', policy: policy || normalizeTrunkPolicy(item.id, {}) };
 }
 
 function text(value: unknown, max = 200) {
@@ -27,18 +28,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await requireOwner(req);
     if (req.method === 'GET') {
-      const [connectionResponse, uacResponse] = await Promise.all([telnyx(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`), telnyx('/uac_connections?page[size]=100')]);
+      const [connectionResponse, uacResponse, policies] = await Promise.all([telnyx(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`), telnyx('/uac_connections?page[size]=100'), readTrunkPolicies()]);
       const connection = (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {};
       const uac = (await uacResponse.json() as { data?: UacConnection[] }).data ?? [];
       return res.status(200).json({
         vocivoTrunk: { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.user_name, registrationStatus: connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: 'WSS / TLS' },
-        externalTrunks: uac.map(safeUac),
+        externalTrunks: uac.map((item) => safeUac(item, policies[item.id])),
       });
     }
     const id = text(req.body?.id || req.query.id, 80);
     if (req.method === 'DELETE') {
       if (!id) return res.status(400).json({ error: 'Trunk ID is required.' });
       await telnyx(`/uac_connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await deleteTrunkPolicy(id);
       return res.status(200).json({ success: true });
     }
     const name = text(req.body?.name, 80);
@@ -56,7 +58,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     const response = await telnyx(id ? `/uac_connections/${encodeURIComponent(id)}` : '/uac_connections', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(body) });
     const payload = await response.json() as { data?: UacConnection };
-    return res.status(id ? 200 : 201).json({ trunk: payload.data ? safeUac(payload.data) : null });
+    if (!payload.data) throw new Error('Telnyx did not return the saved SIP connection.');
+    const policy = await saveTrunkPolicy(payload.data.id, req.body?.policy ?? {});
+    return res.status(id ? 200 : 201).json({ trunk: safeUac(payload.data, policy) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     return res.status(500).json({ error: publicError(error) });

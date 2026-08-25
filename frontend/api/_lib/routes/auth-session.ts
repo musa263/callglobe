@@ -15,6 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         full_name: isOwner ? process.env.APP_ADMIN_NAME || 'Vocivo Owner' : session.name || `Extension ${session.extension || ''}`,
         currency: 'USD',
         extension: session.extension,
+        organization_id: session.organizationId,
         role: session.role,
       },
     });
