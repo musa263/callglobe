@@ -8,6 +8,7 @@ import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.j
 import { readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, saveOutboundCallPair } from '../outbound-call-store.js';
+import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
 
 type VoiceEvent = {
   data?: {
@@ -70,9 +71,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!callControlId) return res.status(200).json({ received: true });
 
     const parkedFlow = customHeader(payload, 'X-Vocivo-Flow');
-    const isInboundEntryCall = !state
-      && payload?.direction === 'incoming'
-      && payload?.connection_id === requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
+    const routeInput = {
+      connectionId: payload?.connection_id,
+      callControlApplicationId: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
+      to: payload?.to,
+      inboundNumber: requiredEnv('TELNYX_SMS_FROM'),
+      hasManagedState: Boolean(state),
+    };
+    const outboundPair = eventType === 'call.answered' ? await readOutboundCallPairByDestination(callControlId) : null;
+    const isInboundInitiated = isInboundCallInitiated({ ...routeInput, direction: payload?.direction });
+    const isInboundAnswered = eventType === 'call.answered'
+      && isInboundCallAnswered({ ...routeInput, hasOutboundPair: Boolean(outboundPair) });
     const isParkedVocivoClient = payload?.connection_id === requiredEnv('TELNYX_CONNECTION_ID')
       && payload?.direction === 'outgoing'
       && ['outbound', 'internal'].includes(parkedFlow);
@@ -100,13 +109,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         status: 'direct',
         updatedAt: new Date().toISOString(),
       });
+      const appUrl = requiredEnv('VITE_APP_URL').replace(/\/+$/, '');
+      await callAction(callControlId, 'playback_start', {
+        audio_url: `${appUrl}/audio/ringback.wav`,
+        loop: 'infinity',
+        command_id: `${eventId}-ringback`,
+      }).catch((error) => console.warn('Vocivo could not start ringback audio', publicError(error)));
       return res.status(200).json({ received: true });
     }
 
-    if (eventType === 'call.answered' && (state?.flow === 'outbound_destination' || payload?.direction === 'outgoing')) {
-      const pair = await readOutboundCallPairByDestination(callControlId);
-      const parentCallControlId = state?.flow === 'outbound_destination' ? state.parentCallControlId : pair?.clientCallControlId;
+    if (eventType === 'call.answered' && (state?.flow === 'outbound_destination' || outboundPair)) {
+      const parentCallControlId = state?.flow === 'outbound_destination' ? state.parentCallControlId : outboundPair?.clientCallControlId;
       if (parentCallControlId) {
+        await callAction(parentCallControlId, 'playback_stop', {
+          stop: 'all',
+          command_id: `${eventId}-stop-ringback`,
+        }).catch(() => undefined);
         await callAction(parentCallControlId, 'bridge', { call_control_id: callControlId, command_id: `${eventId}-bridge` });
         return res.status(200).json({ received: true });
       }
@@ -114,7 +132,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (eventType === 'call.hangup' && state?.flow === 'outbound_destination') {
       const pair = await readOutboundCallPairByDestination(callControlId);
-      if (pair?.status === 'direct') await callAction(pair.clientCallControlId, 'hangup', { command_id: `${eventId}-end-client` }).catch(() => undefined);
+      if (pair?.status === 'direct') {
+        await callAction(pair.clientCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch(() => undefined);
+        await callAction(pair.clientCallControlId, 'hangup', { command_id: `${eventId}-end-client` }).catch(() => undefined);
+      }
       if (pair) await clearOutboundCallPair(pair).catch(() => undefined);
       return res.status(200).json({ received: true });
     }
@@ -190,7 +211,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await callAction(callControlId, 'hangup', { command_id: `${eventId}-voicemail-finish` }).catch(() => undefined);
     }
 
-    if (eventType === 'call.initiated' && isInboundEntryCall) {
+    if (eventType === 'call.initiated' && isInboundInitiated) {
       await callAction(callControlId, 'answer', { command_id: `${eventId}-answer` });
     }
 
@@ -218,7 +239,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    if (eventType === 'call.answered' && isInboundEntryCall) {
+    if (isInboundAnswered) {
       const pbx = await readPbxConfig();
       if (pbx.ai.enabled && pbx.ai.assistantId) {
         await callAction(callControlId, 'ai_assistant_start', { assistant: { id: pbx.ai.assistantId }, command_id: `${eventId}-ai` });

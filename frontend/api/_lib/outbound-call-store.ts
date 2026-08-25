@@ -27,10 +27,15 @@ function decrypt(value: Buffer) {
   return JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as OutboundCallPair;
 }
 async function readPath(pathname: string) {
-  const result = await list({ prefix: pathname, limit: 1 });
-  const blob = result.blobs[0];
-  if (!blob) return null;
-  try { const response = await fetch(blob.url); return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null; } catch { return null; }
+  try {
+    const result = await list({ prefix: pathname, limit: 1 });
+    const blob = result.blobs[0];
+    if (!blob) return null;
+    const response = await fetch(blob.url);
+    return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function saveOutboundCallPair(pair: OutboundCallPair) {
