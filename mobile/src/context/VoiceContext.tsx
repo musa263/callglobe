@@ -62,9 +62,12 @@ const toPhase = (state: TelnyxCallState): CallPhase => {
   return 'ended';
 };
 
-const outboundHeaders = (destination: string, callerNumber?: string, flow = 'outbound') => [
+const createRouteId = () => `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
+
+const outboundHeaders = (destination: string, callerNumber: string | undefined, flow: string, routeId: string) => [
   { name: 'X-Vocivo-Flow', value: flow },
   { name: 'X-Vocivo-Destination', value: destination },
+  { name: 'X-Vocivo-Route-ID', value: routeId },
   ...(callerNumber ? [{ name: 'X-Vocivo-Caller-ID', value: callerNumber }] : []),
 ];
 
@@ -79,7 +82,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const callRef = useRef<Call | null>(null);
   const callMetaRef = useRef(new Map<string, Partial<ActiveCall>>());
+  const callRouteIdsRef = useRef(new Map<string, string>());
   const conferenceCallIdsRef = useRef<string[]>([]);
+  const multiCallBusyRef = useRef(false);
   const activeCallRef = useRef<ActiveCall | null>(null);
   const durationRef = useRef(0);
   const loggedCalls = useRef(new Set<string>());
@@ -147,7 +152,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     const base = describeCall(call);
     if (!callMetaRef.current.has(call.callId)) callMetaRef.current.set(call.callId, { startedAt: base.startedAt, connectedAt: base.connectedAt });
     setActiveCall((existing) => {
-      const next = { ...base, ...existing, id: base.id, phase: base.phase };
+      const next = { ...base, speaker: existing?.speaker ?? base.speaker };
       activeCallRef.current = next;
       return next;
     });
@@ -164,6 +169,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         });
         if (phase === 'ended' || phase === 'failed') {
           finalizeCall(phase, call.callId);
+          callRouteIdsRef.current.delete(call.callId);
+          callMetaRef.current.delete(call.callId);
           setTimeout(() => {
             const remaining = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
             if (!remaining) {
@@ -250,7 +257,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
-    const call = await voipClient.newCall(number, displayName || 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number));
+    const routeId = createRouteId();
+    const call = await voipClient.newCall(number, displayName || 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound', routeId));
+    callRouteIdsRef.current.set(call.callId, routeId);
     callMetaRef.current.set(call.callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now() });
     attachCall(call);
     setActiveCall((current) => {
@@ -263,17 +272,26 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const startSecondCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => {
     if (isPreview) throw new Error('Add call requires a live calling connection.');
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
+    if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
+    if (voipClient.currentCalls.some((call) => call.currentState === TelnyxCallState.HELD)) throw new Error('Resume or merge the held call before adding another caller.');
     const current = voipClient.currentActiveCall;
     if (!current || current.currentState !== TelnyxCallState.ACTIVE) throw new Error('Connect the first call before adding another caller.');
-    await current.hold();
+    multiCallBusyRef.current = true;
     try {
-      const call = await voipClient.newCall(number, 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number));
+      await current.hold();
+      const routeId = createRouteId();
+      const call = await voipClient.newCall(number, 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound', routeId));
+      callRouteIdsRef.current.set(call.callId, routeId);
       callMetaRef.current.set(call.callId, { displayName: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now() });
       voipClient.setActiveCall(call.callId);
       attachCall(call);
     } catch (secondCallError) {
       await current.resume().catch(() => undefined);
+      voipClient.setActiveCall(current.callId);
+      attachCall(current);
       throw secondCallError;
+    } finally {
+      multiCallBusyRef.current = false;
     }
   }, [attachCall, connection, isPreview]);
 
@@ -288,7 +306,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     const destination = `sip:${sipUsername}@sip.telnyx.com`;
-    const call = await voipClient.newCall(destination, displayName, undefined, outboundHeaders(destination, undefined, 'internal'));
+    const routeId = createRouteId();
+    const call = await voipClient.newCall(destination, displayName, undefined, outboundHeaders(destination, undefined, 'internal', routeId));
+    callRouteIdsRef.current.set(call.callId, routeId);
     callMetaRef.current.set(call.callId, { displayName, destinationCountry: 'Internal', photoUrl, startedAt: Date.now() });
     attachCall(call);
   }, [attachCall, connection, isPreview]);
@@ -316,26 +336,39 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const swapCalls = useCallback(async () => {
     if (!heldCall?.id) throw new Error('There is no held call to swap.');
-    await voipClient.swapCalls(heldCall.id);
-  }, [heldCall?.id]);
+    if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
+    const target = voipClient.getCall(heldCall.id);
+    if (!target) throw new Error('The held call is no longer available.');
+    multiCallBusyRef.current = true;
+    try {
+      await voipClient.swapCalls(target.callId);
+      voipClient.setActiveCall(target.callId);
+      attachCall(target);
+    } finally {
+      multiCallBusyRef.current = false;
+    }
+  }, [attachCall, heldCall?.id]);
 
   const mergeCalls = useCallback(async () => {
     if (isPreview) throw new Error('Call merge requires a live calling connection.');
     if (conferenceCallIdsRef.current.length) throw new Error('These calls are already merged.');
+    if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
     const current = voipClient.currentActiveCall;
     const held = heldCall?.id ? voipClient.getCall(heldCall.id) : undefined;
     if (!current || !held || current.currentState !== TelnyxCallState.ACTIVE || held.currentState !== TelnyxCallState.HELD) {
       throw new Error('Connect the second call before merging.');
     }
-    const callControlIds = [current, held]
-      .map((call) => call.telnyxCall.telnyxCallControlId?.trim())
-      .filter((id): id is string => Boolean(id));
-    if (callControlIds.length !== 2) throw new Error('Telnyx is still preparing the call legs. Wait a moment and try again.');
-
-    const result = await api.post<{ conferenceId: string }>('/api/voice/merge', { callControlIds });
-    conferenceCallIdsRef.current = [current.callId];
-    setConference({ id: result.conferenceId, participants: [describeCall(current), describeCall(held)] });
-    setHeldCall(null);
+    const routeIds = [current.callId, held.callId].map((id) => callRouteIdsRef.current.get(id)).filter((id): id is string => Boolean(id));
+    if (routeIds.length !== 2) throw new Error('Both calls must be placed from the Vocivo dialer before they can be merged.');
+    multiCallBusyRef.current = true;
+    try {
+      const result = await api.post<{ conferenceId: string }>('/api/voice/merge', { routeIds });
+      conferenceCallIdsRef.current = [current.callId];
+      setConference({ id: result.conferenceId, participants: [describeCall(current), describeCall(held)] });
+      setHeldCall(null);
+    } finally {
+      multiCallBusyRef.current = false;
+    }
   }, [describeCall, heldCall?.id, isPreview]);
 
   useEffect(() => {

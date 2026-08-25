@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { isVoiceRouteId } from './voice-route-id.js';
 import { isInboundCallAnswered, isInboundCallInitiated } from './voice-routing.js';
 
 const base = {
@@ -29,4 +30,10 @@ test('rejects a stateless outbound destination paired by the server', () => {
 
 test('rejects calls that do not target the configured inbound number', () => {
   assert.equal(isInboundCallAnswered({ ...base, to: '+2347000000000', hasOutboundPair: false }), false);
+});
+
+test('accepts app-generated multi-call route identifiers only', () => {
+  assert.equal(isVoiceRouteId('vc_m1a2b3c4_abc123def456_xy12z890'), true);
+  assert.equal(isVoiceRouteId('short'), false);
+  assert.equal(isVoiceRouteId('vc_invalid route identifier'), false);
 });

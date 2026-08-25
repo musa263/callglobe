@@ -9,6 +9,7 @@ import { readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, saveOutboundCallPair } from '../outbound-call-store.js';
 import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
+import { isVoiceRouteId } from '../voice-route-id.js';
 
 type VoiceEvent = {
   data?: {
@@ -89,6 +90,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.initiated' && isParkedVocivoClient && payload?.state === 'parked') {
       const destination = customHeader(payload, 'X-Vocivo-Destination') || payload.to || '';
       const selectedCallerId = customHeader(payload, 'X-Vocivo-Caller-ID');
+      const requestedRouteId = customHeader(payload, 'X-Vocivo-Route-ID');
+      const routeId = isVoiceRouteId(requestedRouteId) ? requestedRouteId : undefined;
       if (!e164.test(destination) && !internalSip.test(destination)) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch(() => undefined);
         return res.status(200).json({ received: true });
@@ -105,6 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await saveOutboundCallPair({
         clientCallControlId: callControlId,
         destinationCallControlId,
+        routeId,
         destination,
         status: 'direct',
         updatedAt: new Date().toISOString(),
@@ -125,7 +129,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           stop: 'all',
           command_id: `${eventId}-stop-ringback`,
         }).catch(() => undefined);
-        await callAction(parentCallControlId, 'bridge', { call_control_id: callControlId, command_id: `${eventId}-bridge` });
+        await callAction(parentCallControlId, 'bridge', {
+          call_control_id: callControlId,
+          park_after_unbridge: 'self',
+          command_id: `${eventId}-bridge`,
+        });
         return res.status(200).json({ received: true });
       }
     }
@@ -135,8 +143,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (pair?.status === 'direct') {
         await callAction(pair.clientCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch(() => undefined);
         await callAction(pair.clientCallControlId, 'hangup', { command_id: `${eventId}-end-client` }).catch(() => undefined);
+        await clearOutboundCallPair(pair).catch(() => undefined);
       }
-      if (pair) await clearOutboundCallPair(pair).catch(() => undefined);
       return res.status(200).json({ received: true });
     }
 

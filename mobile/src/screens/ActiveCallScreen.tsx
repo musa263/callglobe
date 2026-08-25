@@ -78,6 +78,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const [transferError, setTransferError] = useState('');
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeError, setMergeError] = useState('');
+  const [swapBusy, setSwapBusy] = useState(false);
   useEffect(() => {
     if (!activeCall) { setRemotePhoto(undefined); return; }
     if (activeCall.photoUrl) { setRemotePhoto(activeCall.photoUrl); return; }
@@ -107,6 +108,13 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
     catch (mergeFailure) { setMergeError(mergeFailure instanceof Error ? mergeFailure.message : 'The calls could not be merged.'); }
     finally { setMergeBusy(false); }
   };
+  const swap = async () => {
+    if (!heldCall || swapBusy || conference) return;
+    setSwapBusy(true); setMergeError('');
+    try { await swapCalls(); }
+    catch (swapFailure) { setMergeError(swapFailure instanceof Error ? swapFailure.message : 'The calls could not be swapped.'); }
+    finally { setSwapBusy(false); }
+  };
 
   return (
     <View style={styles.page}>
@@ -127,7 +135,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
         <Text style={[styles.status, activeCall.phase === 'active' && styles.statusLive]}>{status}</Text>
         <Text style={styles.timer}>{formatTime(duration)}</Text>
         {activeCall.ratePerMinute ? <Text style={styles.rate}>${activeCall.ratePerMinute.toFixed(3)} per minute</Text> : null}
-        {conference ? <View style={styles.conference}><View style={styles.conferenceIcon}><Merge size={15} color={colors.ink} /></View><View style={styles.conferenceCopy}><Text style={styles.conferenceLabel}>MERGED CONFERENCE</Text><Text numberOfLines={1} style={styles.conferenceNames}>{conference.participants.map((participant) => participant.displayName || participant.number).join(' + ')}</Text></View><View style={styles.liveBadge}><Text style={styles.liveBadgeText}>LIVE</Text></View></View> : heldCall ? <View style={styles.held}><View style={styles.heldCheck}><Check size={13} color={colors.mint} /></View><Text numberOfLines={1} style={styles.heldText}>{heldCall.displayName || heldCall.number} is on hold</Text><Pressable onPress={swapCalls} style={styles.swapButton}><Text style={styles.swapText}>Swap</Text></Pressable></View> : null}
+        {conference ? <View style={styles.conference}><View style={styles.conferenceIcon}><Merge size={15} color={colors.ink} /></View><View style={styles.conferenceCopy}><Text style={styles.conferenceLabel}>MERGED CONFERENCE</Text><Text numberOfLines={1} style={styles.conferenceNames}>{conference.participants.map((participant) => participant.displayName || participant.number).join(' + ')}</Text></View><View style={styles.liveBadge}><Text style={styles.liveBadgeText}>LIVE</Text></View></View> : heldCall ? <View style={styles.held}><View style={styles.heldCheck}><Check size={13} color={colors.mint} /></View><Text numberOfLines={1} style={styles.heldText}>{heldCall.displayName || heldCall.number} is on hold</Text><Pressable disabled={swapBusy} onPress={swap} style={styles.swapButton}><Text style={styles.swapText}>{swapBusy ? 'Wait' : 'Swap'}</Text></Pressable></View> : null}
         {!!mergeError && <Text style={styles.mergeError}>{mergeError}</Text>}
         {activeCall.isIncoming && business.enabled && !!business.greeting && <View style={styles.greetingPrompt}><Text style={styles.greetingLabel}>{business.companyName ? `${business.companyName.toUpperCase()} GREETING` : 'WELCOME PROMPT'}</Text><Text numberOfLines={3} style={styles.greetingText}>{business.greeting}</Text></View>}
       </View>
@@ -137,9 +145,9 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <Control label="Mute" active={activeCall.muted} onPress={toggleMute}>{activeCall.muted ? <MicOff size={24} color={colors.ink} /> : <Mic size={24} color={colors.text} />}</Control>
           <Control label="Keypad" onPress={() => setShowKeypad(true)}><Grid3X3 size={24} color={colors.text} /></Control>
           <Control label="Speaker" active={activeCall.speaker} onPress={toggleSpeaker}>{activeCall.speaker ? <Volume2 size={25} color={colors.ink} /> : <VolumeX size={25} color={colors.text} />}</Control>
-          <Control label="Add caller" disabled={Boolean(conference)} onPress={() => setShowAddCall(true)}><UserPlus size={24} color={conference ? colors.textFaint : colors.text} /></Control>
+          <Control label="Add caller" disabled={Boolean(conference) || Boolean(heldCall) || activeCall.phase !== 'active'} onPress={() => setShowAddCall(true)}><UserPlus size={24} color={conference || heldCall || activeCall.phase !== 'active' ? colors.textFaint : colors.text} /></Control>
           <Control label={activeCall.onHold ? 'Resume' : 'Hold'} active={activeCall.onHold} disabled={Boolean(conference)} onPress={toggleHold}>{activeCall.onHold ? <Play size={24} color={colors.ink} fill={colors.ink} /> : <Pause size={24} color={conference ? colors.textFaint : colors.text} />}</Control>
-          <Control label="Swap" active={!!heldCall} disabled={!heldCall || Boolean(conference)} onPress={() => { if (heldCall) swapCalls().catch(() => undefined); }}><ArrowLeftRight size={24} color={heldCall ? colors.ink : colors.textFaint} /></Control>
+          <Control label={swapBusy ? 'Swapping' : 'Swap'} active={!!heldCall} disabled={!heldCall || Boolean(conference) || swapBusy} onPress={swap}>{swapBusy ? <ActivityIndicator size="small" color={colors.text} /> : <ArrowLeftRight size={24} color={heldCall ? colors.ink : colors.textFaint} />}</Control>
           <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall ? colors.text : colors.textFaint} />}</Control>
           <Control label="Transfer" onPress={openTransfer}><PhoneForwarded size={24} color={colors.text} /></Control>
         </View>
