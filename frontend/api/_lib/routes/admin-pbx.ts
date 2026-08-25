@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { organizationSettingsFrom, pbxForOrganization, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
+import { organizationSettingsFrom, pbxForOrganization, readPbxConfig, savePbxConfig, type PbxConfig } from '../pbx-config-store.js';
 import { listExtensions } from '../pbx.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -107,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...config,
         activeOrganizationId: organizationId,
         organizations: organization ? [organization] : [],
-        numberAssignments: Object.fromEntries(Object.entries(config.numberAssignments).filter(([, assignment]) => assignment.organizationId === organizationId)),
+        numberAssignments: Object.fromEntries(Object.entries(config.numberAssignments as PbxConfig['numberAssignments']).filter(([, assignment]) => assignment.organizationId === organizationId)),
         businessVoiceConfigs: config.businessVoiceConfigs[organizationId] ? { [organizationId]: config.businessVoiceConfigs[organizationId] } : {},
         userProfiles: Object.fromEntries(Object.entries(config.userProfiles).filter(([id]) => extensionIds.has(id))),
       };
