@@ -37,7 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const state = await readSaasState(config);
         if (state.tenantAdmins.some((account) => account.email === email.toLowerCase())) return res.status(409).json({ error: 'This email already belongs to a company administrator.' });
       }
-      if (!subscriptionAccess.superadmin) {
+      if (subscriptionAccess.superadmin === false) {
         const used = (await listExtensions(organizationId)).filter((item) => item.status === 'active').length;
         if (used >= subscriptionAccess.plan.limits.seats) return res.status(409).json({ error: `Your ${subscriptionAccess.plan.name} plan includes ${subscriptionAccess.plan.limits.seats} users. Ask Vocivo to increase the subscription capacity.` });
       }

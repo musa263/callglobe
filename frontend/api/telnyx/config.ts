@@ -11,7 +11,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = await requireSession(req);
     if (session.sub === 'vocivo-owner') return res.status(403).json({ error: 'Platform administrators do not have a calling extension.' });
     const access = await accessForSession(session);
-    if (!access.superadmin && !access.features.internalCalling && !access.features.outboundCalling) return res.status(403).json({ error: 'Calling is not enabled for this account.' });
+    if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) return res.status(403).json({ error: 'Calling is not enabled for this account.' });
     if (session.extensionId) {
       const credential = await getExtensionCredentials(session.extensionId);
       res.setHeader('Cache-Control', 'no-store');

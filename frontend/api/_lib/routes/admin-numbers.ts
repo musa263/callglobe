@@ -79,7 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.body?.confirmPurchase !== true) return res.status(400).json({ error: 'Explicit purchase confirmation is required.' });
       const phoneNumbers = Array.isArray(req.body?.phoneNumbers) ? req.body.phoneNumbers.map((value: unknown) => text(value, 24)).filter((value: string) => /^\+[1-9]\d{6,14}$/.test(value)).slice(0, 10) : [];
       if (!phoneNumbers.length) return res.status(400).json({ error: 'Choose at least one valid phone number.' });
-      if (!subscriptionAccess.superadmin) {
+      if (subscriptionAccess.superadmin === false) {
         const assigned = Object.values(config.numberAssignments).filter((assignment) => assignment.organizationId === activeOrganizationId).length;
         if (assigned + phoneNumbers.length > subscriptionAccess.plan.limits.phoneNumbers) return res.status(409).json({ error: `Your ${subscriptionAccess.plan.name} plan includes ${subscriptionAccess.plan.limits.phoneNumbers} phone numbers.` });
       }

@@ -11,11 +11,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = await requireSession(req);
     if (session.sub === 'vocivo-owner') return res.status(200).json({ balance: null, can_call: false, currency: 'USD', pending: 0, rates: mobileRates });
     const access = await accessForSession(session);
-    const canCall = access.superadmin || access.features.internalCalling || access.features.outboundCalling;
+    if (access.superadmin === true) return res.status(200).json({ balance: null, can_call: false, currency: 'USD', pending: 0, rates: mobileRates });
+    const canCall = access.features.internalCalling || access.features.outboundCalling;
     return res.status(200).json({
       balance: null,
       can_call: canCall,
-      currency: access.superadmin ? 'USD' : access.subscription.currency,
+      currency: access.subscription.currency,
       pending: 0,
       rates: mobileRates,
     });
