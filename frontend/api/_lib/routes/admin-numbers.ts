@@ -19,7 +19,7 @@ type AvailableNumber = {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
-  if (!['GET', 'POST', 'PATCH'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH']);
+  if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
     await requireOwner(req);
     if (req.method === 'GET' && req.query.mode === 'search') {
@@ -76,6 +76,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       const payload = await response.json() as { data?: Record<string, unknown> };
       return res.status(201).json({ order: payload.data });
+    }
+    if (req.method === 'DELETE') {
+      if (req.body?.confirmRelease !== true) return res.status(400).json({ error: 'Explicit number release confirmation is required.' });
+      const id = text(req.body?.id, 80);
+      const phoneNumber = text(req.body?.phoneNumber, 24);
+      if (!id || !/^\+[1-9]\d{6,14}$/.test(phoneNumber)) return res.status(400).json({ error: 'Phone number ID and E.164 number are required.' });
+      const currentResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
+      const currentPayload = await currentResponse.json() as { data?: { phone_number?: string; deletion_lock_enabled?: boolean } };
+      if (currentPayload.data?.phone_number !== phoneNumber) return res.status(409).json({ error: 'The number no longer matches this inventory record. Refresh and try again.' });
+      if (currentPayload.data?.deletion_lock_enabled) return res.status(409).json({ error: 'Telnyx deletion lock is enabled for this number. Disable the lock before releasing it.' });
+      const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const payload = await response.json() as { data?: Record<string, unknown> };
+      return res.status(200).json({ number: payload.data, released: true });
     }
     const id = text(req.body?.id, 80);
     if (!id) return res.status(400).json({ error: 'Phone number ID is required.' });

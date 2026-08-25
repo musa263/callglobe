@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
+import { useAudioPlayer } from 'expo-audio';
 import {
   createTelnyxVoipClient,
   createCredentialConfig,
@@ -46,7 +47,7 @@ const VoiceContext = createContext<VoiceContextValue | null>(null);
 
 async function waitForVoipToken(): Promise<string | undefined> {
   if (Platform.OS !== 'ios') return undefined;
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     const token = (await VoicePnBridge.getVoipToken())?.trim();
     if (token) return token;
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -89,6 +90,24 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const durationRef = useRef(0);
   const loggedCalls = useRef(new Set<string>());
   const callSubscriptions = useRef<Array<{ unsubscribe: () => void }>>([]);
+  const routePollGenerationRef = useRef(0);
+  const ringbackPlayer = useAudioPlayer(require('../../assets/ringback.wav'));
+
+  useEffect(() => {
+    ringbackPlayer.loop = true;
+    ringbackPlayer.volume = 0.42;
+    return () => ringbackPlayer.pause();
+  }, [ringbackPlayer]);
+
+  const startRingback = useCallback(() => {
+    ringbackPlayer.seekTo(0).catch(() => undefined);
+    ringbackPlayer.play();
+  }, [ringbackPlayer]);
+
+  const stopRingback = useCallback(() => {
+    ringbackPlayer.pause();
+    ringbackPlayer.seekTo(0).catch(() => undefined);
+  }, [ringbackPlayer]);
 
   const clearCallSubscriptions = useCallback(() => {
     callSubscriptions.current.forEach((subscription) => subscription.unsubscribe());
@@ -107,7 +126,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       destinationCountry: meta.destinationCountry,
       countryCode: meta.countryCode,
       ratePerMinute: meta.ratePerMinute,
-      phase: toPhase(call.currentState),
+      phase: meta.routeId && !meta.connectedAt ? 'ringing' : toPhase(call.currentState),
       startedAt: meta.startedAt || Date.now(),
       connectedAt: meta.connectedAt,
       muted: call.currentIsMuted,
@@ -161,13 +180,16 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
     callSubscriptions.current = [
       call.callState$.subscribe((state) => {
-        const phase = toPhase(state);
+        const pendingRoute = callRouteIdsRef.current.has(call.callId) && !callMetaRef.current.get(call.callId)?.connectedAt;
+        const phase = pendingRoute && [TelnyxCallState.CONNECTING, TelnyxCallState.RINGING, TelnyxCallState.ACTIVE].includes(state) ? 'ringing' : toPhase(state);
         setActiveCall((current) => {
           const next = current ? { ...current, phase, connectedAt: phase === 'active' ? (current.connectedAt ?? Date.now()) : current.connectedAt } : current;
           activeCallRef.current = next;
           return next;
         });
         if (phase === 'ended' || phase === 'failed') {
+          routePollGenerationRef.current += 1;
+          stopRingback();
           finalizeCall(phase, call.callId);
           callRouteIdsRef.current.delete(call.callId);
           callMetaRef.current.delete(call.callId);
@@ -185,9 +207,13 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }),
       call.isMuted$.subscribe((muted) => setActiveCall((current) => current ? { ...current, muted } : current)),
       call.isHeld$.subscribe((onHold) => setActiveCall((current) => current ? { ...current, onHold } : current)),
-      call.duration$.subscribe((seconds) => { durationRef.current = seconds; setDuration(seconds); }),
+      call.duration$.subscribe((seconds) => {
+        if (callRouteIdsRef.current.has(call.callId)) return;
+        durationRef.current = seconds;
+        setDuration(seconds);
+      }),
     ];
-  }, [clearCallSubscriptions, describeCall, finalizeCall]);
+  }, [clearCallSubscriptions, describeCall, finalizeCall, stopRingback]);
 
   useEffect(() => {
     const connectionSubscription = voipClient.connectionState$.subscribe(setConnection);
@@ -210,6 +236,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }
     });
     const callSubscription = voipClient.activeCall$.subscribe(attachCall);
+    if (voipClient.currentActiveCall) attachCall(voipClient.currentActiveCall);
     return () => {
       connectionSubscription.unsubscribe();
       callsSubscription.unsubscribe();
@@ -246,6 +273,43 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     return () => { canceled = true; };
   }, [isAuthenticated, isPreview]);
 
+  const followRoute = useCallback(async (routeId: string, callId: string) => {
+    const generation = ++routePollGenerationRef.current;
+    for (let attempt = 0; attempt < 100 && routePollGenerationRef.current === generation; attempt += 1) {
+      try {
+        const result = await api.get<{ phase: 'dialing' | 'ringing' | 'connected' | 'ended' | 'failed'; connectedAt?: string; failureCause?: string }>(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
+        if (routePollGenerationRef.current !== generation) return;
+        if (result.phase === 'connected') {
+          const connectedAt = result.connectedAt ? new Date(result.connectedAt).getTime() : Date.now();
+          const meta = callMetaRef.current.get(callId) ?? {};
+          callMetaRef.current.set(callId, { ...meta, connectedAt });
+          durationRef.current = 0;
+          setDuration(0);
+          setActiveCall((current) => {
+            if (current?.id !== callId) return current;
+            const next = { ...current, phase: 'active' as const, connectedAt };
+            activeCallRef.current = next;
+            return next;
+          });
+          stopRingback();
+          return;
+        }
+        if (result.phase === 'failed' || result.phase === 'ended') {
+          stopRingback();
+          if (result.failureCause) setError(`Call ended: ${result.failureCause.replaceAll('_', ' ')}.`);
+          return;
+        }
+      } catch (routeError) {
+        if (attempt > 8) {
+          stopRingback();
+          setError(routeError instanceof Error ? routeError.message : 'Call status could not be confirmed.');
+          return;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }, [stopRingback]);
+
   const startCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string) => {
     setError(null);
     if (isPreview) {
@@ -258,16 +322,24 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     const routeId = createRouteId();
-    const call = await voipClient.newCall(number, displayName || 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound', routeId));
+    startRingback();
+    let call: Call;
+    try {
+      call = await voipClient.newCall(number, displayName || 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound', routeId));
+    } catch (startError) {
+      stopRingback();
+      throw startError;
+    }
     callRouteIdsRef.current.set(call.callId, routeId);
-    callMetaRef.current.set(call.callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now() });
+    callMetaRef.current.set(call.callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now(), routeId });
     attachCall(call);
+    followRoute(routeId, call.callId);
     setActiveCall((current) => {
       const next = current ? { ...current, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined } : current;
       activeCallRef.current = next;
       return next;
     });
-  }, [attachCall, connection, isPreview]);
+  }, [attachCall, connection, followRoute, isPreview, startRingback, stopRingback]);
 
   const startSecondCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => {
     if (isPreview) throw new Error('Add call requires a live calling connection.');
@@ -280,12 +352,15 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     try {
       await current.hold();
       const routeId = createRouteId();
+      startRingback();
       const call = await voipClient.newCall(number, 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound', routeId));
       callRouteIdsRef.current.set(call.callId, routeId);
-      callMetaRef.current.set(call.callId, { displayName: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now() });
+      callMetaRef.current.set(call.callId, { displayName: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now(), routeId });
       voipClient.setActiveCall(call.callId);
       attachCall(call);
+      followRoute(routeId, call.callId);
     } catch (secondCallError) {
+      stopRingback();
       await current.resume().catch(() => undefined);
       voipClient.setActiveCall(current.callId);
       attachCall(current);
@@ -293,7 +368,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     } finally {
       multiCallBusyRef.current = false;
     }
-  }, [attachCall, connection, isPreview]);
+  }, [attachCall, connection, followRoute, isPreview, startRingback, stopRingback]);
 
   const startInternalCall = useCallback(async (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => {
     setError(null);
@@ -307,11 +382,19 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     const destination = `sip:${sipUsername}@sip.telnyx.com`;
     const routeId = createRouteId();
-    const call = await voipClient.newCall(destination, displayName, undefined, outboundHeaders(destination, undefined, 'internal', routeId));
+    startRingback();
+    let call: Call;
+    try {
+      call = await voipClient.newCall(destination, displayName, undefined, outboundHeaders(destination, undefined, 'internal', routeId));
+    } catch (startError) {
+      stopRingback();
+      throw startError;
+    }
     callRouteIdsRef.current.set(call.callId, routeId);
-    callMetaRef.current.set(call.callId, { displayName, destinationCountry: 'Internal', photoUrl, startedAt: Date.now() });
+    callMetaRef.current.set(call.callId, { displayName, destinationCountry: 'Internal', photoUrl, startedAt: Date.now(), routeId });
     attachCall(call);
-  }, [attachCall, connection, isPreview]);
+    followRoute(routeId, call.callId);
+  }, [attachCall, connection, followRoute, isPreview, startRingback, stopRingback]);
 
   const transferCall = useCallback(async (targetExtensionId: string) => {
     if (isPreview) throw new Error('Transfer requires a live routed business call.');
@@ -372,12 +455,20 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, [describeCall, heldCall?.id, isPreview]);
 
   useEffect(() => {
-    if (!isPreview || activeCall?.phase !== 'active') return;
-    const timer = setInterval(() => setDuration((value) => value + 1), 1000);
+    if (activeCall?.phase !== 'active' || !activeCall.connectedAt) return;
+    const update = () => {
+      const seconds = Math.max(0, Math.floor((Date.now() - activeCall.connectedAt!) / 1000));
+      durationRef.current = seconds;
+      setDuration(seconds);
+    };
+    update();
+    const timer = setInterval(update, 1000);
     return () => clearInterval(timer);
-  }, [activeCall?.phase, isPreview]);
+  }, [activeCall?.connectedAt, activeCall?.phase]);
 
   const endCall = useCallback(async () => {
+    routePollGenerationRef.current += 1;
+    stopRingback();
     if (conferenceCallIdsRef.current.length) {
       const mergedIds = [...conferenceCallIdsRef.current];
       const mergedCalls = mergedIds.map((id) => voipClient.getCall(id)).filter((call): call is Call => Boolean(call));
@@ -403,7 +494,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
     setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
     setTimeout(() => setActiveCall(null), 650);
-  }, [activeCall?.id, attachCall, finalizeCall]);
+  }, [activeCall?.id, attachCall, finalizeCall, stopRingback]);
 
   const answerCall = useCallback(async () => { if (callRef.current) await callRef.current.answer(); }, []);
   const toggleMute = useCallback(async () => {

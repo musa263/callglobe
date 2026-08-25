@@ -102,6 +102,7 @@ export type ActiveCall = {
   onHold: boolean;
   isIncoming?: boolean;
   photoUrl?: string;
+  routeId?: string;
 };
 
 export type MergedConference = {

@@ -23,3 +23,13 @@ export async function api(path, options = {}) {
   if (!response.ok) throw new Error(payload.error || 'The request could not be completed.');
   return payload;
 }
+
+export async function apiAudio(path) {
+  const session = getStoredSession();
+  const response = await fetch(path, { headers: session?.token ? { Authorization: `Bearer ${session.token}` } : {} });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || 'The voice preview could not be generated.');
+  }
+  return URL.createObjectURL(await response.blob());
+}

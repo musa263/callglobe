@@ -8,6 +8,9 @@ export type OutboundCallPair = {
   routeId?: string;
   destination: string;
   status: 'direct' | 'merging' | 'conference';
+  phase?: 'dialing' | 'ringing' | 'connected' | 'ended' | 'failed';
+  failureCause?: string;
+  connectedAt?: string;
   conferenceId?: string;
   conferenceRole?: 'host' | 'released';
   peerClientCallControlId?: string;

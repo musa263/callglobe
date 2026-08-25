@@ -130,6 +130,7 @@ function ActiveCall({ voice, number, elapsed }) {
 }
 
 function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall }) {
+  const [dialMode, setDialMode] = useState('external');
   const [number, setNumber] = useState('');
   const [country, setCountry] = useState(rates[0]);
   const [countryOpen, setCountryOpen] = useState(false);
@@ -150,6 +151,16 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
   async function call() {
     if (!number) return;
     if (preview) return onPreviewCall();
+    if (dialMode === 'extension') {
+      setCallError('');
+      try {
+        const result = await api(`/api/voice/directory?extension=${encodeURIComponent(number)}`);
+        const colleague = result.users?.[0];
+        if (!colleague?.sipUsername) throw new Error(`Extension ${number} is not available in your organization.`);
+        await voice.startInternalCall(colleague.sipUsername, colleague.extension, colleague.name);
+      } catch (extensionError) { setCallError(extensionError.message || 'The extension call could not be started.'); }
+      return;
+    }
     if (routeRisk) {
       setCallError(`Local carriers may not ring when ${selectedNumber.phone_number} is used for this same-country call. Switch to your Vocivo number.`);
       return;
@@ -162,20 +173,20 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
       <header className="workspace-header"><div><p className="eyebrow">WEB PHONE</p><h1>Make a call</h1></div><div className={`status-badge ${voice.ready ? 'online' : ''}`}>{voice.ready ? <Wifi size={15} /> : <WifiOff size={15} />}{preview ? 'Preview mode' : voice.ready ? 'Ready for calls' : voice.statusLabel}</div></header>
       <div className="dialer-layout">
         <div className="dialer-panel">
-          <CallerIdMenu numbers={numbers} selected={selectedNumber} onSelect={(value) => { setSelectedNumber(value); setCallerOpen(false); }} open={callerOpen} onToggle={() => setCallerOpen((value) => !value)} />
+          <div className="dial-mode" role="group" aria-label="Call type"><button className={dialMode === 'external' ? 'active' : ''} onClick={() => { setDialMode('external'); setNumber(''); setCallError(''); }}><Globe2 size={16} /> External</button><button className={dialMode === 'extension' ? 'active' : ''} onClick={() => { setDialMode('extension'); setNumber(''); setCallError(''); }}><ContactRound size={16} /> Extension</button></div>
+          {dialMode === 'external' && <CallerIdMenu numbers={numbers} selected={selectedNumber} onSelect={(value) => { setSelectedNumber(value); setCallerOpen(false); }} open={callerOpen} onToggle={() => setCallerOpen((value) => !value)} />}
           <div className="destination-field">
-            <button className="country-trigger" onClick={() => setCountryOpen((value) => !value)} aria-label="Choose destination country"><span>{country?.country_code || '--'}</span><ChevronDown size={15} /></button>
-            <input value={number} onChange={(event) => setNumber(event.target.value.replace(/[^+\d*#]/g, ''))} placeholder="Enter phone number" inputMode="tel" aria-label="Phone number" />
+            {dialMode === 'external' ? <button className="country-trigger" onClick={() => setCountryOpen((value) => !value)} aria-label="Choose destination country"><span>{country?.country_code || '--'}</span><ChevronDown size={15} /></button> : <span className="extension-prefix">EXT</span>}
+            <input value={number} onChange={(event) => setNumber(event.target.value.replace(dialMode === 'extension' ? /\D/g : /[^+\d*#]/g, '').slice(0, dialMode === 'extension' ? 5 : 22))} placeholder={dialMode === 'extension' ? 'Enter company extension' : 'Enter phone number'} inputMode="tel" aria-label={dialMode === 'extension' ? 'Company extension' : 'Phone number'} />
             <button className="erase-button" onClick={() => setNumber((value) => value.slice(0, -1))} disabled={!number} title="Delete digit"><Delete size={19} /></button>
-            {countryOpen && <div className="country-menu"><div className="country-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search country" autoFocus /></div><div className="country-list">{filteredRates.map((rate) => (
+            {dialMode === 'external' && countryOpen && <div className="country-menu"><div className="country-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search country" autoFocus /></div><div className="country-list">{filteredRates.map((rate) => (
               <button key={rate.id} onClick={() => { setCountry(rate); setCountryOpen(false); setSearch(''); }}><span className="country-code">{rate.country_code}</span><span><strong>{rate.country_name}</strong><small>{rate.dial_code}</small></span><em>{rate.rate_per_min ? `$${rate.rate_per_min.toFixed(3)}/min` : 'Available'}</em></button>
             ))}</div></div>}
           </div>
-          <div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See Telnyx rate'}</strong></span></div>
-          {routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}
+          {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See Telnyx rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
           <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key, letters)}><strong>{key}</strong><small>{letters}</small></button>)}</div>
           {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
-          <button className="call-button" onClick={call} disabled={!number || (!preview && !voice.ready)}><Phone size={22} /> {voice.ready || preview ? 'Call now' : 'Connecting phone...'}</button>
+          <button className="call-button" onClick={call} disabled={!number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (!preview && !voice.ready)}><Phone size={22} /> {voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'}</button>
         </div>
         <aside className="call-guide">
           <div className="balance-block"><span className="balance-icon"><CircleDollarSign size={19} /></span><div><small>AVAILABLE CREDIT</small><strong>${balance.toFixed(2)}</strong></div><span>USD</span></div>
@@ -285,11 +296,11 @@ export default function App() {
     return () => { active = false; };
   }, [session]);
   useEffect(() => {
-    if (!voice.active) { setElapsed(0); return undefined; }
+    if (!voice.connected) { setElapsed(0); return undefined; }
     const started = Date.now();
     const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
     return () => window.clearInterval(timer);
-  }, [voice.active]);
+  }, [voice.connected]);
   useEffect(() => {
     if (!voice.endedCall) return;
     setHistory((current) => { const next = [{ id: `${Date.now()}`, number: voice.endedCall.number, direction: voice.endedCall.direction, duration: elapsed, date: new Date().toISOString() }, ...current].slice(0, 40); localStorage.setItem('vocivo.history', JSON.stringify(next)); return next; });

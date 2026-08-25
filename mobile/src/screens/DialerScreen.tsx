@@ -28,14 +28,15 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const [selectedCaller, setSelectedCaller] = useState(() => callerNumbers[0] ?? null);
   const [callError, setCallError] = useState('');
   const [contactName, setContactName] = useState<string | undefined>();
+  const [dialMode, setDialMode] = useState<'external' | 'extension'>('external');
   const balance = Number(profile?.balance ?? 0);
   const minutes = selected.rate_per_min ? Math.floor(balance / selected.rate_per_min) : null;
   const fullNumber = `${selected.dial_code}${number}`;
-  const internalCandidate = Boolean(profile?.extension && /^\d{2,5}$/.test(number));
+  const internalCandidate = dialMode === 'extension';
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
   const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
-  const canCall = internalCandidate ? number !== profile?.extension : number.length >= 4 && balance > 0;
+  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : number.length >= 4 && balance > 0;
   const displayNumber = useMemo(() => number.replace(/(.{3})/g, '$1 ').trim(), [number]);
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
 
   useEffect(() => {
     if (!target) return;
+    setDialMode('external');
     setContactName(target.name);
     const normalized = target.number.replace(/[^0-9+]/g, '');
     const match = [...rates].sort((a, b) => b.dial_code.length - a.dial_code.length).find((rate) => normalized.startsWith(rate.dial_code));
@@ -86,12 +88,12 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         <Pressable onPress={onWallet} style={styles.balancePill}><View style={styles.liveDot} /><Text style={styles.balance}>${balance.toFixed(2)}</Text><Plus size={15} color={colors.mint} strokeWidth={3} /></Pressable>
       </View>
 
-      <View style={styles.mode}><View style={[styles.modeButton, styles.modeActive]}><Text style={styles.modeActiveText}>Direct call</Text></View><Pressable onPress={onConference} style={styles.modeButton}><Text style={styles.modeText}>Conference</Text></Pressable></View>
+      <View style={styles.mode}><Pressable onPress={() => { setDialMode('external'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'external' && styles.modeActive]}><Text style={dialMode === 'external' ? styles.modeActiveText : styles.modeText}>External</Text></Pressable><Pressable onPress={() => { setDialMode('extension'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'extension' && styles.modeActive]}><Text style={dialMode === 'extension' ? styles.modeActiveText : styles.modeText}>Extension</Text></Pressable><Pressable onPress={onConference} style={styles.modeButton}><Text style={styles.modeText}>Conference</Text></Pressable></View>
 
       <View style={styles.destinationBlock}>
         <Text style={styles.eyebrow}>CALLING</Text>
         <Pressable disabled={internalCandidate} onPress={() => setShowRates(true)} style={styles.countryButton}>
-          <Text style={styles.flag}>{internalCandidate ? 'EXT' : flagFromCode(selected.country_code)}</Text>
+          <Text style={styles.flag}>{internalCandidate ? '#' : flagFromCode(selected.country_code)}</Text>
           <Text style={styles.country}>{internalCandidate ? 'Company extension' : selected.country_name}</Text>
           {!internalCandidate && <ChevronDown size={18} color={colors.textMuted} />}
         </Pressable>
@@ -100,14 +102,14 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
       <View style={styles.callerRow}>
         <Text style={styles.callerLabel}>{internalCandidate ? 'INTERNAL CALL FROM' : 'CALLING FROM'}</Text>
         <Pressable disabled={internalCandidate || !callerNumbers.length} onPress={() => setShowCallerIds(true)} style={styles.callerButton}>
-          <Text style={[styles.callerNumber, !selectedCaller && !internalCandidate && styles.callerUnavailable]}>{internalCandidate ? `Extension ${profile?.extension}` : selectedCaller?.phone_number ?? 'Network default'}</Text>
+          <Text style={[styles.callerNumber, !selectedCaller && !internalCandidate && styles.callerUnavailable]}>{internalCandidate ? (profile?.extension ? `Extension ${profile.extension}` : 'No extension assigned') : selectedCaller?.phone_number ?? 'Network default'}</Text>
           {!internalCandidate && !!callerNumbers.length && <ChevronDown size={15} color={colors.textMuted} />}
         </Pressable>
       </View>
 
-      <View accessibilityLabel={`${internalCandidate ? 'Extension' : selected.dial_code} ${number || 'Phone number or extension'}`} style={styles.numberRow}>
-        <Text style={styles.dialCode}>{internalCandidate ? 'EXT' : selected.dial_code}</Text>
-        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[styles.numberInput, !number && styles.numberPlaceholder]}>{displayNumber || 'Phone number or extension'}</Text>
+      <View accessibilityLabel={`${internalCandidate ? 'Extension' : selected.dial_code} ${number || (internalCandidate ? 'Company extension' : 'Phone number')}`} style={styles.numberRow}>
+        {!internalCandidate && <Text style={styles.dialCode}>{selected.dial_code}</Text>}
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[styles.numberInput, !number && styles.numberPlaceholder]}>{displayNumber || (internalCandidate ? 'Company extension' : 'Phone number')}</Text>
         <Pressable accessibilityLabel="Delete last digit" onPress={() => { setContactName(undefined); setNumber((value) => value.slice(0, -1)); }} onLongPress={() => { setContactName(undefined); setNumber(''); }} style={styles.delete}>
           <Delete size={22} color={number ? colors.textMuted : colors.textFaint} />
         </Pressable>

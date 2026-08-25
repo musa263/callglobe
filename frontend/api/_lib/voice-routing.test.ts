@@ -6,8 +6,6 @@ import { isInboundCallAnswered, isInboundCallInitiated } from './voice-routing.j
 const base = {
   connectionId: 'voice-app',
   callControlApplicationId: 'voice-app',
-  to: '+18447161777',
-  inboundNumber: '+18447161777',
   hasManagedState: false,
 };
 
@@ -28,8 +26,8 @@ test('rejects a stateless outbound destination paired by the server', () => {
   assert.equal(isInboundCallAnswered({ ...base, hasOutboundPair: true }), false);
 });
 
-test('rejects calls that do not target the configured inbound number', () => {
-  assert.equal(isInboundCallAnswered({ ...base, to: '+2347000000000', hasOutboundPair: false }), false);
+test('accepts every DID assigned to the inbound Call Control application', () => {
+  assert.equal(isInboundCallAnswered({ ...base, hasOutboundPair: false }), true);
 });
 
 test('accepts app-generated multi-call route identifiers only', () => {

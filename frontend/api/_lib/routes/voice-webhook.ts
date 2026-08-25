@@ -93,8 +93,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const routeInput = {
       connectionId: payload?.connection_id,
       callControlApplicationId: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
-      to: payload?.to,
-      inboundNumber: requiredEnv('TELNYX_SMS_FROM'),
       hasManagedState: Boolean(state),
     };
     const outboundPair = eventType === 'call.answered' ? await readOutboundCallPairByDestination(callControlId) : null;
@@ -129,14 +127,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         routeId,
         destination,
         status: 'direct',
+        phase: 'ringing',
         updatedAt: new Date().toISOString(),
       });
-      const appUrl = requiredEnv('VITE_APP_URL').replace(/\/+$/, '');
-      await callAction(callControlId, 'playback_start', {
-        audio_url: `${appUrl}/audio/ringback.wav`,
-        loop: 'infinity',
-        command_id: `${eventId}-ringback`,
-      }).catch((error) => console.warn('Vocivo could not start ringback audio', publicError(error)));
       return res.status(200).json({ received: true });
     }
 
@@ -148,6 +141,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           command_id: `${eventId}-stop-ringback`,
         }).catch(() => undefined);
         await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
+        const pair = outboundPair || await readOutboundCallPairByDestination(callControlId);
+        if (pair) await saveOutboundCallPair({ ...pair, phase: 'connected', connectedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         return res.status(200).json({ received: true });
       }
     }
@@ -155,6 +150,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.hangup' && state?.flow === 'outbound_destination') {
       const pair = await readOutboundCallPairByDestination(callControlId);
       if (pair?.status === 'direct') {
+        await saveOutboundCallPair({ ...pair, phase: payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed', failureCause: payload?.hangup_cause, updatedAt: new Date().toISOString() });
         await callAction(pair.clientCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch(() => undefined);
         await callAction(pair.clientCallControlId, 'hangup', { command_id: `${eventId}-end-client` }).catch(() => undefined);
         await clearOutboundCallPair(pair).catch(() => undefined);

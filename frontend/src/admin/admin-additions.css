@@ -1,0 +1,33 @@
+.voice-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 7px;
+}
+
+.voice-select .secondary {
+  min-height: 38px;
+}
+
+.voice-select .secondary svg {
+  width: 14px;
+}
+
+.voice-error {
+  border-color: #edbfc3;
+  background: #fff5f5;
+  color: #bb3b45;
+}
+
+.number-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .voice-select {
+    grid-template-columns: minmax(0, 1fr) 84px;
+  }
+}

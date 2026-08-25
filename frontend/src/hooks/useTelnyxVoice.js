@@ -8,6 +8,9 @@ export function useTelnyxVoice(token, enabled) {
   const clientRef = useRef(null);
   const callRef = useRef(null);
   const endedIdRef = useRef(null);
+  const routeIdRef = useRef(null);
+  const routePollRef = useRef(0);
+  const ringbackRef = useRef(null);
   const [ready, setReady] = useState(false);
   const [statusLabel, setStatusLabel] = useState('Connecting...');
   const [error, setError] = useState('');
@@ -17,17 +20,40 @@ export function useTelnyxVoice(token, enabled) {
   const [muted, setMuted] = useState(false);
   const [dialedNumber, setDialedNumber] = useState('');
   const [endedCall, setEndedCall] = useState(null);
+  const [routePhase, setRoutePhase] = useState(null);
+
+  const stopRingback = useCallback(() => {
+    const audio = ringbackRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+  }, []);
+
+  const startRingback = useCallback(() => {
+    if (!ringbackRef.current) {
+      const audio = new Audio('/audio/ringback.wav');
+      audio.loop = true;
+      audio.volume = 0.42;
+      ringbackRef.current = audio;
+    }
+    ringbackRef.current.currentTime = 0;
+    ringbackRef.current.play().catch(() => undefined);
+  }, []);
 
   const disconnect = useCallback(() => {
     try { callRef.current?.hangup?.(); } catch { /* already closed */ }
     try { clientRef.current?.disconnect?.(); } catch { /* already disconnected */ }
     clientRef.current = null;
     callRef.current = null;
+    routeIdRef.current = null;
+    routePollRef.current += 1;
+    stopRingback();
     setReady(false);
     setCall(null);
     setIncomingCall(null);
     setState(null);
-  }, []);
+    setRoutePhase(null);
+  }, [stopRingback]);
 
   useEffect(() => {
     if (!enabled || !token) return undefined;
@@ -65,6 +91,10 @@ export function useTelnyxVoice(token, enabled) {
         if (direction === 'inbound' && ['new', 'ringing', 'early', 'requesting'].includes(nextState)) setIncomingCall(updatedCall);
         if (['active', 'held'].includes(nextState)) setIncomingCall(null);
         if (TERMINAL_STATES.has(nextState)) {
+          routePollRef.current += 1;
+          routeIdRef.current = null;
+          setRoutePhase(null);
+          stopRingback();
           const callId = updatedCall.id || updatedCall.callId || `${Date.now()}`;
           if (endedIdRef.current !== callId) {
             endedIdRef.current = callId;
@@ -87,11 +117,44 @@ export function useTelnyxVoice(token, enabled) {
       setStatusLabel('Unable to connect');
     });
     return () => { cancelled = true; disconnect(); };
-  }, [disconnect, enabled, token]);
+  }, [disconnect, enabled, stopRingback, token]);
+
+  const followRoute = useCallback(async (routeId) => {
+    const generation = ++routePollRef.current;
+    routeIdRef.current = routeId;
+    setRoutePhase('ringing');
+    for (let attempt = 0; attempt < 100 && routePollRef.current === generation; attempt += 1) {
+      try {
+        const result = await api(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
+        if (routePollRef.current !== generation) return;
+        if (result.phase === 'connected') {
+          setRoutePhase('connected');
+          stopRingback();
+          document.getElementById('remoteMedia')?.play?.().catch?.(() => undefined);
+          return;
+        }
+        if (['failed', 'ended'].includes(result.phase)) {
+          setRoutePhase(result.phase);
+          stopRingback();
+          if (result.failureCause) setError(`Call ended: ${String(result.failureCause).replaceAll('_', ' ')}.`);
+          return;
+        }
+      } catch (routeError) {
+        if (attempt > 8) {
+          setError(routeError.message || 'Call status could not be confirmed.');
+          stopRingback();
+          return;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }, [stopRingback]);
 
   const startCall = useCallback(async (destinationNumber, callerNumber) => {
     setError('');
     setDialedNumber(destinationNumber);
+    const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
+    startRingback();
     try {
       const newCall = clientRef.current?.newCall({
         destinationNumber,
@@ -100,6 +163,7 @@ export function useTelnyxVoice(token, enabled) {
         customHeaders: [
           { name: 'X-Vocivo-Flow', value: 'outbound' },
           { name: 'X-Vocivo-Destination', value: destinationNumber },
+          { name: 'X-Vocivo-Route-ID', value: routeId },
           ...(callerNumber ? [{ name: 'X-Vocivo-Caller-ID', value: callerNumber }] : []),
         ],
         remoteElement: 'remoteMedia',
@@ -110,10 +174,41 @@ export function useTelnyxVoice(token, enabled) {
       callRef.current = newCall;
       setCall(newCall);
       setState(String(newCall.state || 'requesting').toLowerCase());
+      followRoute(routeId);
     } catch (callError) {
+      stopRingback();
       setError(callError.message || 'The call could not be started. Check microphone permission.');
     }
-  }, []);
+  }, [followRoute, startRingback, stopRingback]);
+
+  const startInternalCall = useCallback(async (sipUsername, extension, displayName) => {
+    const destination = `sip:${sipUsername}@sip.telnyx.com`;
+    setDialedNumber(extension);
+    const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
+    startRingback();
+    try {
+      const newCall = clientRef.current?.newCall({
+        destinationNumber: destination,
+        callerName: displayName || 'Vocivo extension',
+        customHeaders: [
+          { name: 'X-Vocivo-Flow', value: 'internal' },
+          { name: 'X-Vocivo-Destination', value: destination },
+          { name: 'X-Vocivo-Route-ID', value: routeId },
+        ],
+        remoteElement: 'remoteMedia',
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        trickleIce: true,
+      });
+      if (!newCall) throw new Error('The web phone is not ready yet.');
+      callRef.current = newCall;
+      setCall(newCall);
+      setState(String(newCall.state || 'requesting').toLowerCase());
+      followRoute(routeId);
+    } catch (callError) {
+      stopRingback();
+      setError(callError.message || 'The extension call could not be started.');
+    }
+  }, [followRoute, startRingback, stopRingback]);
 
   const answer = useCallback(async () => {
     try {
@@ -122,7 +217,7 @@ export function useTelnyxVoice(token, enabled) {
     } catch (answerError) { setError(answerError.message || 'The call could not be answered.'); }
   }, []);
   const decline = useCallback(() => { callRef.current?.hangup?.(); setIncomingCall(null); }, []);
-  const hangup = useCallback(() => callRef.current?.hangup?.(), []);
+  const hangup = useCallback(() => { routePollRef.current += 1; stopRingback(); callRef.current?.hangup?.(); }, [stopRingback]);
   const toggleMute = useCallback(() => {
     if (!callRef.current) return;
     if (muted) callRef.current.unmuteAudio?.(); else callRef.current.muteAudio?.();
@@ -134,8 +229,9 @@ export function useTelnyxVoice(token, enabled) {
   }, [state]);
 
   return {
-    ready, statusLabel, error, call, incomingCall, state, muted, dialedNumber, endedCall,
+    ready, statusLabel, error, call, incomingCall, state: routePhase === 'connected' ? 'active' : routePhase || state, muted, dialedNumber, endedCall,
+    connected: routePhase ? routePhase === 'connected' : state === 'active',
     active: ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state) && !incomingCall,
-    startCall, answer, decline, hangup, toggleMute, toggleHold, disconnect,
+    startCall, startInternalCall, answer, decline, hangup, toggleMute, toggleHold, disconnect,
   };
 }
