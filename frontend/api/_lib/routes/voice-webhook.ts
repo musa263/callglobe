@@ -131,7 +131,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }).catch(() => undefined);
         await callAction(parentCallControlId, 'bridge', {
           call_control_id: callControlId,
-          park_after_unbridge: 'self',
           command_id: `${eventId}-bridge`,
         });
         return res.status(200).json({ received: true });
@@ -148,7 +147,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ received: true });
     }
 
-    if (eventType === 'call.hangup' && isParkedVocivoClient) {
+    if (eventType === 'call.hangup' && payload?.connection_id === requiredEnv('TELNYX_CONNECTION_ID')) {
       const pair = await readOutboundCallPairByClient(callControlId);
       if (!pair) return res.status(200).json({ received: true });
       if (pair.status === 'direct') {
