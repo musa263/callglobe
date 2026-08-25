@@ -1,0 +1,71 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { list, put } from '@vercel/blob';
+import { requiredEnv } from './http.js';
+
+export type StoredUserProfile = {
+  id: string;
+  fullName: string;
+  email: string;
+  jobTitle: string;
+  department: string;
+  mobile: string;
+  location: string;
+  bio: string;
+  photoUrl?: string;
+  updatedAt: string;
+};
+
+function key() {
+  return createHash('sha256').update(requiredEnv('AUTH_SECRET')).digest();
+}
+
+function userKey(id: string) {
+  return createHash('sha256').update(id).digest('hex').slice(0, 24);
+}
+
+function encrypt(value: StoredUserProfile) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
+}
+
+function decrypt(value: Buffer): StoredUserProfile {
+  const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12));
+  decipher.setAuthTag(value.subarray(12, 28));
+  return JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as StoredUserProfile;
+}
+
+export async function readUserProfile(id: string) {
+  const result = await list({ prefix: `vocivo/profiles/${userKey(id)}/`, limit: 100 });
+  const latest = result.blobs.sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())[0];
+  if (!latest) return null;
+  try {
+    const response = await fetch(latest.url);
+    return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveUserProfile(profile: StoredUserProfile) {
+  await put(`vocivo/profiles/${userKey(profile.id)}/${Date.now()}.bin`, encrypt(profile), {
+    access: 'public',
+    contentType: 'application/octet-stream',
+    addRandomSuffix: true,
+  });
+  return profile;
+}
+
+export async function saveProfilePhoto(id: string, input: { base64: string; mimeType: string }) {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(input.mimeType)) throw new Error('Choose a JPEG, PNG, or WebP profile photo.');
+  const image = Buffer.from(input.base64, 'base64');
+  if (!image.length || image.length > 2_500_000) throw new Error('Profile photos must be smaller than 2.5 MB.');
+  const extension = input.mimeType === 'image/png' ? 'png' : input.mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const blob = await put(`vocivo/profile-photos/${userKey(id)}-${Date.now()}.${extension}`, image, {
+    access: 'public',
+    contentType: input.mimeType,
+    addRandomSuffix: true,
+  });
+  return blob.url;
+}

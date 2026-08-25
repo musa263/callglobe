@@ -1,5 +1,5 @@
 {
-  "name": "callglobe",
+  "name": "vocivo",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -7,20 +7,29 @@
     "dev": "vite",
     "build": "vite build",
     "check": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:api": "tsc --noEmit -p tsconfig.api.json"
   },
   "dependencies": {
-    "@stripe/stripe-js": "^2.4.0",
-    "@supabase/supabase-js": "^2.39.0",
-    "@twilio/voice-sdk": "^2.10.0",
+    "@telnyx/video": "^1.0.2",
+    "@telnyx/webrtc": "^2.27.10",
+    "@vercel/blob": "^2.8.0",
+    "@vercel/node": "^5.5.27",
+    "bcryptjs": "^3.0.2",
+    "jose": "^6.1.2",
+    "libphonenumber-js": "^1.13.11",
+    "lucide-react": "^1.33.0",
+    "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.0",
+    "typescript": "^5.9.3",
     "vite": "^5.0.0",
     "vite-plugin-pwa": "^0.17.0"
   }

@@ -1,0 +1,14 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import login from '../_lib/routes/auth-login.js';
+import password from '../_lib/routes/auth-password.js';
+import session from '../_lib/routes/auth-session.js';
+import enroll from '../_lib/routes/auth-enroll.js';
+import profile from '../_lib/routes/auth-profile.js';
+
+const routes = { login, password, session, enroll, profile } as const;
+
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  const action = Array.isArray(req.query.action) ? req.query.action[0] : req.query.action;
+  const route = action && routes[action as keyof typeof routes];
+  return route ? route(req, res) : res.status(404).json({ error: 'Not found' });
+}

@@ -1,11 +1,11 @@
-# CallGlobe UI/UX Design Specification
+# Vocivo UI/UX Design Specification
 ## Version 1.0 | March 2026
 
 ---
 
 ## 1. Design Philosophy
 
-CallGlobe uses a **dark-mode-first, mobile-native** design language. The aesthetic is premium yet accessible — targeting users who may not be tech-savvy but appreciate a clean, modern interface. Every screen is designed for one-handed use on mobile.
+Vocivo uses a **dark-mode-first, mobile-native** design language. The aesthetic is premium yet accessible — targeting users who may not be tech-savvy but appreciate a clean, modern interface. Every screen is designed for one-handed use on mobile.
 
 **Design Principles:**
 - Dark background reduces eye strain during evening calls (when most diaspora calls happen)

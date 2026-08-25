@@ -11,11 +11,11 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     rollupOptions: {
+      input: { main: 'index.html', video: 'video.html', enroll: 'enroll.html' },
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
-          if (id.includes('@twilio/voice-sdk')) return 'twilio';
-          if (id.includes('@supabase/supabase-js')) return 'supabase';
+          if (id.includes('@telnyx/webrtc')) return 'telnyx';
           return 'vendor';
         },
       },

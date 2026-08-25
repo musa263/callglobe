@@ -1,4 +1,4 @@
-# CallGlobe — ARCHITECTURE.md
+# Vocivo — ARCHITECTURE.md
 
 ## Global VoIP Calling Application
 
@@ -9,14 +9,14 @@
 ## 1. PROJECT STRUCTURE
 
 ```
-callglobe-complete/
+vocivo-complete/
 │
 ├── ARCHITECTURE.md                          ← This file
 ├── README.md                                ← Project overview & quick start
 │
 ├── docs/                                    ← Documentation
-│   ├── CallGlobe-PRD.docx                  ← Full Product Requirements Document
-│   ├── callglobe-launch-checklist.docx      ← Step-by-step launch checklist
+│   ├── Vocivo-PRD.docx                  ← Full Product Requirements Document
+│   ├── vocivo-launch-checklist.docx      ← Step-by-step launch checklist
 │   └── SETUP_GUIDE.md                       ← Technical setup & deployment guide
 │
 ├── design/                                  ← UI/UX Design
@@ -243,7 +243,7 @@ Used for live balance updates during active calls. Frontend subscribes to `profi
 | **Backend** | Supabase Cloud | Managed PostgreSQL, Auth, Edge Functions, Realtime |
 | **Telephony** | Twilio Cloud | Voice SDK gateway, PSTN routing, caller ID |
 | **Payments** | Stripe | PCI-compliant checkout, webhook events |
-| **Domain** | `callglobe.app` | Primary application domain |
+| **Domain** | `vocivo.app` | Primary application domain |
 | **Native Build** | Capacitor | iOS (Xcode) + Android (Android Studio) app builds |
 
 **CI/CD Pipeline:**
@@ -264,7 +264,7 @@ Supabase CLI → `supabase functions deploy` (Edge Functions)
 | Twilio (minutes) | Variable | Depends on destination and routing |
 | Twilio number / caller ID | Variable | Verified outbound identity requirement |
 | Stripe | 2.9% + $0.30/txn | ~4–5% effective on $10–20 recharges |
-| Domain | $12/year | `callglobe.app` |
+| Domain | $12/year | `vocivo.app` |
 | App Stores | $124/year | Google Play ($25 one-time) + Apple ($99/year) |
 
 ---
@@ -297,7 +297,7 @@ Supabase CLI → `supabase functions deploy` (Edge Functions)
 
 ```bash
 # 1. Clone and install
-cd callglobe-complete/frontend
+cd vocivo-complete/frontend
 cp .env.example .env.local    # Fill in credentials
 npm install
 npm run dev                    # http://localhost:3000
@@ -406,8 +406,8 @@ supabase functions deploy webhook-twilio
 
 | Field | Value |
 |-------|-------|
-| **Project Name** | CallGlobe |
-| **Repository** | `callglobe-complete/` (local) |
+| **Project Name** | Vocivo |
+| **Repository** | `vocivo-complete/` (local) |
 | **Primary Contact** | Mousa |
 | **Document ID** | CG-PRD-2026-001 |
 | **Status** | Final (pre-launch) |
@@ -415,5 +415,5 @@ supabase functions deploy webhook-twilio
 | **Platform** | Mobile PWA + Native (Capacitor) |
 | **Backend** | Supabase + Twilio + Stripe |
 | **Frontend Hosting** | Vercel |
-| **Domain** | callglobe.app |
+| **Domain** | vocivo.app |
 | **Last Updated** | March 2026 |

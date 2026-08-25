@@ -38,7 +38,7 @@ function normalizeName(value: unknown, email: string) {
     return value.trim().slice(0, 120);
   }
 
-  return email.split("@")[0]?.slice(0, 120) || "CallGlobe User";
+  return email.split("@")[0]?.slice(0, 120) || "Vocivo User";
 }
 
 function validateEmail(email: string) {

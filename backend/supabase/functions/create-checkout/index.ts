@@ -98,7 +98,7 @@ serve(async (req) => {
           price_data: {
             currency: "usd",
             product_data: {
-              name: `CallGlobe Recharge — ${pkg.label}`,
+              name: `Vocivo Recharge — ${pkg.label}`,
               description: pkg.bonus_percent > 0
                 ? `$${pkg.amount} + ${pkg.bonus_percent}% bonus = $${pkg.credit} calling credit`
                 : `$${pkg.credit} calling credit`,

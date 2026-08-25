@@ -1,0 +1,41 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { requireOwner } from '../auth.js';
+import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
+import { readBusinessVoiceConfig } from '../number-config.js';
+import { listExtensions } from '../pbx.js';
+import { telnyx } from '../telnyx.js';
+
+async function data(path: string) {
+  const response = await telnyx(path);
+  return (await response.json() as { data?: unknown }).data;
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (allowMobile(req, res)) return;
+  if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
+  try {
+    await requireOwner(req);
+    const [balance, numbers, connection, extensions, business] = await Promise.all([
+      data('/balance') as Promise<{ balance?: string; currency?: string }>,
+      data('/phone_numbers?page[size]=250&filter[status]=active') as Promise<Array<{ id: string; phone_number: string; status?: string }>>,
+      data(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`) as Promise<{ active?: boolean; registration_status?: string; connection_name?: string; ios_push_credential_id?: string | null }>,
+      listExtensions(),
+      readBusinessVoiceConfig(),
+    ]);
+    return res.status(200).json({
+      metrics: {
+        balance: Number(balance?.balance || 0),
+        currency: balance?.currency || 'USD',
+        phoneNumbers: Array.isArray(numbers) ? numbers.length : 0,
+        extensions: extensions.length,
+        activeExtensions: extensions.filter((item) => item.status === 'active').length,
+      },
+      phoneNumbers: Array.isArray(numbers) ? numbers.map(({ id, phone_number, status }) => ({ id, phone_number, status })) : [],
+      connection: { name: connection?.connection_name || 'Vocivo Mobile', active: Boolean(connection?.active), registrationStatus: connection?.registration_status || 'Unknown', pushConfigured: Boolean(connection?.ios_push_credential_id) },
+      business,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    return res.status(500).json({ error: publicError(error) });
+  }
+}

@@ -1,0 +1,64 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { requireOwner } from '../auth.js';
+import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
+import { telnyx } from '../telnyx.js';
+
+type UacConnection = {
+  id: string;
+  connection_name?: string;
+  active?: boolean;
+  fqdn?: string;
+  registration_status?: string;
+  external_uac_settings?: { proxy?: string; username?: string; transport?: string };
+  internal_uac_settings?: { destination_uri?: string };
+};
+
+function safeUac(item: UacConnection) {
+  return { id: item.id, name: item.connection_name || 'SIP trunk', active: Boolean(item.active), fqdn: item.fqdn || '', registrationStatus: item.registration_status || 'Unknown', proxy: item.external_uac_settings?.proxy || '', username: item.external_uac_settings?.username || '', transport: item.external_uac_settings?.transport || 'UDP', destinationUri: item.internal_uac_settings?.destination_uri || '' };
+}
+
+function text(value: unknown, max = 200) {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (allowMobile(req, res)) return;
+  if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
+  try {
+    await requireOwner(req);
+    if (req.method === 'GET') {
+      const [connectionResponse, uacResponse] = await Promise.all([telnyx(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`), telnyx('/uac_connections?page[size]=100')]);
+      const connection = (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {};
+      const uac = (await uacResponse.json() as { data?: UacConnection[] }).data ?? [];
+      return res.status(200).json({
+        vocivoTrunk: { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.user_name, registrationStatus: connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: 'WSS / TLS' },
+        externalTrunks: uac.map(safeUac),
+      });
+    }
+    const id = text(req.body?.id || req.query.id, 80);
+    if (req.method === 'DELETE') {
+      if (!id) return res.status(400).json({ error: 'Trunk ID is required.' });
+      await telnyx(`/uac_connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      return res.status(200).json({ success: true });
+    }
+    const name = text(req.body?.name, 80);
+    const proxy = text(req.body?.proxy, 200);
+    const username = text(req.body?.username, 100);
+    const password = text(req.body?.password, 160);
+    const destinationUri = text(req.body?.destinationUri, 200);
+    const transport = ['UDP', 'TCP', 'TLS'].includes(req.body?.transport) ? req.body.transport : 'TLS';
+    if (!name || !proxy || !username || (!id && !password)) return res.status(400).json({ error: 'Name, proxy, username and password are required for a new trunk.' });
+    const body = {
+      connection_name: name,
+      active: req.body?.active !== false,
+      external_uac_settings: { proxy, username, ...(password ? { password } : {}), transport },
+      ...(destinationUri ? { internal_uac_settings: { destination_uri: destinationUri } } : {}),
+    };
+    const response = await telnyx(id ? `/uac_connections/${encodeURIComponent(id)}` : '/uac_connections', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(body) });
+    const payload = await response.json() as { data?: UacConnection };
+    return res.status(id ? 200 : 201).json({ trunk: payload.data ? safeUac(payload.data) : null });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    return res.status(500).json({ error: publicError(error) });
+  }
+}

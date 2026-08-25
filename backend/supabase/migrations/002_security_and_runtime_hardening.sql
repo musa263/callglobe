@@ -1,5 +1,5 @@
 -- ============================================================
--- CallGlobe Security and Runtime Hardening
+-- Vocivo Security and Runtime Hardening
 -- Apply after 001_initial.sql
 -- ============================================================
 

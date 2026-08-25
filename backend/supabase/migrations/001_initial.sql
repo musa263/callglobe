@@ -1,5 +1,5 @@
 -- ============================================================
--- CallGlobe Database Schema
+-- Vocivo Database Schema
 -- Run this in Supabase SQL Editor
 -- ============================================================
 

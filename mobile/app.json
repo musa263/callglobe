@@ -1,0 +1,73 @@
+{
+  "expo": {
+    "name": "Vocivo",
+    "slug": "vocivo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/vocivo-icon.png",
+    "scheme": "vocivo",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.vocivo.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Vocivo may use your camera for compatible calling features when you grant permission.",
+        "NSContactsUsageDescription": "Vocivo uses your contacts so you can quickly call or message people you choose.",
+        "NSMicrophoneUsageDescription": "Vocivo uses your microphone for voice calls.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": [
+          "audio",
+          "voip",
+          "remote-notification"
+        ]
+      },
+      "entitlements": {
+        "aps-environment": "production"
+      }
+    },
+    "android": {
+      "package": "app.vocivo.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/vocivo-icon.png",
+        "backgroundColor": "#07111F"
+      },
+      "permissions": [
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_PHONE_CALL",
+        "READ_PHONE_NUMBERS",
+        "READ_CONTACTS",
+        "CAMERA",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Vocivo uses your contacts so you can quickly call or message people you choose."
+        }
+      ],
+      "./plugins/withTelnyxVoip",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#07111F"
+        }
+      ],
+      "expo-audio",
+      "expo-localization",
+      "expo-asset"
+    ],
+    "owner": "mousaothman",
+    "extra": {
+      "eas": {
+        "projectId": "3e0a713b-7f14-45a2-9788-9c9bf145cfd8"
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ============================================================
-// CALLGLOBE — Global VoIP Calling App
+// VOCIVO — Global VoIP Calling App
 // ============================================================
 
 // Country data with calling codes and per-minute rates (USD)
@@ -72,7 +72,7 @@ const formatDate = (date) => {
 // ============================================================
 // MAIN APP
 // ============================================================
-export default function CallGlobeApp() {
+export default function VocivoApp() {
   const [screen, setScreen] = useState("splash");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState({ name: "", email: "", phone: "" });
@@ -200,7 +200,7 @@ export default function CallGlobeApp() {
   };
 
   const handleCopyReferral = () => {
-    const shareUrl = `https://callglobe.app/join?ref=${referralCode}`;
+    const shareUrl = `https://vocivo.app/join?ref=${referralCode}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(shareUrl);
     }
@@ -210,14 +210,14 @@ export default function CallGlobeApp() {
 
   const handleShareWhatsApp = () => {
     const msg = encodeURIComponent(
-      `I'm using CallGlobe to call Nigeria for just $0.06/min — half the price of other apps! Sign up with my link and we both get $2 free credit:\n\nhttps://callglobe.app/join?ref=${referralCode}`
+      `I'm using Vocivo to call Nigeria for just $0.06/min — half the price of other apps! Sign up with my link and we both get $2 free credit:\n\nhttps://vocivo.app/join?ref=${referralCode}`
     );
     window.open(`https://wa.me/?text=${msg}`, "_blank");
   };
 
   const handleShareSMS = () => {
     const msg = encodeURIComponent(
-      `Try CallGlobe — cheap international calls! Use my code ${referralCode} and we both get $2 free. https://callglobe.app/join?ref=${referralCode}`
+      `Try Vocivo — cheap international calls! Use my code ${referralCode} and we both get $2 free. https://vocivo.app/join?ref=${referralCode}`
     );
     window.open(`sms:?body=${msg}`, "_blank");
   };
@@ -226,9 +226,9 @@ export default function CallGlobeApp() {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "CallGlobe — Cheap International Calls",
-          text: `I'm using CallGlobe to call Nigeria for just $0.06/min! Sign up with my code ${referralCode} and we both get $2 free credit.`,
-          url: `https://callglobe.app/join?ref=${referralCode}`,
+          title: "Vocivo — Cheap International Calls",
+          text: `I'm using Vocivo to call Nigeria for just $0.06/min! Sign up with my code ${referralCode} and we both get $2 free credit.`,
+          url: `https://vocivo.app/join?ref=${referralCode}`,
         });
       } catch (e) { /* user cancelled */ }
     } else {
@@ -395,7 +395,7 @@ export default function CallGlobeApp() {
           marginTop: 24, fontSize: 32, fontWeight: 700, letterSpacing: "-0.02em",
           background: "linear-gradient(135deg, #00d4aa, #0099ff)",
           WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-        }}>CallGlobe</h1>
+        }}>Vocivo</h1>
         <p style={{ color: "#5a6a7a", fontSize: 14, marginTop: 8, letterSpacing: "0.1em", textTransform: "uppercase" }}>
           Call anywhere. Pay less.
         </p>
@@ -425,8 +425,8 @@ export default function CallGlobeApp() {
               <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
             </svg>
           </div>
-          <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>CallGlobe</h1>
-          <p style={{ color: "#6a7a8a", marginTop: 6, fontSize: 14 }}>Affordable calls worldwide</p>
+          <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Vocivo</h1>
+          <p style={{ color: "#6a7a8a", marginTop: 6, fontSize: 14 }}>Connect. Talk. Anywhere.</p>
         </div>
 
         {/* Tab toggle */}
@@ -914,7 +914,7 @@ export default function CallGlobeApp() {
                   }}>
                     <p style={{ color: "#00d4aa", fontSize: 12, fontWeight: 600 }}>How it works</p>
                     <p style={{ color: "#7a8a9a", fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>
-                      Get a real phone number in any country. Anyone can call this number from a regular phone — it rings in your CallGlobe app over WiFi/data. Incoming calls are FREE.
+                      Get a real phone number in any country. Anyone can call this number from a regular phone — it rings in your Vocivo app over WiFi/data. Incoming calls are FREE.
                     </p>
                   </div>
                 </div>
@@ -1249,7 +1249,7 @@ export default function CallGlobeApp() {
                 <div style={{ fontSize: 48, marginBottom: 12 }}>📱</div>
                 <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Get Your Own Phone Number</h3>
                 <p style={{ color: "#8a9aaa", fontSize: 14, lineHeight: 1.6 }}>
-                  Buy a real phone number in any country. People can call you from a regular phone — it rings right here in CallGlobe. <span style={{ color: "#00d4aa", fontWeight: 600 }}>Incoming calls are FREE.</span>
+                  Buy a real phone number in any country. People can call you from a regular phone — it rings right here in Vocivo. <span style={{ color: "#00d4aa", fontWeight: 600 }}>Incoming calls are FREE.</span>
                 </p>
                 <div style={{
                   display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 20,
@@ -1461,7 +1461,7 @@ export default function CallGlobeApp() {
                 Give $2, Get $2
               </h2>
               <p style={{ color: "#8a9aaa", fontSize: 14, lineHeight: 1.5 }}>
-                Invite friends to CallGlobe. When they sign up and make their first recharge, you both get <span style={{ color: "#00d4aa", fontWeight: 700 }}>$2 free credit</span>.
+                Invite friends to Vocivo. When they sign up and make their first recharge, you both get <span style={{ color: "#00d4aa", fontWeight: 700 }}>$2 free credit</span>.
               </p>
             </div>
 
@@ -1629,7 +1629,7 @@ export default function CallGlobeApp() {
                 Tell your friends:
               </p>
               <p style={{ fontSize: 13, color: "#ccc", lineHeight: 1.5 }}>
-                "Other apps charge <span style={{ color: "#ff6b6b", fontWeight: 700, textDecoration: "line-through" }}>$0.12/min</span> to call Nigeria. CallGlobe is just <span style={{ color: "#00d4aa", fontWeight: 700 }}>$0.06/min</span> — that's DOUBLE the talk time for the same money!"
+                "Other apps charge <span style={{ color: "#ff6b6b", fontWeight: 700, textDecoration: "line-through" }}>$0.12/min</span> to call Nigeria. Vocivo is just <span style={{ color: "#00d4aa", fontWeight: 700 }}>$0.06/min</span> — that's DOUBLE the talk time for the same money!"
               </p>
             </div>
           </div>
@@ -1662,7 +1662,7 @@ export default function CallGlobeApp() {
               <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
             </svg>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.01em" }}>CallGlobe</span>
+          <span style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.01em" }}>Vocivo</span>
         </div>
         <div style={{
           width: 34, height: 34, borderRadius: "50%",
