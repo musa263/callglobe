@@ -3,6 +3,7 @@ import { requireSession } from '../auth.js';
 import { readActiveCallRoute, clearActiveCallRoute } from '../call-route-store.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { getExtension } from '../pbx.js';
+import { readPbxConfig } from '../pbx-config-store.js';
 import { callAction } from '../voice-control.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -11,10 +12,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     if (!session.extensionId) return res.status(403).json({ error: 'Transfers are available to organization extensions.' });
+    const config = await readPbxConfig();
+    if (config.userProfiles[session.extensionId]?.permissions.transfer === false) return res.status(403).json({ error: 'Call transfer is disabled for this extension.' });
     const targetId = typeof req.body?.targetExtensionId === 'string' ? req.body.targetExtensionId : '';
     if (!targetId || targetId === session.extensionId) return res.status(400).json({ error: 'Choose another colleague.' });
     const [route, target] = await Promise.all([readActiveCallRoute(session.extensionId), getExtension(targetId)]);
     if (!route) return res.status(409).json({ error: 'This call is not an active routed business call.' });
+    if (target.status !== 'active' || !target.sipUsername) return res.status(409).json({ error: 'The selected colleague is not available.' });
+    if (target.organizationId !== session.organizationId) return res.status(403).json({ error: 'Calls can only be transferred within your organization.' });
     await callAction(route.parentCallControlId, 'transfer', { to: `sip:${target.sipUsername}@sip.telnyx.com`, timeout_secs: 30 });
     await clearActiveCallRoute(session.extensionId);
     return res.status(200).json({ transferred: true, target: { extension: target.extension, name: target.name } });

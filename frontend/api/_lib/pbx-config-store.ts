@@ -1,6 +1,8 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { put } from '@vercel/blob';
+import { readFreshPublicBlob } from './blob-read.js';
 import { requiredEnv } from './http.js';
+import { validOfficeTime, validTimeZone } from './office-hours.js';
 
 export type PbxConfig = {
   version: number;
@@ -9,6 +11,17 @@ export type PbxConfig = {
   organizations: Array<{
     id: string; name: string; slug: string; extensionStart: number; extensionEnd: number;
     internalCallingEnabled: boolean; status: 'active' | 'suspended';
+  }>;
+  numberAssignments: Record<string, {
+    organizationId: string;
+    label?: string;
+    destinationType?: 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr';
+    destinationId?: string;
+    messagingEnabled?: boolean;
+  }>;
+  businessVoiceConfigs: Record<string, {
+    enabled: boolean; voicemailEnabled: boolean; voicemailDelaySeconds: number; voicemailGreeting: string;
+    companyName: string; greeting: string; waitingMessage: string; departments: string[]; voice: string; backgroundImageUrl: string;
   }>;
   userProfiles: Record<string, {
     outboundCallerId: string; did: string; twoFactorEnabled: boolean; noAnswerSeconds: number;
@@ -46,6 +59,8 @@ export function defaultPbxConfig(): PbxConfig {
     company: { name: 'Global Heritage', timezone: 'Asia/Riyadh', defaultCallerId: '', emergencyAddress: '' },
     activeOrganizationId: 'primary',
     organizations: [{ id: 'primary', name: 'Global Heritage', slug: 'global-heritage', extensionStart: 2000, extensionEnd: 2019, internalCallingEnabled: true, status: 'active' }],
+    numberAssignments: {},
+    businessVoiceConfigs: {},
     userProfiles: {},
     departments: [{ id: 'general', name: 'General', managerExtension: '' }, { id: 'sales', name: 'Sales', managerExtension: '' }, { id: 'operations', name: 'Operations', managerExtension: '' }],
     outboundRules: [{ id: 'international', name: 'International calling', prefix: '+', extensionRange: '', numberLength: '', department: 'All', routes: ['Vocivo Telnyx'], enabled: true }],
@@ -81,6 +96,8 @@ function mergeConfig(stored?: Partial<PbxConfig>): PbxConfig {
     ai: { ...base.ai, ...(stored.ai || {}) }, system: { ...base.system, ...(stored.system || {}) },
     platform: { ...base.platform, ...(stored.platform || {}) },
     organizations: stored.organizations?.length ? stored.organizations : base.organizations,
+    numberAssignments: stored.numberAssignments || {},
+    businessVoiceConfigs: stored.businessVoiceConfigs || {},
     activeOrganizationId: stored.activeOrganizationId || base.activeOrganizationId,
     userProfiles: stored.userProfiles || {}, updatedAt: stored.updatedAt || base.updatedAt,
   };
@@ -97,14 +114,81 @@ function validateOrganizations(config: PbxConfig) {
     if (organization.extensionEnd - organization.extensionStart + 1 > 10000) throw new Error('An organization extension range cannot exceed 10,000 slots.');
   }
   if (!ids.has(config.activeOrganizationId)) throw new Error('The active organization is invalid.');
+  for (const assignment of Object.values(config.numberAssignments)) {
+    if (!ids.has(assignment.organizationId)) throw new Error('Every phone number must belong to an existing organization.');
+  }
+}
+
+function validateCallHandling(config: PbxConfig) {
+  const routeIds = new Set<string>();
+  const routeExtensions = new Set<string>();
+  const register = (item: { id: string; name: string; extension: string }) => {
+    if (!item.id || routeIds.has(item.id)) throw new Error('Every call-handling route must have a unique ID.');
+    if (!item.name?.trim()) throw new Error('Every call-handling route requires a name.');
+    routeIds.add(item.id);
+    if (item.extension) {
+      if (!/^\d{2,5}$/.test(item.extension)) throw new Error('Call-handling extensions must contain 2 to 5 digits.');
+      if (routeExtensions.has(item.extension)) throw new Error(`Call-handling extension ${item.extension} is already in use.`);
+      routeExtensions.add(item.extension);
+    }
+  };
+  for (const group of config.callHandling.ringGroups) {
+    register(group);
+    if (!Array.isArray(group.members) || !group.members.length) throw new Error(`Ring group ${group.name} needs at least one member.`);
+    if (new Set(group.members).size !== group.members.length || group.members.length > 100) throw new Error(`Ring group ${group.name} has invalid members.`);
+    if (!Number.isFinite(group.timeout) || group.timeout < 10 || group.timeout > 120) throw new Error(`Ring group ${group.name} timeout must be between 10 and 120 seconds.`);
+  }
+  for (const queue of config.callHandling.queues) {
+    register(queue);
+    if (!Array.isArray(queue.members) || !queue.members.length) throw new Error(`Queue ${queue.name} needs at least one member.`);
+    if (new Set(queue.members).size !== queue.members.length || queue.members.length > 100) throw new Error(`Queue ${queue.name} has invalid members.`);
+    if (!Number.isFinite(queue.maxWait) || queue.maxWait < 15 || queue.maxWait > 900) throw new Error(`Queue ${queue.name} wait time must be between 15 and 900 seconds.`);
+  }
+  for (const ivr of config.callHandling.ivrs) {
+    register(ivr);
+    if (!ivr.greeting?.trim()) throw new Error(`Voice menu ${ivr.name} requires a greeting.`);
+    const entries = Object.entries(ivr.options || {}).filter(([, target]) => Boolean(target));
+    if (!entries.length) throw new Error(`Voice menu ${ivr.name} needs at least one keypad destination.`);
+    for (const [digit, target] of entries) {
+      if (!/^\d$/.test(digit) || !/^(extension|ring_group|queue):[A-Za-z0-9._-]+$/.test(target)) throw new Error(`Voice menu ${ivr.name} contains an invalid keypad destination.`);
+      const [type, id] = target.split(':', 2);
+      if (type === 'ring_group' && !config.callHandling.ringGroups.some((item) => item.id === id)) throw new Error(`Voice menu ${ivr.name} points to a missing ring group.`);
+      if (type === 'queue' && !config.callHandling.queues.some((item) => item.id === id)) throw new Error(`Voice menu ${ivr.name} points to a missing queue.`);
+    }
+  }
+  for (const assignment of Object.values(config.numberAssignments)) {
+    if (assignment.destinationType === 'ring_group' && !config.callHandling.ringGroups.some((item) => item.id === assignment.destinationId)) throw new Error('A phone number points to a missing ring group.');
+    if (assignment.destinationType === 'queue' && !config.callHandling.queues.some((item) => item.id === assignment.destinationId)) throw new Error('A phone number points to a missing queue.');
+    if (assignment.destinationType === 'ivr' && !config.callHandling.ivrs.some((item) => item.id === assignment.destinationId)) throw new Error('A phone number points to a missing voice menu.');
+  }
+}
+
+function validateOfficeHours(config: PbxConfig) {
+  if (!validTimeZone(config.officeHours.timezone)) throw new Error('Office hours contain an invalid timezone.');
+  for (const [day, value] of Object.entries(config.officeHours.weekdays)) {
+    if (!validOfficeTime(value.start) || !validOfficeTime(value.end)) throw new Error(`${day} contains an invalid office-hours time.`);
+  }
+  for (const holiday of config.officeHours.holidays) {
+    if (!holiday.id || !holiday.name.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(holiday.date)) throw new Error('Every holiday requires a name and valid date.');
+    if (!['Main voicemail', 'Main line'].includes(holiday.destination)) throw new Error('Every holiday must route to the main line or main voicemail.');
+  }
+}
+
+function validateUserProfiles(config: PbxConfig) {
+  const forwardingTarget = /^(?:|voicemail|mainvoicemail|\d{2,5}|\+[1-9]\d{6,14})$/i;
+  for (const profile of Object.values(config.userProfiles)) {
+    if (!Number.isFinite(profile.noAnswerSeconds) || profile.noAnswerSeconds < 10 || profile.noAnswerSeconds > 120) throw new Error('Each user no-answer timeout must be between 10 and 120 seconds.');
+    for (const target of [profile.simultaneousRing, profile.forwardBusy, profile.forwardNoAnswer, profile.forwardUnavailable]) {
+      if (!forwardingTarget.test((target || '').replace(/[\s()-]/g, ''))) throw new Error('Call forwarding destinations must be voicemail, an extension, or a complete international number.');
+    }
+    if (!['Use office hours', 'Always available', 'Custom schedule'].includes(profile.schedule)) throw new Error('A user contains an invalid routing schedule.');
+  }
 }
 
 export async function readPbxConfig() {
-  const result = await list({ prefix: pathname, limit: 1 });
-  if (!result.blobs[0]) return defaultPbxConfig();
   try {
-    const response = await fetch(result.blobs[0].url);
-    return response.ok ? mergeConfig(decrypt(Buffer.from(await response.arrayBuffer()))) : defaultPbxConfig();
+    const value = await readFreshPublicBlob(pathname);
+    return value ? mergeConfig(decrypt(value)) : defaultPbxConfig();
   } catch { return defaultPbxConfig(); }
 }
 
@@ -112,6 +196,9 @@ export async function savePbxConfig(input: Partial<PbxConfig>) {
   const current = await readPbxConfig();
   const next = mergeConfig({ ...current, ...input, updatedAt: new Date().toISOString() });
   validateOrganizations(next);
+  validateCallHandling(next);
+  validateOfficeHours(next);
+  validateUserProfiles(next);
   await put(pathname, encrypt(next), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
   return next;
 }

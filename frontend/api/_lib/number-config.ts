@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs';
 import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
+import { readPbxConfig, savePbxConfig } from './pbx-config-store.js';
+import { numberOrganizationId } from './tenancy.js';
 
 export type BusinessVoiceConfig = {
   enabled: boolean;
@@ -17,8 +19,6 @@ export type BusinessVoiceConfig = {
 
 const configPrefix = 'vocfg_';
 const passwordPrefix = 'vopwd_';
-const legacyConfigPrefix = ['cg', 'cfg_'].join('');
-const legacyPasswordPrefix = ['cg', 'pwd_'].join('');
 const defaults: BusinessVoiceConfig = {
   enabled: false,
   voicemailEnabled: false,
@@ -69,11 +69,10 @@ function departments(value: unknown, legacyOne?: unknown, legacyTwo?: unknown) {
   return normalized.length >= 2 ? normalized : defaults.departments;
 }
 
-export async function readBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
+async function readTaggedBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
   const tags = await readTags();
   const current = tags.filter((tag) => tag.startsWith(configPrefix));
-  const sourcePrefix = current.length ? configPrefix : legacyConfigPrefix;
-  const chunks = tags.map((tag) => tag.startsWith(sourcePrefix) ? tag.slice(sourcePrefix.length).match(/^(\d+)_(.+)$/) : null).filter((match): match is RegExpMatchArray => Boolean(match)).sort((a, b) => Number(a[1]) - Number(b[1])).map((match) => match[2]);
+  const chunks = current.map((tag) => tag.slice(configPrefix.length).match(/^(\d+)_(.+)$/)).filter((match): match is RegExpMatchArray => Boolean(match)).sort((a, b) => Number(a[1]) - Number(b[1])).map((match) => match[2]);
   if (!chunks.length) return defaults;
   try {
     const stored = JSON.parse(Buffer.from(chunks.join(''), 'base64url').toString('utf8')) as Partial<BusinessVoiceConfig>;
@@ -94,7 +93,15 @@ export async function readBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
   }
 }
 
-export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig>) {
+export async function readBusinessVoiceConfig(organizationId = 'primary'): Promise<BusinessVoiceConfig> {
+  const pbx = await readPbxConfig();
+  if (pbx.businessVoiceConfigs[organizationId]) return { ...defaults, ...pbx.businessVoiceConfigs[organizationId] };
+  if (organizationId === (pbx.organizations[0]?.id || 'primary')) return readTaggedBusinessVoiceConfig();
+  const organization = pbx.organizations.find((item) => item.id === organizationId);
+  return { ...defaults, companyName: organization?.name || defaults.companyName, greeting: `Welcome to ${organization?.name || defaults.companyName}.` };
+}
+
+export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig>, organizationId = 'primary') {
   const config: BusinessVoiceConfig = {
     enabled: Boolean(input.enabled),
     voicemailEnabled: Boolean(input.voicemailEnabled),
@@ -107,23 +114,21 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
     voice: bounded(input.voice, defaults.voice, 100),
     backgroundImageUrl: typeof input.backgroundImageUrl === 'string' && /^https:\/\//.test(input.backgroundImageUrl) ? input.backgroundImageUrl.slice(0, 500) : '',
   };
-  const tags = await readTags();
-  const encoded = Buffer.from(JSON.stringify(config)).toString('base64url');
-  const chunks = encoded.match(/.{1,70}/g) ?? [];
-  const managed = chunks.map((chunk, index) => `${configPrefix}${index}_${chunk}`);
-  const nextTags = [...tags.filter((tag) => !tag.startsWith(configPrefix) && !tag.startsWith(legacyConfigPrefix)), ...managed];
-  await writeNumber({
-    tags: nextTags,
-    connection_id: (config.enabled || config.voicemailEnabled) ? requiredEnv('TELNYX_CALL_CONTROL_APP_ID') : requiredEnv('TELNYX_CONNECTION_ID'),
-  });
+  const pbx = await readPbxConfig();
+  await savePbxConfig({ businessVoiceConfigs: { ...pbx.businessVoiceConfigs, [organizationId]: config } });
+  const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
+  const payload = await response.json() as { data?: Array<{ id: string; phone_number: string; connection_id?: string | null }> };
+  const callControlId = requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
+  await Promise.all((payload.data ?? [])
+    .filter((item) => numberOrganizationId(item.phone_number, pbx) === organizationId && item.connection_id !== callControlId)
+    .map((item) => telnyx(`/phone_numbers/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ connection_id: callControlId }) })));
   return config;
 }
 
 export async function readPasswordHash() {
   const tags = await readTags();
   const current = tags.find((tag) => tag.startsWith(passwordPrefix));
-  const legacy = tags.find((tag) => tag.startsWith(legacyPasswordPrefix));
-  const encoded = current?.slice(passwordPrefix.length) || legacy?.slice(legacyPasswordPrefix.length);
+  const encoded = current?.slice(passwordPrefix.length);
   return encoded ? Buffer.from(encoded, 'base64url').toString('utf8') : requiredEnv('APP_PASSWORD_HASH');
 }
 
@@ -132,6 +137,6 @@ export async function changePassword(currentPassword: string, newPassword: strin
   if (!await bcrypt.compare(currentPassword, currentHash)) return false;
   const tags = await readTags();
   const nextHash = await bcrypt.hash(newPassword, 12);
-  await writeTags([...tags.filter((tag) => !tag.startsWith(passwordPrefix) && !tag.startsWith(legacyPasswordPrefix)), `${passwordPrefix}${Buffer.from(nextHash).toString('base64url')}`]);
+  await writeTags([...tags.filter((tag) => !tag.startsWith(passwordPrefix)), `${passwordPrefix}${Buffer.from(nextHash).toString('base64url')}`]);
   return true;
 }

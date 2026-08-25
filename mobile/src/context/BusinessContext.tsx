@@ -23,7 +23,7 @@ type BusinessContextValue = {
   saveProfile: (profile: BusinessProfile) => Promise<void>;
 };
 
-const storageKey = 'vocivo.business-profile.v1';
+const storageKey = (userId: string) => `vocivo.business-profile.v2.${userId}`;
 const defaultProfile: BusinessProfile = {
   enabled: false,
   voicemailEnabled: false,
@@ -40,15 +40,16 @@ const defaultProfile: BusinessProfile = {
 const BusinessContext = createContext<BusinessContextValue | null>(null);
 
 export function BusinessProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isPreview } = useAuth();
+  const { isAuthenticated, isPreview, profile: authProfile } = useAuth();
   const [profile, setProfile] = useState(defaultProfile);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
+      setProfile(defaultProfile);
       try {
-        const cached = await AsyncStorage.getItem(storageKey);
+        const cached = authProfile?.id ? await AsyncStorage.getItem(storageKey(authProfile.id)) : null;
         if (cached && active) {
           const parsed = JSON.parse(cached) as Partial<BusinessProfile> & { departmentOne?: string; departmentTwo?: string };
           setProfile({ ...defaultProfile, ...parsed, departments: parsed.departments?.length ? parsed.departments : [parsed.departmentOne || 'Sales', parsed.departmentTwo || 'Operations'] });
@@ -62,7 +63,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     };
     load();
     return () => { active = false; };
-  }, [isAuthenticated, isPreview]);
+  }, [authProfile?.id, isAuthenticated, isPreview]);
 
   const saveProfile = useCallback(async (next: BusinessProfile) => {
     const normalized = {
@@ -79,8 +80,8 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       Object.assign(normalized, result.config);
     }
     setProfile(normalized);
-    await AsyncStorage.setItem(storageKey, JSON.stringify(normalized));
-  }, [isAuthenticated, isPreview]);
+    if (authProfile?.id) await AsyncStorage.setItem(storageKey(authProfile.id), JSON.stringify(normalized));
+  }, [authProfile?.id, isAuthenticated, isPreview]);
 
   const value = useMemo(() => ({ profile, loading, saveProfile }), [loading, profile, saveProfile]);
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;

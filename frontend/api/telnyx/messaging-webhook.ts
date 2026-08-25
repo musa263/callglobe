@@ -1,10 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { methodNotAllowed, requiredEnv } from '../_lib/http.js';
+import { methodNotAllowed } from '../_lib/http.js';
 import { storeMessageEvent } from '../_lib/message-store.js';
+import { organizationForNumber } from '../_lib/tenancy.js';
+import { verifyTelnyxWebhook } from '../_lib/telnyx-webhook-auth.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
-  if (req.query.token !== requiredEnv('VOICE_WEBHOOK_SECRET')) return res.status(401).json({ error: 'Unauthorized' });
+  if (!verifyTelnyxWebhook(req, 'MESSAGING_WEBHOOK_SECRET')) return res.status(401).json({ error: 'Unauthorized' });
   const eventType = typeof req.body?.data?.event_type === 'string' ? req.body.data.event_type : 'unknown';
   const eventId = typeof req.body?.data?.id === 'string' ? req.body.data.id : 'unknown';
   const payload = req.body?.data?.payload ?? {};
@@ -12,6 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const from = typeof payload.from === 'string' ? payload.from : payload.from?.phone_number || '';
   const destination = Array.isArray(payload.to) ? payload.to[0]?.phone_number || '' : typeof payload.to === 'string' ? payload.to : '';
   const inbound = eventType === 'message.received' || payload.direction === 'inbound';
+  const organizationId = await organizationForNumber(inbound ? destination : from);
   const errors = Array.isArray(payload.errors) ? payload.errors : [];
   if (messageId !== 'unknown') {
     await storeMessageEvent({
@@ -24,6 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdAt: payload.received_at || payload.sent_at || payload.completed_at || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       error: errors[0]?.detail || errors[0]?.title,
+      organizationId,
     });
   }
   console.info(`Telnyx messaging webhook received: type=${eventType}, id=${eventId}`);

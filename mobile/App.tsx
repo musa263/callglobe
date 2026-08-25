@@ -24,9 +24,12 @@ import { colors } from './src/theme';
 
 function AppContent() {
   const { loading, isAuthenticated, isPreview } = useAuth();
-  if (loading) return <View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View>;
-  if (!isAuthenticated && !isPreview) return <AuthScreen />;
-  return <BusinessProvider><MessagingProvider><VoiceRoot><AuthenticatedApp /></VoiceRoot></MessagingProvider></BusinessProvider>;
+  return <VoiceRoot>{loading
+    ? <View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View>
+    : !isAuthenticated && !isPreview
+      ? <AuthScreen />
+      : <BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider>
+  }</VoiceRoot>;
 }
 
 class LaunchBoundary extends Component<{ children: React.ReactNode }, { failed: boolean }> {

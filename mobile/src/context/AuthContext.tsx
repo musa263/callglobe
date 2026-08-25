@@ -24,8 +24,9 @@ type AuthContextValue = {
 
 type LoginResponse = { token: string; profile: Omit<Profile, 'balance'> };
 type SessionResponse = { profile: Omit<Profile, 'balance'> };
-type AccountResponse = { balance: number; currency: string; rates: CallRate[] };
+type AccountResponse = { balance: number | null; currency: string; rates: CallRate[]; can_call?: boolean };
 type NumbersResponse = { numbers: CallerNumber[] };
+type HistoryResponse = { calls: CallLog[] };
 type UserProfileResponse = { profile: { id: string; fullName: string; email: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photoUrl?: string } };
 
 function mobileProfile(value: UserProfileResponse['profile']): Omit<Profile, 'balance' | 'currency'> {
@@ -41,8 +42,8 @@ function normalizeRates(values: CallRate[]) {
   }).map((rate) => ({ ...rate, rate_per_min: Number(rate.rate_per_min) || 0 }));
 }
 
-const historyKey = 'vocivo.history.v2';
 const legacyHistoryKey = 'vocivo.secure-history';
+const historyKey = (userId: string) => `vocivo.history.v3.${userId}`;
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 const previewProfile: Profile = { id: 'preview-user', email: 'preview@vocivo.app', full_name: 'Musa', job_title: 'Account owner', department: 'Operations', location: 'Riyadh', balance: 24.8, currency: 'USD' };
@@ -53,14 +54,31 @@ const previewHistory: CallLog[] = [
   { id: '3', destination_number: '+44 7700 900112', destination_country: 'United Kingdom', duration_seconds: 0, total_cost: 0, status: 'no_answer', started_at: new Date(Date.now() - 3 * 86400000).toISOString() },
 ];
 
-async function readHistory() {
-  const value = await AsyncStorage.getItem(historyKey) ?? await SecureStore.getItemAsync(legacyHistoryKey);
+async function readHistory(userId: string) {
+  const scopedKey = historyKey(userId);
+  const value = await AsyncStorage.getItem(scopedKey) ?? (userId === 'vocivo-owner' ? await SecureStore.getItemAsync(legacyHistoryKey) : null);
   if (!value) return [];
   try {
     const parsed = JSON.parse(value) as CallLog[];
-    await AsyncStorage.setItem(historyKey, JSON.stringify(parsed));
+    await AsyncStorage.setItem(scopedKey, JSON.stringify(parsed));
     return parsed;
   } catch { return []; }
+}
+
+function mergeHistory(local: CallLog[], server: CallLog[]) {
+  const result: CallLog[] = [];
+  for (const item of [...local, ...server].sort((a, b) => b.started_at.localeCompare(a.started_at))) {
+    const digits = item.destination_number.replace(/\D/g, '');
+    const started = new Date(item.started_at).getTime();
+    const duplicateIndex = result.findIndex((candidate) => candidate.destination_number.replace(/\D/g, '') === digits && Math.abs(new Date(candidate.started_at).getTime() - started) < 30_000);
+    if (duplicateIndex < 0) {
+      result.push(item);
+    } else {
+      const existing = result[duplicateIndex];
+      if (existing && item.destination_name && !existing.destination_name) result[duplicateIndex] = { ...existing, ...item };
+    }
+  }
+  return result.slice(0, 100);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -74,14 +92,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isPreview, setIsPreview] = useState(false);
 
   const loadAccount = useCallback(async (baseProfile?: Omit<Profile, 'balance'>) => {
-    const [account, numbers, verified, storedHistory, userProfile] = await Promise.all([api.get<AccountResponse>('/api/telnyx/account'), api.get<NumbersResponse>('/api/telnyx/numbers'), api.get<NumbersResponse>('/api/telnyx/verified-numbers'), readHistory(), api.get<UserProfileResponse>('/api/auth/profile')]);
+    if (!baseProfile?.id) throw new Error('Account identity was not returned.');
+    const fallbackProfile: UserProfileResponse = { profile: { id: baseProfile.id, fullName: baseProfile.full_name || '', email: baseProfile.email, jobTitle: baseProfile.job_title || '', department: baseProfile.department || '', mobile: baseProfile.mobile || '', location: baseProfile.location || '', bio: baseProfile.bio || '', photoUrl: baseProfile.photo_url } };
+    const [account, numbers, verified, storedHistory, serverHistory, userProfile] = await Promise.all([
+      api.get<AccountResponse>('/api/telnyx/account').catch(() => ({ balance: null, currency: baseProfile.currency || 'USD', rates: [], can_call: false })),
+      api.get<NumbersResponse>('/api/telnyx/numbers').catch(() => ({ numbers: [] })),
+      api.get<NumbersResponse>('/api/telnyx/verified-numbers').catch(() => ({ numbers: [] })),
+      readHistory(baseProfile.id),
+      api.get<HistoryResponse>('/api/voice/history').catch(() => ({ calls: [] })),
+      api.get<UserProfileResponse>('/api/auth/profile').catch(() => fallbackProfile),
+    ]);
     const details = mobileProfile(userProfile.profile);
-    if (baseProfile) setProfile({ ...baseProfile, ...details, balance: Number(account.balance), currency: account.currency });
-    else setProfile((current) => current ? { ...current, ...details, balance: Number(account.balance), currency: account.currency } : { ...details, balance: Number(account.balance), currency: account.currency });
+    if (baseProfile) setProfile({ ...baseProfile, ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency });
+    else setProfile((current) => current ? { ...current, ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency } : { ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency });
     if (account.rates?.length) setRates(normalizeRates(account.rates));
     setCallerNumbers([...(numbers.numbers ?? []), ...(verified.numbers ?? [])]);
-    historyRef.current = storedHistory;
-    setHistory(storedHistory);
+    const mergedHistory = mergeHistory(storedHistory, serverHistory.calls ?? []);
+    historyRef.current = mergedHistory;
+    setHistory(mergedHistory);
+    await AsyncStorage.setItem(historyKey(baseProfile.id), JSON.stringify(mergedHistory));
   }, []);
 
   useEffect(() => {
@@ -89,10 +118,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         if (!await api.getSessionToken()) return;
         const session = await api.get<SessionResponse>('/api/auth/session');
-        setAuthenticated(true);
         await loadAccount(session.profile);
+        setAuthenticated(true);
       } catch {
         await api.clearSessionToken();
+        setAuthenticated(false);
+        setProfile(null);
       } finally {
         setLoading(false);
       }
@@ -103,15 +134,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = useCallback(async (email: string, password: string) => {
     const result = await api.post<LoginResponse>('/api/auth/login', { email: email.trim(), password });
     await api.saveSessionToken(result.token);
-    setAuthenticated(true);
-    await loadAccount(result.profile);
+    try {
+      await loadAccount(result.profile);
+      setAuthenticated(true);
+    } catch (error) {
+      await api.clearSessionToken();
+      setAuthenticated(false);
+      setProfile(null);
+      throw error;
+    }
   }, [loadAccount]);
 
   const enrollWithQr = useCallback(async (token: string) => {
     const result = await api.post<LoginResponse>('/api/auth/enroll', { token });
     await api.saveSessionToken(result.token);
-    setAuthenticated(true);
-    await loadAccount(result.profile);
+    try {
+      await loadAccount(result.profile);
+      setAuthenticated(true);
+    } catch (error) {
+      await api.clearSessionToken();
+      setAuthenticated(false);
+      setProfile(null);
+      throw error;
+    }
   }, [loadAccount]);
 
   const signOut = useCallback(async () => {
@@ -119,6 +164,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthenticated(false);
     setProfile(null);
     setCallerNumbers([]);
+    historyRef.current = [];
+    setHistory([]);
+    await AsyncStorage.multiRemove([
+      '@telnyx_username',
+      '@telnyx_password',
+      '@credential_token',
+      '@push_token',
+      '@push_when_active',
+      '@use_trickle_ice',
+      '@enable_missed_call_notifications',
+    ]);
     await api.clearSessionToken();
   }, []);
 
@@ -133,7 +189,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = useCallback(async () => {
     if (isPreview || !isAuthenticated) return;
-    await loadAccount();
+    const session = await api.get<SessionResponse>('/api/auth/session');
+    await loadAccount(session.profile);
   }, [isAuthenticated, isPreview, loadAccount]);
 
   const addHistory = useCallback(async (call: CallLog) => {
@@ -141,8 +198,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const next = [call, ...historyRef.current.filter((item) => item.id !== call.id)].slice(0, 100);
     historyRef.current = next;
     setHistory(next);
-    await AsyncStorage.setItem(historyKey, JSON.stringify(next));
-  }, [isPreview]);
+    if (profile?.id) await AsyncStorage.setItem(historyKey(profile.id), JSON.stringify(next));
+  }, [isPreview, profile?.id]);
 
   const updateProfile = useCallback(async (input: { fullName: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photo?: { base64: string; mimeType: string } }) => {
     if (isPreview) {

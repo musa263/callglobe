@@ -12,6 +12,7 @@ export type StoredMessage = {
   createdAt: string;
   error?: string;
   updatedAt: string;
+  organizationId?: string;
 };
 
 function key() {
@@ -32,12 +33,17 @@ function decrypt(value: Buffer): StoredMessage {
 }
 
 export async function storeMessageEvent(message: StoredMessage) {
-  await put(`vocivo/messages/${message.id}-${Date.now()}.bin`, encrypt(message), { access: 'public', contentType: 'application/octet-stream', addRandomSuffix: true });
+  const newestFirst = String(9_999_999_999_999 - Date.now()).padStart(13, '0');
+  await put(`vocivo/messages/v2/${newestFirst}-${message.id}.bin`, encrypt(message), { access: 'public', contentType: 'application/octet-stream', addRandomSuffix: true });
 }
 
-export async function listStoredMessages() {
-  const result = await list({ prefix: 'vocivo/messages/', limit: 1000 });
-  const events = (await Promise.all(result.blobs.map(async (blob) => {
+export async function listStoredMessages(organizationId: string) {
+  const [recent, legacy] = await Promise.all([
+    list({ prefix: 'vocivo/messages/v2/', limit: 1000 }),
+    list({ prefix: 'vocivo/messages/', limit: 1000 }),
+  ]);
+  const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
+  const events = (await Promise.all(blobs.map(async (blob) => {
     try {
       const response = await fetch(blob.url);
       if (!response.ok) return null;
@@ -49,5 +55,7 @@ export async function listStoredMessages() {
     const previous = latest.get(event.id);
     latest.set(event.id, { ...previous, ...event, text: event.text || previous?.text || '', to: event.to || previous?.to || '', from: event.from || previous?.from || '' });
   });
-  return [...latest.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
+  return [...latest.values()]
+    .filter((item) => (item.organizationId || 'primary') === organizationId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
 }

@@ -30,13 +30,14 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const [contactName, setContactName] = useState<string | undefined>();
   const [dialMode, setDialMode] = useState<'external' | 'extension'>('external');
   const balance = Number(profile?.balance ?? 0);
+  const balanceVisible = profile?.balance != null;
   const minutes = selected.rate_per_min ? Math.floor(balance / selected.rate_per_min) : null;
   const fullNumber = `${selected.dial_code}${number}`;
   const internalCandidate = dialMode === 'extension';
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
   const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
-  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : number.length >= 4 && balance > 0;
+  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : number.length >= 4 && profile?.can_call !== false;
   const displayNumber = useMemo(() => number.replace(/(.{3})/g, '$1 ').trim(), [number]);
 
   useEffect(() => {
@@ -85,7 +86,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
     <View style={[styles.page, { paddingTop: Math.max(insets.top, 18) }]}>
       <View style={styles.header}>
         <BrandMark compact />
-        <Pressable onPress={onWallet} style={styles.balancePill}><View style={styles.liveDot} /><Text style={styles.balance}>${balance.toFixed(2)}</Text><Plus size={15} color={colors.mint} strokeWidth={3} /></Pressable>
+        <Pressable onPress={onWallet} style={styles.balancePill}><View style={styles.liveDot} /><Text style={styles.balance}>{balanceVisible ? `$${balance.toFixed(2)}` : 'Managed'}</Text><Plus size={15} color={colors.mint} strokeWidth={3} /></Pressable>
       </View>
 
       <View style={styles.mode}><Pressable onPress={() => { setDialMode('external'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'external' && styles.modeActive]}><Text style={dialMode === 'external' ? styles.modeActiveText : styles.modeText}>External</Text></Pressable><Pressable onPress={() => { setDialMode('extension'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'extension' && styles.modeActive]}><Text style={dialMode === 'extension' ? styles.modeActiveText : styles.modeText}>Extension</Text></Pressable><Pressable onPress={onConference} style={styles.modeButton}><Text style={styles.modeText}>Conference</Text></Pressable></View>
@@ -118,7 +119,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
       <View style={styles.rateLine}>
         <Text style={styles.rate}>{internalCandidate ? 'Free internal call' : selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)}/min est.` : 'Live Telnyx rate'}</Text>
         <View style={styles.dividerDot} />
-        <Text style={styles.minutes}>{internalCandidate ? 'No phone number required' : minutes ? `about ${minutes.toLocaleString()} minutes available` : 'charged to your Telnyx balance'}</Text>
+        <Text style={styles.minutes}>{internalCandidate ? 'No phone number required' : minutes ? `about ${minutes.toLocaleString()} minutes available` : balanceVisible ? 'charged to your Telnyx balance' : 'organization billing'}</Text>
       </View>
 
       {routeRisk && <View style={styles.routeWarning}><AlertTriangle size={17} color={colors.amber} /><View style={styles.routeCopy}><Text style={styles.routeTitle}>Caller ID may not ring locally</Text><Text style={styles.routeText}>Some countries filter same-country caller IDs arriving through international routes.</Text></View>{ownedFallback && <Pressable onPress={() => { setSelectedCaller(ownedFallback); setCallError(''); }} style={styles.routeButton}><Text style={styles.routeButtonText}>Use +1 line</Text></Pressable>}</View>}
@@ -131,7 +132,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         <Pressable accessibilityLabel="Start call" disabled={!canCall} onPress={call} style={({ pressed }) => [styles.callButton, !canCall && styles.callDisabled, pressed && canCall && styles.callPressed]}>
           <Phone size={29} color={colors.ink} fill={colors.ink} strokeWidth={1.5} />
         </Pressable>
-        <Text style={styles.callHint}>{internalCandidate ? (canCall ? 'Call extension' : 'Choose another extension') : !canCall && number.length >= 4 ? 'Add balance to call' : 'Tap to call'}</Text>
+        <Text style={styles.callHint}>{internalCandidate ? (canCall ? 'Call extension' : 'Choose another extension') : !canCall && number.length >= 4 ? 'Calling unavailable' : 'Tap to call'}</Text>
       </View>
 
       <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={setSelected} onClose={() => setShowRates(false)} />

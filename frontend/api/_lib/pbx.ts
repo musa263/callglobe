@@ -1,11 +1,10 @@
 import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
 import { readPbxConfig } from './pbx-config-store.js';
+import { revokeExtensionSessions } from './extension-session-store.js';
 
 const extensionTag = 'vocivo_extension';
-const legacyExtensionTag = ['call', 'globe_extension'].join('');
 const credentialPrefix = 'VOCEXT';
-const legacyCredentialPrefix = ['CG', 'EXT'].join('');
 const connectionResource = () => `connection:${requiredEnv('TELNYX_CONNECTION_ID')}`;
 
 export type ExtensionUser = {
@@ -46,9 +45,9 @@ function encodeName(input: Partial<ExtensionUser>) {
 }
 
 function parseCredential(item: CredentialResource): ExtensionUser | null {
-  if (![extensionTag, legacyExtensionTag].includes(item.tag || '') || item.resource_id !== connectionResource()) return null;
+  if (item.tag !== extensionTag || item.resource_id !== connectionResource()) return null;
   const [prefix, extension, name, department, role, email, mobile, organizationId] = (item.name || '').split('|');
-  if (![credentialPrefix, legacyCredentialPrefix].includes(prefix || '') || !/^\d{2,5}$/.test(extension || '')) return null;
+  if (prefix !== credentialPrefix || !/^\d{2,5}$/.test(extension || '')) return null;
   return {
     id: item.id,
     extension,
@@ -149,6 +148,7 @@ export async function updateExtension(id: string, input: Partial<ExtensionUser>)
 
 export async function deleteExtension(id: string) {
   await requireManagedCredential(id);
+  await revokeExtensionSessions(id);
   await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 

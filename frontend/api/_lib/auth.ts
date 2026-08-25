@@ -1,6 +1,8 @@
 import type { VercelRequest } from '@vercel/node';
+import { randomUUID } from 'node:crypto';
 import { jwtVerify, SignJWT, type JWTPayload } from 'jose';
 import { requiredEnv } from './http.js';
+import { isExtensionSessionRevoked } from './extension-session-store.js';
 
 const issuer = 'vocivo-vercel';
 const audience = 'vocivo-mobile';
@@ -16,7 +18,7 @@ export async function createSession(email: string) {
     .setIssuer(issuer)
     .setAudience(audience)
     .setIssuedAt()
-    .setExpirationTime('12h')
+    .setExpirationTime('30d')
     .sign(key());
 }
 
@@ -46,6 +48,7 @@ export async function createEnrollmentToken(extensionId: string) {
     .setSubject('vocivo-enrollment')
     .setIssuer(issuer)
     .setAudience(audience)
+    .setJti(randomUUID())
     .setIssuedAt()
     .setExpirationTime('10m')
     .sign(key());
@@ -53,8 +56,8 @@ export async function createEnrollmentToken(extensionId: string) {
 
 export async function verifyEnrollmentToken(token: string) {
   const { payload } = await jwtVerify(token, key(), { issuer, audience });
-  if (payload.sub !== 'vocivo-enrollment' || payload.purpose !== 'extension-enrollment' || typeof payload.extensionId !== 'string') throw new Error('Invalid enrollment code.');
-  return payload.extensionId;
+  if (payload.sub !== 'vocivo-enrollment' || payload.purpose !== 'extension-enrollment' || typeof payload.extensionId !== 'string' || typeof payload.jti !== 'string') throw new Error('Invalid enrollment code.');
+  return { extensionId: payload.extensionId, jti: payload.jti };
 }
 
 export async function requireSession(req: VercelRequest) {
@@ -63,6 +66,10 @@ export async function requireSession(req: VercelRequest) {
   const token = header.slice(7);
   const { payload } = await jwtVerify(token, key(), { issuer, audience });
   if (payload.sub !== 'vocivo-owner' && !payload.sub?.startsWith('vocivo-extension:')) throw new Error('Unauthorized');
+  if (payload.sub.startsWith('vocivo-extension:')) {
+    if (typeof payload.extensionId !== 'string' || typeof payload.iat !== 'number') throw new Error('Unauthorized');
+    if (await isExtensionSessionRevoked(payload.extensionId, payload.iat)) throw new Error('Unauthorized');
+  }
   return payload as VocivoSession;
 }
 

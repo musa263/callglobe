@@ -89,6 +89,10 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   }, [activeCall?.displayName, activeCall?.number, activeCall?.photoUrl]);
   if (!activeCall) return null;
   const status = activeCall.phase === 'active' ? (activeCall.onHold ? 'On hold' : 'Connected') : activeCall.phase === 'ended' ? 'Call ended' : activeCall.phase === 'failed' ? 'Could not connect' : activeCall.phase === 'ringing' ? 'Ringing' : 'Connecting';
+  const transferEnabled = Boolean(profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
+  const selectedCaller = callerNumbers.find((number) => number.phone_number === activeCall.callerId)
+    ?? callerNumbers.find((number) => number.source === 'owned' && number.status === 'active')
+    ?? callerNumbers[0];
 
   const openTransfer = async () => {
     setShowTransfer(true); setTransferError('');
@@ -147,9 +151,9 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <Control label="Speaker" active={activeCall.speaker} onPress={toggleSpeaker}>{activeCall.speaker ? <Volume2 size={25} color={colors.ink} /> : <VolumeX size={25} color={colors.text} />}</Control>
           <Control label="Add caller" disabled={Boolean(conference) || Boolean(heldCall) || activeCall.phase !== 'active'} onPress={() => setShowAddCall(true)}><UserPlus size={24} color={conference || heldCall || activeCall.phase !== 'active' ? colors.textFaint : colors.text} /></Control>
           <Control label={activeCall.onHold ? 'Resume' : 'Hold'} active={activeCall.onHold} disabled={Boolean(conference)} onPress={toggleHold}>{activeCall.onHold ? <Play size={24} color={colors.ink} fill={colors.ink} /> : <Pause size={24} color={conference ? colors.textFaint : colors.text} />}</Control>
-          <Control label={swapBusy ? 'Swapping' : 'Swap'} active={!!heldCall} disabled={!heldCall || Boolean(conference) || swapBusy} onPress={swap}>{swapBusy ? <ActivityIndicator size="small" color={colors.text} /> : <ArrowLeftRight size={24} color={heldCall ? colors.ink : colors.textFaint} />}</Control>
-          <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall ? colors.text : colors.textFaint} />}</Control>
-          <Control label="Transfer" onPress={openTransfer}><PhoneForwarded size={24} color={colors.text} /></Control>
+          <Control label={swapBusy ? 'Swapping' : 'Swap'} active={!!heldCall && activeCall.phase === 'active'} disabled={!heldCall || activeCall.phase !== 'active' || Boolean(conference) || swapBusy} onPress={swap}>{swapBusy ? <ActivityIndicator size="small" color={colors.text} /> : <ArrowLeftRight size={24} color={heldCall && activeCall.phase === 'active' ? colors.ink : colors.textFaint} />}</Control>
+          <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall || activeCall.phase !== 'active' || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall && activeCall.phase === 'active' ? colors.text : colors.textFaint} />}</Control>
+          <Control label="Transfer" disabled={!transferEnabled} onPress={openTransfer}><PhoneForwarded size={24} color={transferEnabled ? colors.text : colors.textFaint} /></Control>
         </View>
         <Pressable accessibilityLabel="End call" onPress={endCall} style={({ pressed }) => [styles.end, pressed && styles.endPressed]}><PhoneOff size={30} color={colors.white} strokeWidth={2.4} /></Pressable>
       </View>
@@ -161,7 +165,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <View style={styles.keypadBody}><Keypad compact onPress={sendDtmf} /></View>
         </View>
       </Modal>
-      <AddCallModal visible={showAddCall} rates={rates} caller={callerNumbers[0]} onClose={() => setShowAddCall(false)} onStart={startSecondCall} />
+      <AddCallModal visible={showAddCall} rates={rates} caller={selectedCaller} onClose={() => setShowAddCall(false)} onStart={startSecondCall} />
       <Modal visible={showTransfer} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowTransfer(false)}>
         <View style={styles.transferPage}><View style={styles.addHeader}><View><Text style={styles.addEyebrow}>BUSINESS CALL</Text><Text style={styles.addTitle}>Transfer to colleague</Text></View><Pressable accessibilityLabel="Close transfer" onPress={() => setShowTransfer(false)} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View><Text style={styles.transferHelp}>The caller will be connected directly to the selected extension.</Text>{!!transferError && <Text style={styles.transferError}>{transferError}</Text>}<ScrollView style={styles.transferList}>{team.map((member) => <Pressable key={member.id} disabled={!!transferBusy} onPress={() => sendTransfer(member)} style={({ pressed }) => [styles.transferRow, pressed && styles.pressed]}>{member.photoUrl ? <Image source={{ uri: member.photoUrl }} style={styles.transferPhoto} /> : <View style={styles.transferAvatar}><Text style={styles.transferInitial}>{member.name.charAt(0).toUpperCase()}</Text></View>}<View style={styles.transferCopy}><Text style={styles.transferName}>{member.name}</Text><Text style={styles.transferMeta}>Extension {member.extension} · {member.department}</Text></View>{transferBusy === member.id ? <ActivityIndicator color={colors.mint} /> : <PhoneForwarded size={19} color={colors.mint} />}</Pressable>)}</ScrollView></View>
       </Modal>

@@ -47,6 +47,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   useEffect(() => { loadIncomingRingtone().then(setRingtone).catch(() => undefined); }, []);
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+  const canManagePhoneSystem = isPreview || profile?.role === 'owner' || profile?.role === 'admin';
 
   const openProfile = () => {
     setProfileDraft({ fullName: profile?.full_name || '', jobTitle: profile?.job_title || '', department: profile?.department || '', mobile: profile?.mobile || '', location: profile?.location || '', bio: profile?.bio || '' });
@@ -122,19 +123,19 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
       <Pressable onPress={openProfile} style={styles.profile}>{profile?.photo_url ? <Image source={{ uri: profile.photo_url }} style={styles.avatarImage} /> : <View style={styles.avatar}><Text style={styles.initials}>{initials}</Text></View>}<View style={styles.profileCopy}><Text style={styles.profileName}>{profile?.full_name || 'Vocivo member'}</Text><Text style={styles.profileEmail}>{profile?.job_title || profile?.email}</Text></View>{isPreview ? <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>PREVIEW</Text></View> : <ChevronRight size={18} color={colors.textFaint} />}</Pressable>
       <Text style={styles.sectionLabel}>ACCOUNT</Text>
       <View style={styles.group}><Row icon={UserRoundPen} title="Personal profile" subtitle="Photo, name, role and contact details" onPress={openProfile} /></View>
-      <Text style={styles.sectionLabel}>CALL HANDLING</Text>
-      <View style={styles.callMode}><Pressable onPress={() => changeCallMode(false)} style={[styles.callModeButton, !business.enabled && styles.callModeActive]}><Phone size={17} color={!business.enabled ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, !business.enabled && styles.callModeTitleActive]}>Direct</Text><Text style={[styles.callModeHelp, !business.enabled && styles.callModeHelpActive]}>Ring the app</Text></View></Pressable><Pressable onPress={() => changeCallMode(true)} style={[styles.callModeButton, business.enabled && styles.callModeActive]}><Building2 size={17} color={business.enabled ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, business.enabled && styles.callModeTitleActive]}>Business</Text><Text style={[styles.callModeHelp, business.enabled && styles.callModeHelpActive]}>Greeting and extensions</Text></View></Pressable>{switchingMode && <View style={styles.callModeBusy}><ActivityIndicator size="small" color={colors.mint} /></View>}</View>
+      {canManagePhoneSystem && <><Text style={styles.sectionLabel}>CALL HANDLING</Text>
+      <View style={styles.callMode}><Pressable onPress={() => changeCallMode(false)} style={[styles.callModeButton, !business.enabled && styles.callModeActive]}><Phone size={17} color={!business.enabled ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, !business.enabled && styles.callModeTitleActive]}>Direct</Text><Text style={[styles.callModeHelp, !business.enabled && styles.callModeHelpActive]}>Ring the app</Text></View></Pressable><Pressable onPress={() => changeCallMode(true)} style={[styles.callModeButton, business.enabled && styles.callModeActive]}><Building2 size={17} color={business.enabled ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, business.enabled && styles.callModeTitleActive]}>Business</Text><Text style={[styles.callModeHelp, business.enabled && styles.callModeHelpActive]}>Greeting and extensions</Text></View></Pressable>{switchingMode && <View style={styles.callModeBusy}><ActivityIndicator size="small" color={colors.mint} /></View>}</View></>}
       <Text style={styles.sectionLabel}>PHONE SYSTEM</Text>
       <View style={styles.group}>
-        <Row icon={Building2} title="Professional Voice" subtitle={business.enabled ? `${business.companyName} IVR is active` : 'Greeting, departments and waiting message'} onPress={() => setShowBusiness(true)} />
-        <Row icon={Voicemail} title="Voicemail" subtitle={business.voicemailEnabled ? `On after ${business.voicemailDelaySeconds} seconds` : 'Off · unanswered calls keep ringing'} onPress={() => { setDraft(business); setError(''); setShowVoicemail(true); }} />
+        {canManagePhoneSystem && <Row icon={Building2} title="Professional Voice" subtitle={business.enabled ? `${business.companyName} IVR is active` : 'Greeting, departments and waiting message'} onPress={() => setShowBusiness(true)} />}
+        {canManagePhoneSystem && <Row icon={Voicemail} title="Voicemail" subtitle={business.voicemailEnabled ? `On after ${business.voicemailDelaySeconds} seconds` : 'Off · unanswered calls keep ringing'} onPress={() => { setDraft(business); setError(''); setShowVoicemail(true); }} />}
         <Row icon={BellRing} title="Incoming ringtone" subtitle={ringtoneOptions.find((option) => option.id === ringtone)?.label} onPress={() => { setError(''); setShowRingtones(true); }} />
-        <Row icon={CreditCard} title="Calling balance" subtitle={`${profile?.currency || 'USD'} ${Number(profile?.balance ?? 0).toFixed(2)} available`} onPress={onWallet} />
+        <Row icon={CreditCard} title="Calling balance" subtitle={profile?.balance == null ? 'Managed by your organization' : `${profile?.currency || 'USD'} ${Number(profile.balance).toFixed(2)} available`} onPress={onWallet} />
         <Row icon={Radio} title="Travel data eSIM" subtitle={network?.isConnected ? `${network.type === 'cellular' ? 'Using cellular data' : 'Connected by Wi-Fi'} · carrier activation` : 'No internet connection · carrier coverage required'} onPress={() => setShowEsim(true)} />
         <Row icon={Settings2} title="iPhone permissions" subtitle="Contacts, microphone and notifications" onPress={() => Linking.openSettings()} />
       </View>
-      <Text style={styles.sectionLabel}>SECURITY</Text>
-      <View style={styles.group}><Row icon={KeyRound} title="Reset password" subtitle="Change your Vocivo sign-in password" onPress={() => { setError(''); setShowPassword(true); }} /></View>
+      {profile?.role === 'owner' && <><Text style={styles.sectionLabel}>SECURITY</Text>
+      <View style={styles.group}><Row icon={KeyRound} title="Reset password" subtitle="Change your Vocivo sign-in password" onPress={() => { setError(''); setShowPassword(true); }} /></View></>}
       <View style={styles.group}><Row icon={LogOut} title={isPreview ? 'Exit preview' : 'Sign out'} danger onPress={signOut} /></View>
       <Text style={styles.version}>Vocivo 1.0.0 · Build {Constants.nativeBuildVersion || 'development'}</Text>
     </ScrollView>

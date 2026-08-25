@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { get, list, put } from '@vercel/blob';
+import { del, get, list, put } from '@vercel/blob';
 import { requiredEnv } from './http.js';
 
 export type StoredVoicemail = {
@@ -12,6 +12,7 @@ export type StoredVoicemail = {
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
+  organizationId?: string;
 };
 
 function key() {
@@ -32,7 +33,8 @@ function decrypt(value: Buffer): StoredVoicemail {
 }
 
 export async function storeVoicemail(voicemail: StoredVoicemail) {
-  await put(`vocivo/voicemails/${voicemail.id}-${Date.now()}.bin`, encrypt(voicemail), {
+  const newestFirst = String(9_999_999_999_999 - Date.now()).padStart(13, '0');
+  await put(`vocivo/voicemails/v2/${newestFirst}-${voicemail.id}.bin`, encrypt(voicemail), {
     access: 'public',
     contentType: 'application/octet-stream',
     addRandomSuffix: true,
@@ -55,9 +57,13 @@ export async function readVoicemailAudio(pathname: string) {
   return get(pathname, { access: 'private' });
 }
 
-export async function listVoicemails() {
-  const result = await list({ prefix: 'vocivo/voicemails/', limit: 1000 });
-  const events = (await Promise.all(result.blobs.map(async (blob) => {
+export async function listVoicemails(organizationId: string) {
+  const [recent, legacy] = await Promise.all([
+    list({ prefix: 'vocivo/voicemails/v2/', limit: 1000 }),
+    list({ prefix: 'vocivo/voicemails/', limit: 1000 }),
+  ]);
+  const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
+  const events = (await Promise.all(blobs.map(async (blob) => {
     try {
       const response = await fetch(blob.url);
       return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
@@ -65,12 +71,13 @@ export async function listVoicemails() {
   }))).filter((item): item is StoredVoicemail => Boolean(item));
   const latest = new Map<string, StoredVoicemail>();
   events.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).forEach((event) => latest.set(event.id, { ...latest.get(event.id), ...event }));
-  return [...latest.values()].filter((item) => !item.deleted).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
+  return [...latest.values()].filter((item) => !item.deleted && (item.organizationId || 'primary') === organizationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
 }
 
-export async function deleteVoicemail(id: string) {
-  const existing = (await listVoicemails()).find((item) => item.id === id);
+export async function deleteVoicemail(id: string, organizationId: string) {
+  const existing = (await listVoicemails(organizationId)).find((item) => item.id === id);
   if (!existing) return false;
+  await del(existing.recordingPath).catch(() => undefined);
   await storeVoicemail({ ...existing, deleted: true, updatedAt: new Date().toISOString() });
   return true;
 }

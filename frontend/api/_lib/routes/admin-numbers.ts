@@ -2,6 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireOwner } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { telnyx } from '../telnyx.js';
+import { readPbxConfig } from '../pbx-config-store.js';
+import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
+import { getExtension } from '../pbx.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 
@@ -22,6 +25,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
     await requireOwner(req);
+    const config = await readPbxConfig();
+    const activeOrganizationId = config.activeOrganizationId;
     if (req.method === 'GET' && req.query.mode === 'search') {
       const country = text(req.query.country, 2).toUpperCase();
       if (!/^[A-Z]{2}$/.test(country)) return res.status(400).json({ error: 'Choose a two-letter country code.' });
@@ -51,15 +56,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
     if (req.method === 'GET') {
-      const [numbersResponse, ordersResponse] = await Promise.all([
+      const [numbersResponse, ordersResponse, profilesResponse] = await Promise.all([
         telnyx('/phone_numbers?page[size]=250&filter[status]=active'),
         telnyx('/number_orders?page[size]=20'),
+        telnyx('/messaging_profiles?page[size]=250'),
       ]);
       const numbersPayload = await numbersResponse.json() as { data?: Array<Record<string, any>> };
       const ordersPayload = await ordersResponse.json() as { data?: Array<Record<string, any>> };
+      const profilesPayload = await profilesResponse.json() as { data?: Array<Record<string, any>> };
       return res.status(200).json({
-        numbers: (numbersPayload.data ?? []).map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, connectionId: item.connection_id, connectionName: item.connection_name, messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at })),
+        numbers: (numbersPayload.data ?? []).map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, connectionId: item.connection_id, connectionName: item.connection_name, messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
         orders: (ordersPayload.data ?? []).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
+        messagingProfiles: (profilesPayload.data ?? []).map((item) => ({ id: item.id, name: item.name || item.id, webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' })),
       });
     }
     if (req.method === 'POST') {
@@ -75,6 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }),
       });
       const payload = await response.json() as { data?: Record<string, unknown> };
+      await Promise.all(phoneNumbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, activeOrganizationId, { destinationType: 'main' })));
       return res.status(201).json({ order: payload.data });
     }
     if (req.method === 'DELETE') {
@@ -82,12 +91,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const id = text(req.body?.id, 80);
       const phoneNumber = text(req.body?.phoneNumber, 24);
       if (!id || !/^\+[1-9]\d{6,14}$/.test(phoneNumber)) return res.status(400).json({ error: 'Phone number ID and E.164 number are required.' });
+      if (id === requiredEnv('TELNYX_PHONE_NUMBER_ID')) return res.status(409).json({ error: 'This is the primary Vocivo service number. Assign a replacement before releasing it.' });
       const currentResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
       const currentPayload = await currentResponse.json() as { data?: { phone_number?: string; deletion_lock_enabled?: boolean } };
       if (currentPayload.data?.phone_number !== phoneNumber) return res.status(409).json({ error: 'The number no longer matches this inventory record. Refresh and try again.' });
       if (currentPayload.data?.deletion_lock_enabled) return res.status(409).json({ error: 'Telnyx deletion lock is enabled for this number. Disable the lock before releasing it.' });
       const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const payload = await response.json() as { data?: Record<string, unknown> };
+      const payload = response.status === 204 ? {} : await response.json() as { data?: Record<string, unknown> };
+      await removeNumberAssignment(phoneNumber);
       return res.status(200).json({ number: payload.data, released: true });
     }
     const id = text(req.body?.id, 80);
@@ -97,8 +108,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.body?.connectionId !== undefined) body.connection_id = text(req.body.connectionId, 80) || null;
     if (req.body?.messagingProfileId !== undefined) body.messaging_profile_id = text(req.body.messagingProfileId, 80) || null;
     if (Array.isArray(req.body?.tags)) body.tags = req.body.tags.map((item: unknown) => text(item, 50)).filter(Boolean).slice(0, 20);
+    const organizationId = text(req.body?.organizationId, 50);
+    if (organizationId && !config.organizations.some((item) => item.id === organizationId && item.status === 'active')) return res.status(400).json({ error: 'Choose an active organization.' });
+    const destinationType = ['main', 'extension', 'ring_group', 'queue', 'ivr'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr' : 'main';
+    const destinationId = text(req.body?.destinationId, 80);
+    if (organizationId && destinationType !== 'main' && !destinationId) return res.status(400).json({ error: 'Choose an inbound destination.' });
+    if (organizationId && destinationType === 'extension') {
+      const extension = await getExtension(destinationId).catch(() => null);
+      if (!extension || extension.status !== 'active' || extension.organizationId !== organizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
+    }
+    if (organizationId && ['ring_group', 'queue', 'ivr'].includes(destinationType)) {
+      const collection = destinationType === 'ring_group' ? config.callHandling.ringGroups : destinationType === 'queue' ? config.callHandling.queues : config.callHandling.ivrs;
+      if (!collection.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured inbound destination.' });
+    }
     const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
     const payload = await response.json() as { data?: Record<string, unknown> };
+    const phoneNumber = text((payload.data as { phone_number?: unknown } | undefined)?.phone_number, 24);
+    if (phoneNumber && organizationId) {
+      await assignNumberToOrganization(phoneNumber, organizationId, { destinationType, destinationId: destinationId || undefined });
+    }
     return res.status(200).json({ number: payload.data });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });

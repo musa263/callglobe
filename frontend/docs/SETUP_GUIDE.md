@@ -1,18 +1,8 @@
-# Frontend Setup
+# Vocivo Web and API Setup
 
-The frontend is a Vite React app that authenticates with Supabase and starts calls through the Twilio Voice SDK.
+The `frontend` directory contains the Vite web phone, React admin console, and Vercel Functions API. It uses Telnyx and does not require Supabase or Twilio.
 
-## Env
-
-Create `frontend/.env.local`:
-
-```text
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=...
-VITE_APP_URL=http://localhost:3000
-```
-
-## Start
+## Local web app
 
 ```bash
 cd frontend
@@ -20,19 +10,44 @@ npm install
 npm run dev
 ```
 
-## Required Backend Pieces
+Vite prints the local URL, normally `http://localhost:5173`.
 
-The frontend expects these edge functions to be deployed:
+## Required server environment
 
-- `create-checkout`
-- `twilio-token`
-- `webhook-stripe`
-- `webhook-twilio`
+Configure these as Vercel server secrets. Do not expose Telnyx credentials through `VITE_` variables.
 
-It also expects all SQL migrations in `backend/supabase/migrations/` to be applied.
+```text
+APP_ADMIN_EMAIL=
+APP_ADMIN_NAME=
+APP_PASSWORD_HASH=
+AUTH_SECRET=
+BLOB_READ_WRITE_TOKEN=
+TELNYX_API_KEY=
+TELNYX_CONNECTION_ID=
+TELNYX_CREDENTIAL_ID=
+TELNYX_CALL_CONTROL_APP_ID=
+TELNYX_PHONE_NUMBER_ID=
+TELNYX_SIP_URI=
+TELNYX_SMS_FROM=
+TELNYX_PUBLIC_KEY=
+VOICE_WEBHOOK_SECRET=
+MESSAGING_WEBHOOK_SECRET=
+VITE_APP_URL=https://vocivo.vercel.app
+```
 
-## Runtime Behavior
+Optional voice-generation and payment integrations have their own server-side keys. The app falls back to carrier voice synthesis when the configured Vocivo voice provider is unavailable.
 
-- Recharge returns to `/?tab=recharge&success=true` or `/?tab=recharge&canceled=true`.
-- Call history and balance refresh from backend state after a call ends.
-- Call logs and billing are created server-side from Twilio webhooks.
+## Verification
+
+```bash
+cd frontend
+npm run check:api
+npm run build
+node --test --import tsx api/_lib/*.test.ts
+```
+
+Deploy the web app and API together:
+
+```bash
+npx vercel --prod
+```

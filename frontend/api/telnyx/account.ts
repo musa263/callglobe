@@ -8,11 +8,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
-    await requireSession(req);
+    const session = await requireSession(req);
     const response = await telnyx('/balance');
     const payload = await response.json();
     return res.status(200).json({
-      balance: Number(payload?.data?.available_credit ?? payload?.data?.balance ?? 0),
+      balance: session.sub === 'vocivo-owner' ? Number(payload?.data?.available_credit ?? payload?.data?.balance ?? 0) : null,
+      can_call: true,
       currency: payload?.data?.currency ?? 'USD',
       pending: Number(payload?.data?.pending ?? 0),
       rates: mobileRates,

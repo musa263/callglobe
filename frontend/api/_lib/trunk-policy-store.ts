@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { put } from '@vercel/blob';
+import { readFreshPublicBlob } from './blob-read.js';
 import { requiredEnv } from './http.js';
 
 export type TrunkPolicy = {
@@ -60,11 +61,9 @@ export function normalizeTrunkPolicy(id: string, input: Partial<TrunkPolicy>, cu
 }
 
 export async function readTrunkPolicies() {
-  const result = await list({ prefix: pathname, limit: 1 });
-  if (!result.blobs[0]) return {} as Record<string, TrunkPolicy>;
   try {
-    const response = await fetch(result.blobs[0].url);
-    return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : {};
+    const value = await readFreshPublicBlob(pathname);
+    return value ? decrypt(value) : {};
   } catch {
     return {};
   }

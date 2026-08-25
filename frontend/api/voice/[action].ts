@@ -8,8 +8,10 @@ import video from '../_lib/routes/voice-video.js';
 import voicemails from '../_lib/routes/voice-voicemails.js';
 import merge from '../_lib/routes/voice-merge.js';
 import status from '../_lib/routes/voice-status.js';
+import route from '../_lib/routes/voice-route.js';
+import history from '../_lib/routes/voice-history.js';
 
-const routes = { conferences, settings, webhook, directory, transfer, video, voicemails, merge, status } as const;
+const routes = { conferences, settings, webhook, directory, transfer, video, voicemails, merge, status, route, history } as const;
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const action = Array.isArray(req.query.action) ? req.query.action[0] : req.query.action;

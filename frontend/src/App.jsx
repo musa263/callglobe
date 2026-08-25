@@ -286,13 +286,33 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     let active = true;
-    Promise.all([api('/api/auth/session'), api('/api/telnyx/account'), api('/api/telnyx/numbers'), api('/api/telnyx/verified-numbers'), api('/api/auth/profile')]).then(([sessionData, accountData, numberData, verifiedData, userData]) => {
-      if (!active) return;
-      const owned = numberData.numbers || [];
-      const verified = verifiedData.numbers || [];
-      const details = userData.profile || {};
-      setProfile({ ...sessionData.profile, full_name: details.fullName || sessionData.profile.full_name, photo_url: details.photoUrl, job_title: details.jobTitle, department: details.department, mobile: details.mobile, location: details.location, bio: details.bio }); setBalance(accountData.balance || 0); setRates(buildDialingDirectory(accountData.rates || [])); setNumbers(owned); setVerifiedNumbers(verified); setSelectedNumber(owned[0] || verified[0] || null);
-    }).catch(() => { clearSession(); setSession(null); }).finally(() => active && setLoading(false));
+    setLoading(true);
+    (async () => {
+      try {
+        const sessionData = await api('/api/auth/session');
+        const [accountData, numberData, verifiedData, userData] = await Promise.all([
+          api('/api/telnyx/account').catch(() => ({ balance: null, rates: [] })),
+          api('/api/telnyx/numbers').catch(() => ({ numbers: [] })),
+          api('/api/telnyx/verified-numbers').catch(() => ({ numbers: [] })),
+          api('/api/auth/profile').catch(() => ({ profile: {} })),
+        ]);
+        if (!active) return;
+        const owned = numberData.numbers || [];
+        const verified = verifiedData.numbers || [];
+        const details = userData.profile || {};
+        setProfile({ ...sessionData.profile, full_name: details.fullName || sessionData.profile.full_name, photo_url: details.photoUrl, job_title: details.jobTitle, department: details.department, mobile: details.mobile, location: details.location, bio: details.bio });
+        setBalance(Number(accountData.balance) || 0);
+        setRates(buildDialingDirectory(accountData.rates || []));
+        setNumbers(owned);
+        setVerifiedNumbers(verified);
+        setSelectedNumber(owned[0] || verified[0] || null);
+      } catch {
+        clearSession();
+        if (active) setSession(null);
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
     return () => { active = false; };
   }, [session]);
   useEffect(() => {

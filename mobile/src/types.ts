@@ -45,6 +45,7 @@ export type CallerNumber = {
   country_code: string | null;
   status: string;
   receives_calls: boolean;
+  messaging_enabled?: boolean;
   source?: 'owned' | 'verified';
 };
 
@@ -72,7 +73,8 @@ export type Profile = {
   id: string;
   email: string;
   full_name: string | null;
-  balance: number;
+  balance: number | null;
+  can_call?: boolean;
   currency: string;
   extension?: string;
   organization_id?: string;
@@ -103,6 +105,7 @@ export type ActiveCall = {
   isIncoming?: boolean;
   photoUrl?: string;
   routeId?: string;
+  callerId?: string;
 };
 
 export type MergedConference = {

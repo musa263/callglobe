@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, list, put } from '@vercel/blob';
+import { del, put } from '@vercel/blob';
+import { readFreshPublicBlob } from './blob-read.js';
 import { requiredEnv } from './http.js';
 
 export type OutboundCallPair = {
@@ -32,11 +33,8 @@ function decrypt(value: Buffer) {
 }
 async function readPath(pathname: string) {
   try {
-    const result = await list({ prefix: pathname, limit: 1 });
-    const blob = result.blobs[0];
-    if (!blob) return null;
-    const response = await fetch(blob.url);
-    return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+    const value = await readFreshPublicBlob(pathname);
+    return value ? decrypt(value) : null;
   } catch {
     return null;
   }
@@ -59,7 +57,5 @@ export function readOutboundCallPairByRoute(id: string) { return readPath(path('
 export async function clearOutboundCallPair(pair: OutboundCallPair) {
   const paths = [path('client', pair.clientCallControlId), path('destination', pair.destinationCallControlId)];
   if (pair.routeId) paths.push(path('route', pair.routeId));
-  const blobs = await Promise.all(paths.map((pathname) => list({ prefix: pathname, limit: 1 })));
-  const urls = blobs.flatMap((result) => result.blobs.map((blob) => blob.url));
-  if (urls.length) await del(urls);
+  await del(paths);
 }

@@ -25,6 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         email,
         full_name: process.env.APP_ADMIN_NAME || 'Vocivo Owner',
         currency: 'USD',
+        role: 'owner',
       },
     });
   } catch (error) {

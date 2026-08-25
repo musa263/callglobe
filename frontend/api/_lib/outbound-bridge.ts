@@ -23,6 +23,9 @@ export async function bridgeOutboundCalls(
     try {
       await action(clientCallControlId, 'bridge', {
         call_control_id: destinationCallControlId,
+        prevent_double_bridge: true,
+        park_after_unbridge: 'self',
+        hold_after_unbridge: true,
         command_id: `${eventId}-bridge-${attempt + 1}`,
       });
       return;

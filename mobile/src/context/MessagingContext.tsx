@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../lib/api';
 import type { SmsMessage } from '../types';
+import { useAuth } from './AuthContext';
 
 type MessagingContextValue = {
   messages: SmsMessage[];
@@ -11,40 +12,45 @@ type MessagingContextValue = {
   suggestReplies: (input: { draft: string; recipient: string; companyName?: string; tone?: string; context?: string[] }) => Promise<string[]>;
 };
 
-const storageKey = 'vocivo.messages.v1';
+const storageKey = (userId: string) => `vocivo.messages.v2.${userId}`;
 const MessagingContext = createContext<MessagingContextValue | null>(null);
 const e164 = /^\+[1-9]\d{6,14}$/;
 
 export function MessagingProvider({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, profile, callerNumbers } = useAuth();
   const [messages, setMessages] = useState<SmsMessage[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refreshMessages = useCallback(async () => {
+    if (!isAuthenticated || !profile?.id) { setMessages([]); setLoading(false); return; }
     try {
       const result = await api.get<{ messages: SmsMessage[] }>('/api/telnyx/messages');
       setMessages((current) => {
         const localPending = current.filter((message) => message.id.startsWith('local-') || message.status === 'failed');
         const remote = (result.messages ?? []).map((message) => ({ ...message, direction: message.direction ?? 'outbound' as const }));
         const merged = [...localPending, ...remote].filter((message, index, all) => all.findIndex((item) => item.id === message.id) === index).slice(0, 200);
-        AsyncStorage.setItem(storageKey, JSON.stringify(merged)).catch(() => undefined);
+        AsyncStorage.setItem(storageKey(profile.id), JSON.stringify(merged)).catch(() => undefined);
         return merged;
       });
     } finally { setLoading(false); }
-  }, []);
+  }, [isAuthenticated, profile?.id]);
 
   useEffect(() => {
-    AsyncStorage.getItem(storageKey).then((value) => {
+    setMessages([]);
+    setLoading(true);
+    if (!isAuthenticated || !profile?.id) { setLoading(false); return; }
+    AsyncStorage.getItem(storageKey(profile.id)).then((value) => {
       if (value) setMessages((JSON.parse(value) as SmsMessage[]).map((message) => ({ ...message, direction: message.direction ?? 'outbound' })));
     }).catch(() => undefined).finally(() => refreshMessages().catch(() => setLoading(false)));
-  }, [refreshMessages]);
+  }, [isAuthenticated, profile?.id, refreshMessages]);
 
   const persist = useCallback((update: (current: SmsMessage[]) => SmsMessage[]) => {
     setMessages((current) => {
       const next = update(current).slice(0, 200);
-      AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => undefined);
+      if (profile?.id) AsyncStorage.setItem(storageKey(profile.id), JSON.stringify(next)).catch(() => undefined);
       return next;
     });
-  }, []);
+  }, [profile?.id]);
 
   const sendMessage = useCallback(async (to: string, text: string, contactName?: string) => {
     const normalized = to.replace(/[\s()-]/g, '');
@@ -56,14 +62,16 @@ export function MessagingProvider({ children }: { children: React.ReactNode }) {
     const draft: SmsMessage = { id: localId, to: normalized, contactName, text: body, status: 'sending', direction: 'outbound', createdAt: new Date().toISOString() };
     persist((current) => [draft, ...current]);
     try {
-      const result = await api.post<{ id: string; status?: string; created_at?: string }>('/api/telnyx/messages', { to: normalized, text: body });
+      const sender = callerNumbers.find((number) => number.source === 'owned' && number.messaging_enabled);
+      if (!sender) throw new Error('No SMS-enabled number is assigned to this account. Ask an administrator to attach a messaging profile.');
+      const result = await api.post<{ id: string; status?: string; created_at?: string }>('/api/telnyx/messages', { to: normalized, text: body, from: sender.phone_number });
       persist((current) => current.map((message) => message.id === localId ? { ...message, id: result.id || localId, status: 'sent', createdAt: result.created_at || message.createdAt } : message));
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Message could not be sent.';
       persist((current) => current.map((message) => message.id === localId ? { ...message, status: 'failed', error: reason } : message));
       throw error;
     }
-  }, [persist]);
+  }, [callerNumbers, persist]);
 
   const suggestReplies = useCallback(async (input: { draft: string; recipient: string; companyName?: string; tone?: string; context?: string[] }) => {
     const result = await api.post<{ suggestions: string[] }>('/api/ai/replies', {

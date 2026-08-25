@@ -3,6 +3,8 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { requireSession } from '../_lib/auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
 import { telnyx, TelnyxApiError } from '../_lib/telnyx.js';
+import { readPbxConfig } from '../_lib/pbx-config-store.js';
+import { assignNumberToOrganization, sessionCanAccessNumber, sessionOrganizationId } from '../_lib/tenancy.js';
 
 const e164Pattern = /^\+[1-9]\d{6,14}$/;
 
@@ -16,13 +18,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!['GET', 'POST', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'DELETE']);
 
   try {
-    await requireSession(req);
+    const session = await requireSession(req);
+    const config = await readPbxConfig();
+    const organizationId = sessionOrganizationId(session, config);
 
     if (req.method === 'GET') {
       const response = await telnyx('/verified_numbers?page[size]=250');
       const payload = await response.json() as { data?: Array<{ phone_number: string; verified_at?: string }> };
       return res.status(200).json({
-        numbers: (payload.data ?? []).map((number) => ({
+        numbers: (payload.data ?? []).filter((number) => sessionCanAccessNumber(session, number.phone_number, config)).map((number) => ({
           id: `verified-${number.phone_number}`,
           phone_number: number.phone_number,
           label: 'Verified caller ID',
@@ -36,6 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const phoneNumber = phoneNumberFrom(req);
     if (!e164Pattern.test(phoneNumber)) return res.status(400).json({ error: 'Enter a complete number in international format, for example +966501234567.' });
+    if (req.method === 'DELETE' && !sessionCanAccessNumber(session, phoneNumber, config)) return res.status(403).json({ error: 'This caller ID belongs to another organization.' });
 
     if (req.method === 'DELETE') {
       await telnyx(`/verified_numbers/${encodeURIComponent(phoneNumber)}`, { method: 'DELETE' });
@@ -50,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         body: JSON.stringify({ phone_number: phoneNumber, verification_method: verificationMethod }),
       });
       const payload = await response.json();
+      await assignNumberToOrganization(phoneNumber, organizationId);
       console.info(`Verified number request accepted: method=${verificationMethod}, destination=***${phoneNumber.slice(-4)}`);
       return res.status(200).json({ pending: true, phone_number: phoneNumber, verification_method: verificationMethod, ...payload });
     }

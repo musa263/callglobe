@@ -2,11 +2,13 @@ import { requiredEnv } from './http.js';
 
 export class TelnyxApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.name = 'TelnyxApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -23,11 +25,13 @@ export async function telnyx(path: string, init: RequestInit = {}) {
     const detail = await response.text();
     console.error(`Telnyx request failed ${response.status}: ${detail}`);
     let message = 'Telnyx could not complete this request.';
+    let code: string | undefined;
     try {
       const payload = JSON.parse(detail);
       message = payload?.errors?.[0]?.detail || payload?.errors?.[0]?.title || message;
+      code = payload?.errors?.[0]?.code ? String(payload.errors[0].code) : undefined;
     } catch { /* Telnyx returned a non-JSON error. */ }
-    throw new TelnyxApiError(response.status, message);
+    throw new TelnyxApiError(response.status, message, code);
   }
   return response;
 }

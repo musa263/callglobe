@@ -5,7 +5,7 @@ import './enroll.css';
 
 function EnrollmentPage() {
   const [opened, setOpened] = useState(false);
-  const token = useMemo(() => new URLSearchParams(location.hash.replace(/^#/, '')).get('token') || '', []);
+  const token = useMemo(() => new URLSearchParams(location.search).get('token') || new URLSearchParams(location.hash.replace(/^#/, '')).get('token') || '', []);
   const appUrl = token ? `vocivo://enroll?token=${encodeURIComponent(token)}` : '';
 
   return <main className="enroll-page">

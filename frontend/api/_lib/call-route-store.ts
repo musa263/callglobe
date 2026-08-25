@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, list, put } from '@vercel/blob';
+import { del, put } from '@vercel/blob';
+import { readFreshPublicBlob } from './blob-read.js';
 import { requiredEnv } from './http.js';
 
 type ActiveCallRoute = { extensionId: string; parentCallControlId: string; agentCallControlId: string; updatedAt: string };
@@ -20,13 +21,12 @@ export async function saveActiveCallRoute(route: ActiveCallRoute) {
 }
 
 export async function readActiveCallRoute(extensionId: string) {
-  const result = await list({ prefix: `vocivo/call-routes/${extensionId}.bin`, limit: 1 });
-  const blob = result.blobs[0];
-  if (!blob) return null;
-  try { const response = await fetch(blob.url); return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null; } catch { return null; }
+  try {
+    const value = await readFreshPublicBlob(`vocivo/call-routes/${extensionId}.bin`);
+    return value ? decrypt(value) : null;
+  } catch { return null; }
 }
 
 export async function clearActiveCallRoute(extensionId: string) {
-  const result = await list({ prefix: `vocivo/call-routes/${extensionId}.bin`, limit: 10 });
-  if (result.blobs.length) await del(result.blobs.map((blob) => blob.url));
+  await del(`vocivo/call-routes/${extensionId}.bin`);
 }

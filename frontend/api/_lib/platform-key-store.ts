@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { put } from '@vercel/blob';
 import type { VercelRequest } from '@vercel/node';
+import { readFreshPublicBlob } from './blob-read.js';
 import { requiredEnv } from './http.js';
 
 export type PlatformScope = 'calls:read' | 'calls:write' | 'extensions:read' | 'numbers:read' | 'numbers:write' | 'events:read';
@@ -15,9 +16,10 @@ function encrypt(value: PlatformKey[]) { const iv = randomBytes(12); const ciphe
 function decrypt(value: Buffer) { const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12)); decipher.setAuthTag(value.subarray(12, 28)); return JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as PlatformKey[]; }
 
 export async function readPlatformKeys() {
-  const result = await list({ prefix: pathname, limit: 1 });
-  if (!result.blobs[0]) return [] as PlatformKey[];
-  try { const response = await fetch(result.blobs[0].url); return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : []; } catch { return []; }
+  try {
+    const value = await readFreshPublicBlob(pathname);
+    return value ? decrypt(value) : [] as PlatformKey[];
+  } catch { return []; }
 }
 
 async function writePlatformKeys(value: PlatformKey[]) { await put(pathname, encrypt(value), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true }); }

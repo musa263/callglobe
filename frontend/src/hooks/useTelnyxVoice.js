@@ -137,6 +137,7 @@ export function useTelnyxVoice(token, enabled) {
           setRoutePhase(result.phase);
           stopRingback();
           if (result.failureCause) setError(`Call ended: ${String(result.failureCause).replaceAll('_', ' ')}.`);
+          try { callRef.current?.hangup?.(); } catch { /* already closed */ }
           return;
         }
       } catch (routeError) {
@@ -148,6 +149,11 @@ export function useTelnyxVoice(token, enabled) {
       }
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
+    if (routePollRef.current === generation) {
+      stopRingback();
+      setError('Call setup timed out. Please try again.');
+      try { callRef.current?.hangup?.(); } catch { /* already closed */ }
+    }
   }, [stopRingback]);
 
   const startCall = useCallback(async (destinationNumber, callerNumber) => {
@@ -156,15 +162,17 @@ export function useTelnyxVoice(token, enabled) {
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
     startRingback();
     try {
+      const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination: destinationNumber, callerId: callerNumber, flow: 'outbound' } });
       const newCall = clientRef.current?.newCall({
         destinationNumber,
-        callerNumber,
+        callerNumber: reservation.callerId,
         callerName: 'Vocivo',
         customHeaders: [
           { name: 'X-Vocivo-Flow', value: 'outbound' },
           { name: 'X-Vocivo-Destination', value: destinationNumber },
           { name: 'X-Vocivo-Route-ID', value: routeId },
-          ...(callerNumber ? [{ name: 'X-Vocivo-Caller-ID', value: callerNumber }] : []),
+          { name: 'X-Vocivo-Route-Token', value: reservation.routeToken },
+          ...(reservation.callerId ? [{ name: 'X-Vocivo-Caller-ID', value: reservation.callerId }] : []),
         ],
         remoteElement: 'remoteMedia',
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -187,6 +195,7 @@ export function useTelnyxVoice(token, enabled) {
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
     startRingback();
     try {
+      const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination, flow: 'internal' } });
       const newCall = clientRef.current?.newCall({
         destinationNumber: destination,
         callerName: displayName || 'Vocivo extension',
@@ -194,6 +203,7 @@ export function useTelnyxVoice(token, enabled) {
           { name: 'X-Vocivo-Flow', value: 'internal' },
           { name: 'X-Vocivo-Destination', value: destination },
           { name: 'X-Vocivo-Route-ID', value: routeId },
+          { name: 'X-Vocivo-Route-Token', value: reservation.routeToken },
         ],
         remoteElement: 'remoteMedia',
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },

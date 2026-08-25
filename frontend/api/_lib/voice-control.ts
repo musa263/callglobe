@@ -2,15 +2,27 @@ import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
 
 export type VoiceState = {
-  flow: 'conference_host' | 'conference_guest' | 'outbound_destination' | 'api_outbound' | 'ivr' | 'extension' | 'agent' | 'voicemail_prompt' | 'voicemail_recording';
+  flow: 'conference_host' | 'conference_guest' | 'outbound_destination' | 'api_outbound' | 'ivr' | 'configured_ivr' | 'extension' | 'agent' | 'queue_wait' | 'queue_agent' | 'voicemail_prompt' | 'voicemail_recording' | 'unavailable_prompt';
   room?: string;
   conferenceId?: string;
   participants?: string[];
   department?: string;
   parentCallControlId?: string;
   targetExtensionId?: string;
+  targetExtensionIds?: string[];
   callerNumber?: string;
   callerName?: string;
+  organizationId?: string;
+  routeId?: string;
+  inboundNumber?: string;
+  callerId?: string;
+  handlingId?: string;
+  queueName?: string;
+  voicemailEnabled?: boolean;
+  forwardBusy?: string;
+  forwardNoAnswer?: string;
+  forwardUnavailable?: string;
+  forwardingDepth?: number;
 };
 
 export function encodeVoiceState(state: VoiceState) {
@@ -22,7 +34,7 @@ export function decodeVoiceState(value: unknown): VoiceState | null {
   try { return JSON.parse(Buffer.from(value, 'base64').toString('utf8')) as VoiceState; } catch { return null; }
 }
 
-export async function dialCall(input: { to: string; state: VoiceState; from?: string; fromDisplayName?: string; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
+export async function dialCall(input: { to: string | string[]; state: VoiceState; from?: string; fromDisplayName?: string; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
   const response = await telnyx('/calls', {
     method: 'POST',
     body: JSON.stringify({

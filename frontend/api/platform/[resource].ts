@@ -4,9 +4,16 @@ import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../_lib
 import { findExtension, listExtensions } from '../_lib/pbx.js';
 import { callAction, dialCall } from '../_lib/voice-control.js';
 import { telnyx } from '../_lib/telnyx.js';
+import { assertCallerIdForOrganization } from '../_lib/phone-number-access.js';
+import { readPbxConfig } from '../_lib/pbx-config-store.js';
+import { assignNumberToOrganization, numberOrganizationId } from '../_lib/tenancy.js';
+import { decodeVoiceState } from '../_lib/voice-control.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
+function organizationFromCarrierRecord(item: Record<string, any>) {
+  return decodeVoiceState(item.client_state || item.payload?.client_state)?.organizationId;
+}
 
 function scopeFor(resource: string, method: string): PlatformScope | null {
   if (resource === 'health') return 'calls:read';
@@ -35,17 +42,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (resource === 'extensions') return res.status(200).json({ data: await listExtensions(apiKey.organizationId) });
     if (resource === 'calls' && method === 'GET') {
       const response = await telnyx(`/connections/${requiredEnv('TELNYX_CALL_CONTROL_APP_ID')}/active_calls?page[size]=100`);
-      const payload = await response.json();
-      return res.status(200).json(payload);
+      const payload = await response.json() as { data?: Array<Record<string, any>> };
+      return res.status(200).json({ ...payload, data: (payload.data ?? []).filter((item) => organizationFromCarrierRecord(item) === apiKey.organizationId) });
     }
     if (resource === 'calls' && method === 'POST') {
       const requested = text(req.body?.to, 200);
       const internal = /^\d{2,5}$/.test(requested) ? await findExtension(requested, apiKey.organizationId) : null;
       const to = internal ? `sip:${internal.sipUsername}@sip.telnyx.com` : requested;
       if (!internal && !e164.test(to)) return res.status(400).json({ error: 'Destination must be an organization extension or E.164 number.' });
-      const from = text(req.body?.from, 24);
+      const from = text(req.body?.from, 24) || requiredEnv('TELNYX_SMS_FROM');
       if (from && !e164.test(from)) return res.status(400).json({ error: 'Caller ID must use E.164 format.' });
-      const result = await dialCall({ to, from: from || undefined, fromDisplayName: text(req.body?.displayName, 80) || 'Vocivo API', state: { flow: 'api_outbound' }, commandId: text(req.body?.commandId, 80) || crypto.randomUUID(), timeoutSeconds: Number(req.body?.timeoutSeconds) || 45 });
+      await assertCallerIdForOrganization(from, apiKey.organizationId);
+      const result = await dialCall({ to, from, fromDisplayName: text(req.body?.displayName, 80) || 'Vocivo API', state: { flow: 'api_outbound', organizationId: apiKey.organizationId }, commandId: text(req.body?.commandId, 80) || crypto.randomUUID(), timeoutSeconds: Number(req.body?.timeoutSeconds) || 45 });
       return res.status(201).json({ data: { ...result.data, destination: requested, internal: Boolean(internal) } });
     }
     if (resource === 'calls' && method === 'PATCH') {
@@ -61,6 +69,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         play: { endpoint: 'playback_start', body: { audio_url: text(req.body?.audioUrl, 500) } },
       };
       if (!callControlId || !actions[action]) return res.status(400).json({ error: 'Call control ID and supported action are required.' });
+      const activeResponse = await telnyx(`/connections/${requiredEnv('TELNYX_CALL_CONTROL_APP_ID')}/active_calls?page[size]=100`);
+      const activePayload = await activeResponse.json() as { data?: Array<Record<string, any>> };
+      const ownedCall = (activePayload.data ?? []).find((item) => (item.call_control_id === callControlId || item.id === callControlId) && organizationFromCarrierRecord(item) === apiKey.organizationId);
+      if (!ownedCall) return res.status(404).json({ error: 'Call not found for this organization.' });
       await callAction(callControlId, actions[action].endpoint, { ...actions[action].body, command_id: text(req.body?.commandId, 80) || crypto.randomUUID() });
       return res.status(200).json({ data: { callControlId, action, accepted: true } });
     }
@@ -70,20 +82,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? `/available_phone_numbers?filter[country_code]=${encodeURIComponent(country)}&page[size]=30`
         : '/phone_numbers?page[size]=250&filter[status]=active';
       const response = await telnyx(path);
-      return res.status(200).json(await response.json());
+      const payload = await response.json() as { data?: Array<Record<string, any>> };
+      if (country) return res.status(200).json(payload);
+      const config = await readPbxConfig();
+      return res.status(200).json({ ...payload, data: (payload.data ?? []).filter((item) => numberOrganizationId(item.phone_number || '', config) === apiKey.organizationId) });
     }
     if (resource === 'numbers' && method === 'POST') {
       if (req.body?.confirmPurchase !== true) return res.status(400).json({ error: 'Explicit purchase confirmation is required.' });
       const numbers = Array.isArray(req.body?.phoneNumbers) ? req.body.phoneNumbers.map((item: unknown) => text(item, 24)).filter((item: string) => e164.test(item)).slice(0, 10) : [];
       if (!numbers.length) return res.status(400).json({ error: 'At least one valid phone number is required.' });
       const response = await telnyx('/number_orders', { method: 'POST', body: JSON.stringify({ phone_numbers: numbers.map((phone_number: string) => ({ phone_number })), connection_id: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'), customer_reference: text(req.body?.customerReference, 100) || `Vocivo API ${apiKey.id}` }) });
-      return res.status(201).json(await response.json());
+      const payload = await response.json();
+      await Promise.all(numbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, apiKey.organizationId)));
+      return res.status(201).json(payload);
     }
     if (resource === 'events') {
       const query = new URLSearchParams({ 'page[size]': '100' });
       const callLegId = text(req.query.callLegId, 500); if (callLegId) query.set('filter[call_leg_id]', callLegId);
       const response = await telnyx(`/call_events?${query}`);
-      return res.status(200).json(await response.json());
+      const payload = await response.json() as { data?: Array<Record<string, any>> };
+      return res.status(200).json({ ...payload, data: (payload.data ?? []).filter((item) => organizationFromCarrierRecord(item) === apiKey.organizationId) });
     }
     return res.status(404).json({ error: 'Not found' });
   } catch (error) {
