@@ -70,6 +70,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!callControlId) return res.status(200).json({ received: true });
 
     const parkedFlow = customHeader(payload, 'X-Vocivo-Flow');
+    const isInboundEntryCall = !state
+      && payload?.direction === 'incoming'
+      && payload?.connection_id === requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
     const isParkedVocivoClient = payload?.connection_id === requiredEnv('TELNYX_CONNECTION_ID')
       && payload?.direction === 'outgoing'
       && ['outbound', 'internal'].includes(parkedFlow);
@@ -100,9 +103,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ received: true });
     }
 
-    if (eventType === 'call.answered' && state?.flow === 'outbound_destination' && state.parentCallControlId) {
-      await callAction(state.parentCallControlId, 'bridge', { call_control_id: callControlId, command_id: `${eventId}-bridge` });
-      return res.status(200).json({ received: true });
+    if (eventType === 'call.answered' && (state?.flow === 'outbound_destination' || payload?.direction === 'outgoing')) {
+      const pair = await readOutboundCallPairByDestination(callControlId);
+      const parentCallControlId = state?.flow === 'outbound_destination' ? state.parentCallControlId : pair?.clientCallControlId;
+      if (parentCallControlId) {
+        await callAction(parentCallControlId, 'bridge', { call_control_id: callControlId, command_id: `${eventId}-bridge` });
+        return res.status(200).json({ received: true });
+      }
     }
 
     if (eventType === 'call.hangup' && state?.flow === 'outbound_destination') {
@@ -183,7 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await callAction(callControlId, 'hangup', { command_id: `${eventId}-voicemail-finish` }).catch(() => undefined);
     }
 
-    if (eventType === 'call.initiated' && payload?.direction === 'incoming' && !state) {
+    if (eventType === 'call.initiated' && isInboundEntryCall) {
       await callAction(callControlId, 'answer', { command_id: `${eventId}-answer` });
     }
 
@@ -211,7 +218,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    if (eventType === 'call.answered' && !state) {
+    if (eventType === 'call.answered' && isInboundEntryCall) {
       const pbx = await readPbxConfig();
       if (pbx.ai.enabled && pbx.ai.assistantId) {
         await callAction(callControlId, 'ai_assistant_start', { assistant: { id: pbx.ai.assistantId }, command_id: `${eventId}-ai` });

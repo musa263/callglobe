@@ -97,6 +97,11 @@ export function useTelnyxVoice(token, enabled) {
         destinationNumber,
         callerNumber,
         callerName: 'Vocivo',
+        customHeaders: [
+          { name: 'X-Vocivo-Flow', value: 'outbound' },
+          { name: 'X-Vocivo-Destination', value: destinationNumber },
+          ...(callerNumber ? [{ name: 'X-Vocivo-Caller-ID', value: callerNumber }] : []),
+        ],
         remoteElement: 'remoteMedia',
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         trickleIce: true,
