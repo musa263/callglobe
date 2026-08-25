@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireOwner } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
@@ -8,10 +8,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
-    await requireOwner(req);
+    const access = await requireAdmin(req);
+    const config = await readPbxConfig();
+    const requestedOrganizationId = typeof req.body?.organizationId === 'string' ? req.body.organizationId : typeof req.query.organizationId === 'string' ? req.query.organizationId : '';
+    const organizationId = access.superadmin ? requestedOrganizationId || config.activeOrganizationId : access.organizationId || '';
+    const organization = config.organizations.find((item) => item.id === organizationId);
+    if (!organization) return res.status(404).json({ error: 'Organization not found.' });
     if (req.method === 'GET') {
-      const config = await readPbxConfig();
-      const organization = config.organizations.find((item) => item.id === config.activeOrganizationId) ?? config.organizations[0];
       const extensions = await listExtensions(organization?.id);
       const assignedInRange = organization ? extensions.filter((item) => Number(item.extension) >= organization.extensionStart && Number(item.extension) <= organization.extensionEnd).length : 0;
       return res.status(200).json({
@@ -20,10 +23,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         capacity: organization ? { used: assignedInRange, total: organization.extensionEnd - organization.extensionStart + 1 } : { used: 0, total: 0 },
       });
     }
-    if (req.method === 'POST') return res.status(201).json(await createExtension(req.body ?? {}));
+    if (req.method === 'POST') return res.status(201).json(await createExtension({ ...(req.body ?? {}), organizationId }));
     const id = typeof req.body?.id === 'string' ? req.body.id : typeof req.query.id === 'string' ? req.query.id : '';
     if (!id) return res.status(400).json({ error: 'Extension ID is required.' });
-    if (req.method === 'PATCH') return res.status(200).json({ extension: await updateExtension(id, req.body ?? {}) });
+    const existing = (await listExtensions(organizationId)).find((item) => item.id === id);
+    if (!existing) return res.status(404).json({ error: 'Extension not found in this organization.' });
+    if (req.method === 'PATCH') return res.status(200).json({ extension: await updateExtension(id, { ...(req.body ?? {}), organizationId }) });
     await deleteExtension(id);
     return res.status(200).json({ success: true });
   } catch (error) {

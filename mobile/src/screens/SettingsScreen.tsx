@@ -7,6 +7,7 @@ import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness, type BusinessProfile } from '../context/BusinessContext';
+import { useVoice } from '../context/VoiceContext';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, defaultRingtone, loadIncomingRingtone, ringtoneOptions, type RingtoneId } from '../lib/ringtone';
 import { colors } from '../theme';
@@ -21,6 +22,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   const insets = useSafeAreaInsets();
   const { profile, signOut, isPreview, updateProfile } = useAuth();
   const { profile: business, saveProfile } = useBusiness();
+  const { pushRegistration, refreshIncomingCalls } = useVoice();
   const [showBusiness, setShowBusiness] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showRingtones, setShowRingtones] = useState(false);
@@ -47,7 +49,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   useEffect(() => { loadIncomingRingtone().then(setRingtone).catch(() => undefined); }, []);
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-  const canManagePhoneSystem = isPreview || profile?.role === 'owner' || profile?.role === 'admin';
+  const canManagePhoneSystem = isPreview || ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(profile?.role || '');
 
   const openProfile = () => {
     setProfileDraft({ fullName: profile?.full_name || '', jobTitle: profile?.job_title || '', department: profile?.department || '', mobile: profile?.mobile || '', location: profile?.location || '', bio: profile?.bio || '' });
@@ -130,11 +132,12 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
         {canManagePhoneSystem && <Row icon={Building2} title="Professional Voice" subtitle={business.enabled ? `${business.companyName} IVR is active` : 'Greeting, departments and waiting message'} onPress={() => setShowBusiness(true)} />}
         {canManagePhoneSystem && <Row icon={Voicemail} title="Voicemail" subtitle={business.voicemailEnabled ? `On after ${business.voicemailDelaySeconds} seconds` : 'Off · unanswered calls keep ringing'} onPress={() => { setDraft(business); setError(''); setShowVoicemail(true); }} />}
         <Row icon={BellRing} title="Incoming ringtone" subtitle={ringtoneOptions.find((option) => option.id === ringtone)?.label} onPress={() => { setError(''); setShowRingtones(true); }} />
+        <Row icon={Signal} title="Calls when app is closed" subtitle={pushRegistration === 'registered' ? 'Registered with iPhone CallKit' : pushRegistration === 'registering' ? 'Registering this iPhone...' : 'Needs registration'} onPress={() => refreshIncomingCalls().then(() => Alert.alert('Incoming calls ready', 'This iPhone is registered to ring through CallKit when Vocivo is closed.')).catch((registrationError) => Alert.alert('Registration failed', registrationError instanceof Error ? registrationError.message : 'Reopen Vocivo and try again.'))} />
         <Row icon={CreditCard} title="Calling balance" subtitle={profile?.balance == null ? 'Managed by your organization' : `${profile?.currency || 'USD'} ${Number(profile.balance).toFixed(2)} available`} onPress={onWallet} />
         <Row icon={Radio} title="Travel data eSIM" subtitle={network?.isConnected ? `${network.type === 'cellular' ? 'Using cellular data' : 'Connected by Wi-Fi'} · carrier activation` : 'No internet connection · carrier coverage required'} onPress={() => setShowEsim(true)} />
         <Row icon={Settings2} title="iPhone permissions" subtitle="Contacts, microphone and notifications" onPress={() => Linking.openSettings()} />
       </View>
-      {profile?.role === 'owner' && <><Text style={styles.sectionLabel}>SECURITY</Text>
+      {['superadmin', 'company_owner', 'owner'].includes(profile?.role || '') && <><Text style={styles.sectionLabel}>SECURITY</Text>
       <View style={styles.group}><Row icon={KeyRound} title="Reset password" subtitle="Change your Vocivo sign-in password" onPress={() => { setError(''); setShowPassword(true); }} /></View></>}
       <View style={styles.group}><Row icon={LogOut} title={isPreview ? 'Exit preview' : 'Sign out'} danger onPress={signOut} /></View>
       <Text style={styles.version}>Vocivo 1.0.0 · Build {Constants.nativeBuildVersion || 'development'}</Text>

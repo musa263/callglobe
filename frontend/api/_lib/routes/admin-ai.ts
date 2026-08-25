@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireOwner } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
-import { readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
+import { organizationSettingsFrom, pbxForOrganization, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice } from '../voice-catalog.js';
 import { findExtension } from '../pbx.js';
@@ -10,13 +10,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'PUT') return methodNotAllowed(res, ['PUT']);
   try {
-    await requireOwner(req);
+    const access = await requireAdmin(req);
     const current = await readPbxConfig();
-    const ai = { ...current.ai, ...(req.body ?? {}) };
+    const organizationId = access.organizationId || current.activeOrganizationId;
+    const tenant = pbxForOrganization(current, organizationId);
+    const ai = { ...tenant.ai, ...(req.body ?? {}) };
     if (ai.voice === 'Telnyx.KokoroTTS.af') ai.voice = 'Telnyx.Bayan.Amanda';
     if (!ai.name.trim() || !ai.instructions.trim()) return res.status(400).json({ error: 'Assistant name and instructions are required.' });
     const fallback = ai.transferEnabled && ai.fallbackExtension
-      ? await findExtension(ai.fallbackExtension, current.activeOrganizationId)
+      ? await findExtension(ai.fallbackExtension, organizationId)
       : null;
     const tools: Array<Record<string, unknown>> = [{ type: 'hangup', hangup: {} }];
     if (fallback?.sipUsername) {
@@ -24,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         type: 'transfer',
         transfer: {
           targets: [{ name: `${fallback.name}, extension ${fallback.extension}`, to: `sip:${fallback.sipUsername}@sip.telnyx.com` }],
-          from: current.company.defaultCallerId || requiredEnv('TELNYX_SMS_FROM'),
+          from: tenant.company.defaultCallerId || requiredEnv('TELNYX_SMS_FROM'),
         },
       });
     }
@@ -40,8 +42,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const response = await telnyx(ai.assistantId ? `/ai/assistants/${encodeURIComponent(ai.assistantId)}` : '/ai/assistants', { method: 'POST', body: JSON.stringify(payload) });
     const assistant = await response.json() as { id?: string };
     ai.assistantId = assistant.id || ai.assistantId;
-    const config = await savePbxConfig({ ai });
-    return res.status(200).json({ ai: config.ai, synced: Boolean(config.ai.assistantId) });
+    const config = await savePbxConfig({
+      organizationSettings: {
+        ...current.organizationSettings,
+        [organizationId]: organizationSettingsFrom({ ...tenant, ai }),
+      },
+    });
+    const saved = pbxForOrganization(config, organizationId).ai;
+    return res.status(200).json({ ai: saved, synced: Boolean(saved.assistantId) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     return res.status(500).json({ error: publicError(error) });

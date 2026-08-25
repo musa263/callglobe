@@ -6,6 +6,8 @@ export type VoiceRouteAuthorization = {
   organizationId: string;
   destination: string;
   callerId?: string;
+  callerName?: string;
+  callerExtension?: string;
   flow: 'outbound' | 'internal';
   expiresAt: number;
 };
@@ -20,6 +22,8 @@ export function createVoiceRouteToken(route: Omit<VoiceRouteAuthorization, 'expi
     o: route.organizationId,
     d: route.destination,
     c: route.callerId || '',
+    n: route.callerName || '',
+    x: route.callerExtension || '',
     f: route.flow,
     e: Math.floor(Date.now() / 1000) + lifetimeSeconds,
   })).toString('base64url');
@@ -37,14 +41,17 @@ export function verifyVoiceRouteToken(token: string): VoiceRouteAuthorization | 
     if (typeof decoded.r !== 'string' || typeof decoded.o !== 'string' || typeof decoded.d !== 'string'
       || !['outbound', 'internal'].includes(String(decoded.f)) || typeof decoded.e !== 'number'
       || decoded.e < Math.floor(Date.now() / 1000)) return null;
-    return {
+    const authorization: VoiceRouteAuthorization = {
       routeId: decoded.r,
       organizationId: decoded.o,
       destination: decoded.d,
-      callerId: typeof decoded.c === 'string' && decoded.c ? decoded.c : undefined,
       flow: decoded.f as 'outbound' | 'internal',
       expiresAt: decoded.e,
     };
+    if (typeof decoded.c === 'string' && decoded.c) authorization.callerId = decoded.c;
+    if (typeof decoded.n === 'string' && decoded.n) authorization.callerName = decoded.n;
+    if (typeof decoded.x === 'string' && decoded.x) authorization.callerExtension = decoded.x;
+    return authorization;
   } catch {
     return null;
   }

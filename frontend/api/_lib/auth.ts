@@ -12,7 +12,7 @@ function key() {
 }
 
 export async function createSession(email: string) {
-  return new SignJWT({ email, role: 'owner' })
+  return new SignJWT({ email, role: 'superadmin', accountType: 'platform' })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject('vocivo-owner')
     .setIssuer(issuer)
@@ -25,14 +25,15 @@ export async function createSession(email: string) {
 export type VocivoSession = JWTPayload & {
   email?: string;
   name?: string;
-  role?: 'owner' | 'admin' | 'manager' | 'user';
+  role?: 'owner' | 'admin' | 'superadmin' | 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual';
+  accountType?: 'platform' | 'business' | 'individual';
   extensionId?: string;
   extension?: string;
   organizationId?: string;
 };
 
-export async function createExtensionSession(input: { id: string; email: string; name: string; role: 'admin' | 'manager' | 'user'; extension: string; organizationId: string }) {
-  return new SignJWT({ email: input.email, name: input.name, role: input.role, extensionId: input.id, extension: input.extension, organizationId: input.organizationId })
+export async function createExtensionSession(input: { id: string; email: string; name: string; role: 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual'; extension: string; organizationId: string; accountType: 'business' | 'individual' }) {
+  return new SignJWT({ email: input.email, name: input.name, role: input.role, accountType: input.accountType, extensionId: input.id, extension: input.extension, organizationId: input.organizationId })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(`vocivo-extension:${input.id}`)
     .setIssuer(issuer)
@@ -75,6 +76,14 @@ export async function requireSession(req: VercelRequest) {
 
 export async function requireOwner(req: VercelRequest) {
   const session = await requireSession(req);
-  if (session.sub !== 'vocivo-owner' || session.role !== 'owner') throw new Error('Forbidden');
+  if (session.sub !== 'vocivo-owner' || !['owner', 'superadmin'].includes(session.role || '')) throw new Error('Forbidden');
   return session;
+}
+
+export async function requireAdmin(req: VercelRequest) {
+  const session = await requireSession(req);
+  const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
+  const companyAdmin = Boolean(session.extensionId && session.organizationId && ['admin', 'company_owner', 'company_admin'].includes(session.role || ''));
+  if (!superadmin && !companyAdmin) throw new Error('Forbidden');
+  return { session, superadmin, organizationId: superadmin ? undefined : session.organizationId };
 }

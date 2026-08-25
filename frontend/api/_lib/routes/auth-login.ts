@@ -23,9 +23,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       profile: {
         id: 'vocivo-owner',
         email,
-        full_name: process.env.APP_ADMIN_NAME || 'Vocivo Owner',
+        full_name: process.env.APP_ADMIN_NAME || 'Vocivo Superadmin',
         currency: 'USD',
-        role: 'owner',
+        role: 'superadmin',
+        account_type: 'platform',
+        organization_name: 'Vocivo',
       },
     });
   } catch (error) {

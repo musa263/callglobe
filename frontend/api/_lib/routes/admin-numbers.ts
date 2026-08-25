@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireOwner } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { telnyx } from '../telnyx.js';
-import { readPbxConfig } from '../pbx-config-store.js';
+import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
 import { getExtension } from '../pbx.js';
 
@@ -24,9 +24,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
-    await requireOwner(req);
+    const access = await requireAdmin(req);
     const config = await readPbxConfig();
-    const activeOrganizationId = config.activeOrganizationId;
+    const activeOrganizationId = access.organizationId || config.activeOrganizationId;
     if (req.method === 'GET' && req.query.mode === 'search') {
       const country = text(req.query.country, 2).toUpperCase();
       if (!/^[A-Z]{2}$/.test(country)) return res.status(400).json({ error: 'Choose a two-letter country code.' });
@@ -64,10 +64,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const numbersPayload = await numbersResponse.json() as { data?: Array<Record<string, any>> };
       const ordersPayload = await ordersResponse.json() as { data?: Array<Record<string, any>> };
       const profilesPayload = await profilesResponse.json() as { data?: Array<Record<string, any>> };
+      const visibleNumbers = (numbersPayload.data ?? []).filter((item) => access.superadmin || config.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
+      const visibleMessagingProfiles = new Set(visibleNumbers.map((item) => item.messaging_profile_id).filter(Boolean));
+      const orderPrefix = `Vocivo ${activeOrganizationId} `;
       return res.status(200).json({
-        numbers: (numbersPayload.data ?? []).map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, connectionId: item.connection_id, connectionName: item.connection_name, messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
-        orders: (ordersPayload.data ?? []).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
-        messagingProfiles: (profilesPayload.data ?? []).map((item) => ({ id: item.id, name: item.name || item.id, webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' })),
+        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, connectionId: item.connection_id, connectionName: item.connection_name, messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
+        orders: (ordersPayload.data ?? []).filter((item) => access.superadmin || String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
+        messagingProfiles: (profilesPayload.data ?? []).filter((item) => access.superadmin || visibleMessagingProfiles.has(item.id)).map((item) => ({ id: item.id, name: item.name || item.id, webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' })),
       });
     }
     if (req.method === 'POST') {
@@ -78,8 +81,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: 'POST',
         body: JSON.stringify({
           phone_numbers: phoneNumbers.map((phone_number: string) => ({ phone_number })),
-          connection_id: text(req.body?.connectionId, 80) || requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
-          customer_reference: text(req.body?.customerReference, 100) || `Vocivo ${new Date().toISOString()}`,
+          connection_id: access.superadmin ? text(req.body?.connectionId, 80) || requiredEnv('TELNYX_CALL_CONTROL_APP_ID') : requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
+          customer_reference: access.superadmin ? text(req.body?.customerReference, 100) || `Vocivo ${activeOrganizationId} ${new Date().toISOString()}` : `Vocivo ${activeOrganizationId} ${new Date().toISOString()}`,
         }),
       });
       const payload = await response.json() as { data?: Record<string, unknown> };
@@ -92,6 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const phoneNumber = text(req.body?.phoneNumber, 24);
       if (!id || !/^\+[1-9]\d{6,14}$/.test(phoneNumber)) return res.status(400).json({ error: 'Phone number ID and E.164 number are required.' });
       if (id === requiredEnv('TELNYX_PHONE_NUMBER_ID')) return res.status(409).json({ error: 'This is the primary Vocivo service number. Assign a replacement before releasing it.' });
+      if (!access.superadmin && config.numberAssignments[phoneNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in this organization.' });
       const currentResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
       const currentPayload = await currentResponse.json() as { data?: { phone_number?: string; deletion_lock_enabled?: boolean } };
       if (currentPayload.data?.phone_number !== phoneNumber) return res.status(409).json({ error: 'The number no longer matches this inventory record. Refresh and try again.' });
@@ -103,12 +107,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const id = text(req.body?.id, 80);
     if (!id) return res.status(400).json({ error: 'Phone number ID is required.' });
+    if (!access.superadmin) {
+      const ownedResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
+      const owned = await ownedResponse.json() as { data?: { phone_number?: string } };
+      const ownedNumber = text(owned.data?.phone_number, 24);
+      if (!ownedNumber || config.numberAssignments[ownedNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in this organization.' });
+    }
     const body: Record<string, unknown> = {};
     if (req.body?.assignToVocivo === true) body.connection_id = requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
     else if (req.body?.connectionId !== undefined) body.connection_id = text(req.body.connectionId, 80) || null;
     if (req.body?.messagingProfileId !== undefined) body.messaging_profile_id = text(req.body.messagingProfileId, 80) || null;
     if (Array.isArray(req.body?.tags)) body.tags = req.body.tags.map((item: unknown) => text(item, 50)).filter(Boolean).slice(0, 20);
-    const organizationId = text(req.body?.organizationId, 50);
+    const requestedOrganizationId = text(req.body?.organizationId, 50);
+    const organizationId = access.superadmin ? requestedOrganizationId : activeOrganizationId;
     if (organizationId && !config.organizations.some((item) => item.id === organizationId && item.status === 'active')) return res.status(400).json({ error: 'Choose an active organization.' });
     const destinationType = ['main', 'extension', 'ring_group', 'queue', 'ivr'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr' : 'main';
     const destinationId = text(req.body?.destinationId, 80);
@@ -118,7 +129,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!extension || extension.status !== 'active' || extension.organizationId !== organizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
     }
     if (organizationId && ['ring_group', 'queue', 'ivr'].includes(destinationType)) {
-      const collection = destinationType === 'ring_group' ? config.callHandling.ringGroups : destinationType === 'queue' ? config.callHandling.queues : config.callHandling.ivrs;
+      const organizationPbx = pbxForOrganization(config, organizationId);
+      const collection = destinationType === 'ring_group' ? organizationPbx.callHandling.ringGroups : destinationType === 'queue' ? organizationPbx.callHandling.queues : organizationPbx.callHandling.ivrs;
       if (!collection.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured inbound destination.' });
     }
     const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });

@@ -97,8 +97,14 @@ function CallerIdMenu({ numbers, selected, onSelect, open, onToggle }) {
 }
 
 function IncomingCall({ call, onAnswer, onDecline }) {
-  const number = call?.options?.remoteCallerNumber || call?.options?.callerNumber || 'Unknown caller';
-  const name = call?.options?.remoteCallerName || 'Incoming call';
+  const headers = call?.options?.customHeaders || call?.options?.dialogParams?.customHeaders || [];
+  const header = (key) => { const item = headers.find((value) => String(value?.name || value?.header_name || '').toLowerCase() === key.toLowerCase()); return item?.value || item?.header_value; };
+  const remoteName = call?.options?.remoteCallerName || '';
+  const displayMatch = String(remoteName).trim().match(/^(.+?)\s*-\s*Ext(?:ension)?\s+(\d{2,5})$/i);
+  const extension = header('X-Vocivo-Caller-Extension') || displayMatch?.[2];
+  const remoteNumber = call?.options?.remoteCallerNumber || call?.options?.callerNumber || 'Unknown caller';
+  const number = extension ? `Extension ${extension}` : String(remoteNumber).startsWith('sip:') ? 'Internal call' : remoteNumber;
+  const name = header('X-Vocivo-Caller-Name') || displayMatch?.[1] || remoteName || 'Incoming call';
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal incoming-modal">
@@ -111,13 +117,13 @@ function IncomingCall({ call, onAnswer, onDecline }) {
 }
 
 function ActiveCall({ voice, number, elapsed }) {
-  const remote = voice.call?.options?.remoteCallerNumber || voice.call?.options?.destinationNumber || number;
-  const name = voice.call?.options?.remoteCallerName || 'International call';
+  const remote = voice.remoteIdentity?.number || number;
+  const name = voice.remoteIdentity?.name || 'Phone call';
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal active-modal">
         <div className="live-pill"><span /> {voice.state === 'held' ? 'ON HOLD' : 'LIVE CALL'}</div>
-        <div className="call-avatar">{name.charAt(0).toUpperCase()}</div><h2>{name}</h2><p className="call-number">{formatPhone(remote)}</p><strong className="call-timer">{formatDuration(elapsed)}</strong>
+        <div className="call-avatar">{name.charAt(0).toUpperCase()}</div><h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p><strong className="call-timer">{formatDuration(elapsed)}</strong>
         <div className="call-controls">
           <button className={voice.muted ? 'control active' : 'control'} onClick={voice.toggleMute} title={voice.muted ? 'Unmute' : 'Mute'}>{voice.muted ? <MicOff /> : <Mic />}<span>{voice.muted ? 'Unmute' : 'Mute'}</span></button>
           <button className={voice.state === 'held' ? 'control active' : 'control'} onClick={voice.toggleHold} title="Hold call"><Pause /><span>Hold</span></button>
@@ -129,7 +135,7 @@ function ActiveCall({ voice, number, elapsed }) {
   );
 }
 
-function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall }) {
+function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType }) {
   const [dialMode, setDialMode] = useState('external');
   const [number, setNumber] = useState('');
   const [country, setCountry] = useState(rates[0]);
@@ -137,6 +143,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
   const [callerOpen, setCallerOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [callError, setCallError] = useState('');
+  const businessAccount = accountType === 'business';
   useEffect(() => { if (!country && rates.length) setCountry(rates[0]); }, [country, rates]);
   const filteredRates = rates.filter((rate) => `${rate.country_name} ${rate.dial_code}`.toLowerCase().includes(search.toLowerCase()));
   const fullNumber = number.startsWith('+') ? number : `${country?.dial_code || ''}${number}`;
@@ -173,7 +180,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
       <header className="workspace-header"><div><p className="eyebrow">WEB PHONE</p><h1>Make a call</h1></div><div className={`status-badge ${voice.ready ? 'online' : ''}`}>{voice.ready ? <Wifi size={15} /> : <WifiOff size={15} />}{preview ? 'Preview mode' : voice.ready ? 'Ready for calls' : voice.statusLabel}</div></header>
       <div className="dialer-layout">
         <div className="dialer-panel">
-          <div className="dial-mode" role="group" aria-label="Call type"><button className={dialMode === 'external' ? 'active' : ''} onClick={() => { setDialMode('external'); setNumber(''); setCallError(''); }}><Globe2 size={16} /> External</button><button className={dialMode === 'extension' ? 'active' : ''} onClick={() => { setDialMode('extension'); setNumber(''); setCallError(''); }}><ContactRound size={16} /> Extension</button></div>
+          {businessAccount && <div className="dial-mode" role="group" aria-label="Call type"><button className={dialMode === 'external' ? 'active' : ''} onClick={() => { setDialMode('external'); setNumber(''); setCallError(''); }}><Globe2 size={16} /> External</button><button className={dialMode === 'extension' ? 'active' : ''} onClick={() => { setDialMode('extension'); setNumber(''); setCallError(''); }}><ContactRound size={16} /> Extension</button></div>}
           {dialMode === 'external' && <CallerIdMenu numbers={numbers} selected={selectedNumber} onSelect={(value) => { setSelectedNumber(value); setCallerOpen(false); }} open={callerOpen} onToggle={() => setCallerOpen((value) => !value)} />}
           <div className="destination-field">
             {dialMode === 'external' ? <button className="country-trigger" onClick={() => setCountryOpen((value) => !value)} aria-label="Choose destination country"><span>{country?.country_code || '--'}</span><ChevronDown size={15} /></button> : <span className="extension-prefix">EXT</span>}
@@ -188,11 +195,6 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
           {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
           <button className="call-button" onClick={call} disabled={!number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (!preview && !voice.ready)}><Phone size={22} /> {voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'}</button>
         </div>
-        <aside className="call-guide">
-          <div className="balance-block"><span className="balance-icon"><CircleDollarSign size={19} /></span><div><small>AVAILABLE CREDIT</small><strong>${balance.toFixed(2)}</strong></div><span>USD</span></div>
-          <div className="quality-block"><div className="quality-heading"><Headphones size={19} /><span><strong>Browser audio</strong><small>Microphone access is requested when needed.</small></span></div><div className="quality-meter"><span /><span /><span /><span /></div></div>
-          <div className="steps-block"><p className="eyebrow">BEFORE YOU CALL</p><div><span>1</span><p><strong>Choose your caller ID</strong><small>The recipient sees the selected number.</small></p></div><div><span>2</span><p><strong>Enter the full number</strong><small>Include the international country code.</small></p></div><div><span>3</span><p><strong>Allow microphone access</strong><small>Use headphones for the clearest audio.</small></p></div></div>
-        </aside>
       </div>
     </section>
   );
@@ -281,7 +283,8 @@ export default function App() {
   const [verificationPending, setVerificationPending] = useState(null);
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationError, setVerificationError] = useState('');
-  const voice = useTelnyxVoice(session?.token, !preview && Boolean(session));
+  const voiceIdentity = useMemo(() => ({ name: profile?.full_name || 'Vocivo', extension: profile?.extension }), [profile?.extension, profile?.full_name]);
+  const voice = useTelnyxVoice(session?.token, !preview && Boolean(session), voiceIdentity);
 
   useEffect(() => {
     if (!session) return;
@@ -326,8 +329,12 @@ export default function App() {
     setHistory((current) => { const next = [{ id: `${Date.now()}`, number: voice.endedCall.number, direction: voice.endedCall.direction, duration: elapsed, date: new Date().toISOString() }, ...current].slice(0, 40); localStorage.setItem('vocivo.history', JSON.stringify(next)); return next; });
   }, [voice.endedCall]);
   const shellData = useMemo(() => preview ? { profile: { full_name: 'Vocivo Owner', email: 'preview@vocivo.app' }, balance: 42.8, rates: SAMPLE_DIRECTORY, numbers: [SAMPLE_NUMBER], verifiedNumbers: [] } : { profile, balance, rates, numbers, verifiedNumbers }, [preview, profile, balance, rates, numbers, verifiedNumbers]);
+  const canAdmin = ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(shellData.profile?.role || '');
   const callerNumbers = useMemo(() => [...shellData.numbers, ...shellData.verifiedNumbers], [shellData.numbers, shellData.verifiedNumbers]);
   useEffect(() => { if (preview) setSelectedNumber(SAMPLE_NUMBER); }, [preview]);
+  useEffect(() => {
+    if (view === 'admin' && profile && !canAdmin) setView('dialer');
+  }, [canAdmin, profile, view]);
   function logout() { voice.disconnect(); clearSession(); setSession(null); setPreview(false); setProfile(null); }
   async function refreshVerifiedNumbers() {
     const result = await api('/api/telnyx/verified-numbers');
@@ -358,19 +365,20 @@ export default function App() {
   }
   if (!session && !preview) return <Login onLogin={setSession} onPreview={() => { setPreview(true); setLoading(false); }} />;
   if (loading) return <div className="loading-screen"><span className="brand-mark"><Globe2 /></span><p>Opening your phone...</p></div>;
-  const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ['wallet', WalletCards, 'Top up'], ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ['admin', ShieldCheck, 'Admin']];
+  const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ['wallet', WalletCards, 'Top up'], ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ...(canAdmin ? [['admin', ShieldCheck, shellData.profile?.role === 'superadmin' ? 'Superadmin' : 'Company admin']] : [])];
   return (
     <div className={`app-shell ${view === 'admin' ? 'admin-mode' : ''}`}>
-      {view !== 'admin' && <aside className="side-nav"><div className="brand-lockup"><span className="brand-mark"><Globe2 size={22} /></span><span>Vocivo</span></div><nav>{navItems.map(([id, Icon, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="side-footer">{shellData.profile?.photo_url ? <img className="account-avatar" src={shellData.profile.photo_url} alt={shellData.profile.full_name} /> : <div className="account-avatar">{shellData.profile?.full_name?.charAt(0) || 'V'}</div>}<div><strong>{shellData.profile?.full_name}</strong><small>{preview ? 'Preview workspace' : shellData.profile?.job_title || 'Owner account'}</small></div><button onClick={logout} title={preview ? 'Exit preview' : 'Sign out'}><LogOut size={17} /></button></div></aside>}
+      {view !== 'admin' && <aside className="side-nav"><div className="brand-lockup"><span className="brand-mark"><Globe2 size={22} /></span><span>Vocivo</span></div><nav>{navItems.map(([id, Icon, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="side-footer">{shellData.profile?.photo_url ? <img className="account-avatar" src={shellData.profile.photo_url} alt={shellData.profile.full_name} /> : <div className="account-avatar">{(shellData.profile?.organization_name || shellData.profile?.full_name)?.charAt(0) || 'V'}</div>}<div><strong>{shellData.profile?.account_type === 'business' ? shellData.profile?.organization_name : shellData.profile?.full_name}</strong><small>{preview ? 'Preview workspace' : shellData.profile?.account_type === 'business' ? `${shellData.profile?.full_name} · ${String(shellData.profile?.role || 'user').replaceAll('_', ' ')}` : shellData.profile?.role === 'superadmin' ? 'Platform superadmin' : 'Individual account'}</small></div><button onClick={logout} title={preview ? 'Exit preview' : 'Sign out'}><LogOut size={17} /></button></div></aside>}
       <main className="main-area">
         {preview && <div className="preview-banner"><span>You are viewing a safe preview. Calls are disabled.</span><button onClick={logout}><X size={15} /> Exit preview</button></div>}
         {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={15} /></button></div>}
-        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
+        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
         {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
         {view === 'wallet' && <WalletView balance={shellData.balance} preview={preview} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}
         {view === 'settings' && <SettingsView profile={shellData.profile} ownedNumbers={shellData.numbers} verifiedNumbers={shellData.verifiedNumbers} voice={voice} preview={preview} verification={{ pending: verificationPending, busy: verificationBusy, error: verificationError, request: requestVerification, verify: confirmVerification, remove: removeVerifiedNumber, cancel: () => { setVerificationPending(null); setVerificationError(''); } }} onLogout={logout} />}
-        {view === 'admin' && !preview && <AdminConsole />}
+        {view === 'admin' && !preview && canAdmin && <AdminConsole profile={shellData.profile} />}
+        {view === 'admin' && !preview && !canAdmin && <section className="content-view"><div className="empty-state"><ShieldCheck /><h2>Administrator access required</h2></div></section>}
         {view === 'admin' && preview && <section className="content-view"><div className="empty-state"><ShieldCheck /><h2>Admin requires sign in</h2><p>Exit preview and sign in with the owner account to manage the phone system.</p></div></section>}
       </main>
       {view !== 'admin' && <nav className="mobile-nav">{navItems.map(([id, Icon, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon /><span>{label}</span></button>)}</nav>}

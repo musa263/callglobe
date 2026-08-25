@@ -34,7 +34,7 @@ export function decodeVoiceState(value: unknown): VoiceState | null {
   try { return JSON.parse(Buffer.from(value, 'base64').toString('utf8')) as VoiceState; } catch { return null; }
 }
 
-export async function dialCall(input: { to: string | string[]; state: VoiceState; from?: string; fromDisplayName?: string; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
+export async function dialCall(input: { to: string | string[]; state: VoiceState; from?: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
   const response = await telnyx('/calls', {
     method: 'POST',
     body: JSON.stringify({
@@ -42,6 +42,7 @@ export async function dialCall(input: { to: string | string[]; state: VoiceState
       from: input.from || requiredEnv('TELNYX_SMS_FROM'),
       to: input.to,
       from_display_name: input.fromDisplayName || 'Vocivo',
+      ...(input.customHeaders?.length ? { custom_headers: input.customHeaders } : {}),
       client_state: encodeVoiceState(input.state),
       timeout_secs: input.timeoutSeconds ?? 45,
       ...(input.linkTo ? { link_to: input.linkTo, bridge_on_answer: true, prevent_double_bridge: true } : {}),

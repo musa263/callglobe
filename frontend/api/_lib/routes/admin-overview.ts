@@ -1,9 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireOwner } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { listExtensions } from '../pbx.js';
 import { telnyx } from '../telnyx.js';
+import { readPbxConfig } from '../pbx-config-store.js';
 
 async function data(path: string) {
   const response = await telnyx(path);
@@ -14,23 +15,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
-    await requireOwner(req);
+    const access = await requireAdmin(req);
+    const config = await readPbxConfig();
+    const organizationId = access.organizationId || config.activeOrganizationId;
     const [balance, numbers, connection, extensions, business] = await Promise.all([
       data('/balance') as Promise<{ balance?: string; currency?: string }>,
       data('/phone_numbers?page[size]=250&filter[status]=active') as Promise<Array<{ id: string; phone_number: string; status?: string }>>,
       data(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`) as Promise<{ active?: boolean; registration_status?: string; connection_name?: string; ios_push_credential_id?: string | null }>,
-      listExtensions(),
-      readBusinessVoiceConfig(),
+      listExtensions(organizationId),
+      readBusinessVoiceConfig(organizationId),
     ]);
     return res.status(200).json({
       metrics: {
         balance: Number(balance?.balance || 0),
         currency: balance?.currency || 'USD',
-        phoneNumbers: Array.isArray(numbers) ? numbers.length : 0,
+        phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => access.superadmin || config.numberAssignments[item.phone_number]?.organizationId === organizationId).length : 0,
         extensions: extensions.length,
         activeExtensions: extensions.filter((item) => item.status === 'active').length,
       },
-      phoneNumbers: Array.isArray(numbers) ? numbers.map(({ id, phone_number, status }) => ({ id, phone_number, status })) : [],
+      phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => access.superadmin || config.numberAssignments[item.phone_number]?.organizationId === organizationId).map(({ id, phone_number, status }) => ({ id, phone_number, status })) : [],
       connection: { name: connection?.connection_name || 'Vocivo Mobile', active: Boolean(connection?.active), registrationStatus: connection?.registration_status || 'Unknown', pushConfigured: Boolean(connection?.ios_push_credential_id) },
       business,
     });

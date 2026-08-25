@@ -15,7 +15,7 @@ export type ExtensionUser = {
   mobile: string;
   organizationId: string;
   department: string;
-  role: 'admin' | 'manager' | 'user';
+  role: 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual';
   sipUsername: string;
   status: 'active' | 'expired';
   createdAt?: string;
@@ -37,7 +37,10 @@ function clean(value: unknown, max: number) {
 }
 
 function normalizeRole(value: unknown): ExtensionUser['role'] {
-  return value === 'admin' || value === 'manager' ? value : 'user';
+  if (value === 'owner' || value === 'company_owner') return 'company_owner';
+  if (value === 'admin' || value === 'company_admin') return 'company_admin';
+  if (value === 'manager' || value === 'individual') return value;
+  return 'user';
 }
 
 function encodeName(input: Partial<ExtensionUser>) {
@@ -89,12 +92,12 @@ async function extensionForCreate(input: Partial<ExtensionUser>) {
   if (!extension) throw new Error('This organization has no available extension slots.');
   const numeric = Number(extension);
   if (!Number.isInteger(numeric) || numeric < organization.extensionStart || numeric > organization.extensionEnd) throw new Error(`Extension must be between ${organization.extensionStart} and ${organization.extensionEnd}.`);
-  return { extension, organizationId, existing };
+  return { extension, organizationId, existing, accountType: organization.accountType };
 }
 
 export async function createExtension(input: Partial<ExtensionUser>) {
   const allocated = await extensionForCreate(input);
-  const value = validateExtensionInput({ ...input, organizationId: allocated.organizationId }, allocated.extension);
+  const value = validateExtensionInput({ ...input, organizationId: allocated.organizationId, role: allocated.accountType === 'individual' ? 'individual' : input.role }, allocated.extension);
   if (allocated.existing.some((item) => item.extension === value.extension)) throw new Error(`Extension ${value.extension} already exists.`);
   const response = await telnyx('/telephony_credentials', {
     method: 'POST',

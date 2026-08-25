@@ -7,7 +7,6 @@ import { Keypad } from '../components/Keypad';
 import { flagFromCode } from '../data/fallbackRates';
 import { useVoice } from '../context/VoiceContext';
 import { useAuth } from '../context/AuthContext';
-import { useBusiness } from '../context/BusinessContext';
 import { RatePicker } from '../components/RatePicker';
 import type { CallerNumber, CallRate } from '../types';
 import { colors, shadow } from '../theme';
@@ -67,7 +66,6 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
 export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const insets = useSafeAreaInsets();
   const { rates, callerNumbers, profile } = useAuth();
-  const { profile: business } = useBusiness();
   const { activeCall, waitingCall, heldCall, conference, duration, endCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls } = useVoice();
   const [showKeypad, setShowKeypad] = useState(false);
   const [showAddCall, setShowAddCall] = useState(false);
@@ -83,12 +81,14 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
     if (!activeCall) { setRemotePhoto(undefined); return; }
     if (activeCall.photoUrl) { setRemotePhoto(activeCall.photoUrl); return; }
     api.get<{ users: Array<{ extension: string; name: string; photoUrl?: string }> }>('/api/voice/directory').then(({ users }) => {
-      const match = users.find((user) => user.extension === activeCall.number || user.name.toLowerCase() === activeCall.displayName.toLowerCase());
+      const match = users.find((user) => user.extension === activeCall.number.replace(/\D/g, '') || user.name.toLowerCase() === activeCall.displayName.toLowerCase());
       setRemotePhoto(match?.photoUrl);
     }).catch(() => setRemotePhoto(undefined));
   }, [activeCall?.displayName, activeCall?.number, activeCall?.photoUrl]);
   if (!activeCall) return null;
   const status = activeCall.phase === 'active' ? (activeCall.onHold ? 'On hold' : 'Connected') : activeCall.phase === 'ended' ? 'Call ended' : activeCall.phase === 'failed' ? 'Could not connect' : activeCall.phase === 'ringing' ? 'Ringing' : 'Connecting';
+  const extensionNumber = activeCall.number.replace(/\D/g, '');
+  const visibleNumber = activeCall.destinationCountry === 'Internal' ? (extensionNumber ? `Extension ${extensionNumber}` : 'Internal call') : activeCall.number;
   const transferEnabled = Boolean(profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
   const selectedCaller = callerNumbers.find((number) => number.phone_number === activeCall.callerId)
     ?? callerNumbers.find((number) => number.source === 'owned' && number.status === 'active')
@@ -135,13 +135,12 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           {remotePhoto ? <Image source={{ uri: remotePhoto }} style={styles.avatarPhoto} /> : <View style={styles.avatar}><Text style={styles.avatarFlag}>{flagFromCode(activeCall.countryCode ?? 'US')}</Text></View>}
         </View>
         <Text style={styles.name}>{activeCall.displayName}</Text>
-        <Text style={styles.number}>{activeCall.number}</Text>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={styles.number}>{visibleNumber}</Text>
         <Text style={[styles.status, activeCall.phase === 'active' && styles.statusLive]}>{status}</Text>
         <Text style={styles.timer}>{formatTime(duration)}</Text>
         {activeCall.ratePerMinute ? <Text style={styles.rate}>${activeCall.ratePerMinute.toFixed(3)} per minute</Text> : null}
         {conference ? <View style={styles.conference}><View style={styles.conferenceIcon}><Merge size={15} color={colors.ink} /></View><View style={styles.conferenceCopy}><Text style={styles.conferenceLabel}>MERGED CONFERENCE</Text><Text numberOfLines={1} style={styles.conferenceNames}>{conference.participants.map((participant) => participant.displayName || participant.number).join(' + ')}</Text></View><View style={styles.liveBadge}><Text style={styles.liveBadgeText}>LIVE</Text></View></View> : heldCall ? <View style={styles.held}><View style={styles.heldCheck}><Check size={13} color={colors.mint} /></View><Text numberOfLines={1} style={styles.heldText}>{heldCall.displayName || heldCall.number} is on hold</Text><Pressable disabled={swapBusy} onPress={swap} style={styles.swapButton}><Text style={styles.swapText}>{swapBusy ? 'Wait' : 'Swap'}</Text></Pressable></View> : null}
         {!!mergeError && <Text style={styles.mergeError}>{mergeError}</Text>}
-        {activeCall.isIncoming && business.enabled && !!business.greeting && <View style={styles.greetingPrompt}><Text style={styles.greetingLabel}>{business.companyName ? `${business.companyName.toUpperCase()} GREETING` : 'WELCOME PROMPT'}</Text><Text numberOfLines={3} style={styles.greetingText}>{business.greeting}</Text></View>}
       </View>
 
       <View style={[styles.controlsSection, { paddingBottom: Math.max(insets.bottom + 20, 34) }]}>
@@ -161,7 +160,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
       <Modal visible={showKeypad} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowKeypad(false)}>
         <View style={[styles.keypadModal, { paddingTop: Math.max(insets.top, 24), paddingBottom: Math.max(insets.bottom, 24) }]}>
           <View style={styles.keypadHeader}><Text style={styles.keypadTitle}>Keypad</Text><Pressable onPress={() => setShowKeypad(false)} style={styles.done}><Text style={styles.doneText}>Done</Text></Pressable></View>
-          <Text style={styles.keypadNumber}>{activeCall.number}</Text>
+          <Text style={styles.keypadNumber}>{visibleNumber}</Text>
           <View style={styles.keypadBody}><Keypad compact onPress={sendDtmf} /></View>
         </View>
       </Modal>

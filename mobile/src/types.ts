@@ -78,7 +78,10 @@ export type Profile = {
   currency: string;
   extension?: string;
   organization_id?: string;
-  role?: 'owner' | 'admin' | 'manager' | 'user';
+  role?: 'owner' | 'admin' | 'superadmin' | 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual';
+  account_type?: 'platform' | 'business' | 'individual';
+  organization_name?: string;
+  organization_owner?: string;
   photo_url?: string;
   job_title?: string;
   department?: string;

@@ -5,7 +5,7 @@ import { findExtension, getExtension, listExtensions } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
 import { callAction, decodeVoiceState, dialCall, encodeVoiceState } from '../voice-control.js';
 import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
-import { readPbxConfig } from '../pbx-config-store.js';
+import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, saveOutboundCallPair } from '../outbound-call-store.js';
 import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
@@ -55,6 +55,9 @@ type VoiceEvent = {
 type VoicePayload = NonNullable<NonNullable<VoiceEvent['data']>['payload']>;
 const e164 = /^\+[1-9]\d{6,14}$/;
 const internalSip = /^sip:[A-Za-z0-9._-]+@sip\.telnyx\.com$/i;
+function callerDisplay(value: string) {
+  return value.replace(/[^A-Za-z0-9 _~!.+-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 128) || 'Vocivo';
+}
 function customHeader(payload: VoicePayload | undefined, name: string) {
   const match = payload?.custom_headers?.find((header) => (header.name || header.header_name || '').toLowerCase() === name.toLowerCase());
   return (match?.value || match?.header_value || '').trim();
@@ -182,11 +185,12 @@ async function routeToExtension(input: {
   announceWaiting?: boolean;
   forwardingDepth?: number;
 }) {
-  const [config, pbx, extensions] = await Promise.all([
+  const [config, basePbx, extensions] = await Promise.all([
     readBusinessVoiceConfig(input.organizationId),
     readPbxConfig(),
     listExtensions(input.organizationId),
   ]);
+  const pbx = pbxForOrganization(basePbx, input.organizationId);
   const profile = pbx.userProfiles[input.extension.id];
   const voicemailEnabled = userVoicemailEnabled(profile, config.voicemailEnabled);
   if (!userAvailableBySchedule(profile, pbx.officeHours)) {
@@ -281,10 +285,11 @@ async function routeToCallGroup(input: {
   callerNumber?: string;
   callerName?: string;
 }) {
-  const [pbx, extensions] = await Promise.all([
+  const [basePbx, extensions] = await Promise.all([
     readPbxConfig(),
     listExtensions(input.organizationId),
   ]);
+  const pbx = pbxForOrganization(basePbx, input.organizationId);
   const collection = input.kind === 'ring_group' ? pbx.callHandling.ringGroups : pbx.callHandling.queues;
   const group = collection.find((item) => item.id === input.handlingId);
   const members = group ? extensions.filter((extension) => group.members.includes(extension.id) && extension.status === 'active' && extension.sipUsername) : [];
@@ -329,7 +334,7 @@ async function routeCallGroupFallback(input: {
   callerNumber?: string;
   callerName?: string;
 }) {
-  const pbx = await readPbxConfig();
+  const pbx = pbxForOrganization(await readPbxConfig(), input.organizationId);
   const item = input.kind === 'ring_group'
     ? pbx.callHandling.ringGroups.find((entry) => entry.id === input.handlingId)
     : pbx.callHandling.queues.find((entry) => entry.id === input.handlingId);
@@ -354,7 +359,8 @@ function configuredTargetLabel(target: string, pbx: Awaited<ReturnType<typeof re
 }
 
 async function routeToConfiguredIvr(input: { callControlId: string; eventId: string; organizationId: string; handlingId: string; inboundNumber?: string; callerNumber?: string; callerName?: string }) {
-  const [pbx, config, extensions] = await Promise.all([readPbxConfig(), readBusinessVoiceConfig(input.organizationId), listExtensions(input.organizationId)]);
+  const [basePbx, config, extensions] = await Promise.all([readPbxConfig(), readBusinessVoiceConfig(input.organizationId), listExtensions(input.organizationId)]);
+  const pbx = pbxForOrganization(basePbx, input.organizationId);
   const ivr = pbx.callHandling.ivrs.find((item) => item.id === input.handlingId);
   const entries = Object.entries(ivr?.options || {}).filter(([digit, target]) => /^\d$/.test(digit) && Boolean(target)).slice(0, 10);
   if (!ivr || !entries.length) {
@@ -469,7 +475,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           to: destination,
           from: reservation.callerId,
           state: { flow: 'outbound_destination', parentCallControlId: callControlId, organizationId: reservation.organizationId, routeId },
-          fromDisplayName: payload.caller_id_name || 'Vocivo',
+          fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
+            ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
+            : payload.caller_id_name || 'Vocivo'),
+          customHeaders: reservation.flow === 'internal' ? [
+            { name: 'X-Vocivo-Call-Type', value: 'internal' },
+            ...(reservation.callerName ? [{ name: 'X-Vocivo-Caller-Name', value: reservation.callerName }] : []),
+            ...(reservation.callerExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: reservation.callerExtension }] : []),
+            { name: 'X-Vocivo-Organization-ID', value: reservation.organizationId },
+          ] : undefined,
           commandId: `${eventId}-destination`,
         });
       } catch (dialError) {
@@ -607,7 +621,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         from: state.callerNumber && e164.test(state.callerNumber) ? state.callerNumber : undefined,
         fromDisplayName: queue.kind === 'queue' ? 'Queued business call' : 'Business group call',
         state: { flow: 'queue_agent', queueName: state.queueName, handlingId: state.handlingId, parentCallControlId: callControlId, organizationId: state.organizationId, targetExtensionIds: members.map((member) => member.id), callerNumber: state.callerNumber, callerName: state.callerName },
-        timeoutSeconds: queue.kind === 'queue' ? 45 : Math.min(120, Math.max(10, (await readPbxConfig()).callHandling.ringGroups.find((item) => item.id === queue.handlingId)?.timeout || 25)),
+        timeoutSeconds: queue.kind === 'queue' ? 45 : Math.min(120, Math.max(10, pbxForOrganization(await readPbxConfig(), state.organizationId).callHandling.ringGroups.find((item) => item.id === queue.handlingId)?.timeout || 25)),
         commandId: `${eventId}-queue-agents`,
       });
       const agentCallControlId = agentCall.data?.call_control_id;
@@ -719,12 +733,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (isInboundAnswered) {
       const organizationId = await organizationForNumber(payload?.to || '');
       const pbx = await readPbxConfig();
+      const organizationPbx = pbxForOrganization(pbx, organizationId);
       const assignment = pbx.numberAssignments[normalizeE164(payload?.to || '')];
       if (assignment?.organizationId === organizationId && assignment.destinationType === 'extension' && assignment.destinationId) {
         await routeToConfiguredTarget({ callControlId, eventId, organizationId, target: `extension:${assignment.destinationId}`, inboundNumber: payload?.to, callerNumber: payload?.from, callerName: payload?.caller_id_name });
         return res.status(200).json({ received: true });
       }
-      if (!officeHoursDecision(pbx.officeHours).open) {
+      if (!officeHoursDecision(organizationPbx.officeHours).open) {
         await routeUnavailable(callControlId, organizationId, eventId, payload?.from, payload?.caller_id_name);
         return res.status(200).json({ received: true });
       }
@@ -736,9 +751,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await routeToConfiguredIvr({ callControlId, eventId, organizationId, handlingId: assignment.destinationId, inboundNumber: payload?.to, callerNumber: payload?.from, callerName: payload?.caller_id_name });
         return res.status(200).json({ received: true });
       }
-      if (organizationId === pbx.activeOrganizationId && pbx.ai.enabled && pbx.ai.assistantId) {
+      if (organizationPbx.ai.enabled && organizationPbx.ai.assistantId) {
         try {
-          await callAction(callControlId, 'ai_assistant_start', { assistant: { id: pbx.ai.assistantId }, command_id: `${eventId}-ai` });
+          await callAction(callControlId, 'ai_assistant_start', { assistant: { id: organizationPbx.ai.assistantId }, command_id: `${eventId}-ai` });
           return res.status(200).json({ received: true });
         } catch (aiError) {
           console.error('Vocivo AI receptionist could not start; using configured voice fallback', publicError(aiError));
@@ -800,7 +815,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (eventType === 'call.gather.ended' && state?.flow === 'configured_ivr' && state.handlingId && state.organizationId) {
-      const pbx = await readPbxConfig();
+      const pbx = pbxForOrganization(await readPbxConfig(), state.organizationId);
       const ivr = pbx.callHandling.ivrs.find((item) => item.id === state.handlingId);
       const digit = String(payload?.digits || payload?.result || '').replace(/\D/g, '').slice(0, 1);
       const target = ivr?.options[digit];

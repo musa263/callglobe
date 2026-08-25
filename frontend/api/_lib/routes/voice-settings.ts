@@ -10,7 +10,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!['GET', 'PUT'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'PUT']);
   try {
     const session = await requireSession(req);
-    if (req.method === 'PUT' && !['owner', 'admin'].includes(session.role || '')) return res.status(403).json({ error: 'Organization administrator access is required.' });
+    if (req.method === 'PUT' && !['owner', 'admin', 'superadmin', 'company_owner', 'company_admin'].includes(session.role || '')) return res.status(403).json({ error: 'Organization administrator access is required.' });
     const organizationId = sessionOrganizationId(session, await readPbxConfig());
     const config = req.method === 'PUT' ? await saveBusinessVoiceConfig(req.body ?? {}, organizationId) : await readBusinessVoiceConfig(organizationId);
     return res.status(200).json({ config });

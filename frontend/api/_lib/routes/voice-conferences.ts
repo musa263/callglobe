@@ -4,7 +4,7 @@ import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http
 import { authorizeOutboundCall } from '../outbound-policy.js';
 import { assertCallerIdForSession } from '../phone-number-access.js';
 import { getExtension } from '../pbx.js';
-import { readPbxConfig } from '../pbx-config-store.js';
+import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { sessionOrganizationId } from '../tenancy.js';
 import { dialCall } from '../voice-control.js';
 
@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const callerId = await assertCallerIdForSession(session, requestedCallerId);
     const extension = session.extensionId ? await getExtension(session.extensionId) : undefined;
     for (const participant of participants) {
-      authorizeOutboundCall(config, {
+      authorizeOutboundCall(pbxForOrganization(config, organizationId), {
         extension: extension?.extension,
         department: extension?.department,
         internationalAllowed: profile?.permissions?.international !== false,

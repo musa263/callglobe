@@ -4,7 +4,8 @@ import { assertCallerIdForSession } from '../phone-number-access.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { authorizeOutboundCall } from '../outbound-policy.js';
 import { getExtension, listExtensions } from '../pbx.js';
-import { readPbxConfig } from '../pbx-config-store.js';
+import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
+import { readUserProfile } from '../profile-store.js';
 import { sessionOrganizationId } from '../tenancy.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { saveVoiceRoute } from '../voice-route-store.js';
@@ -25,12 +26,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const config = await readPbxConfig();
     const organizationId = sessionOrganizationId(session, config);
     let callerId: string | undefined;
+    let callerName: string | undefined;
+    let callerExtension: string | undefined;
     if (requestedFlow === 'internal') {
       const match = destination.match(internalSip);
       const organization = config.organizations.find((item) => item.id === organizationId);
-      if (!match || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
+      if (!match || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
       const target = (await listExtensions(organizationId)).find((item) => item.sipUsername === match[1] && item.status === 'active');
       if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
+      if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
+      const source = await getExtension(session.extensionId);
+      if (source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
+      const profile = await readUserProfile(`vocivo-extension:${source.id}`);
+      callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);
+      callerExtension = source.extension;
     } else {
       if (!e164.test(destination)) return res.status(400).json({ error: 'Use a complete international destination beginning with +.' });
       const profile = session.extensionId ? config.userProfiles[session.extensionId] : undefined;
@@ -39,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : profile?.outboundCallerId || config.company.defaultCallerId || requiredEnv('TELNYX_SMS_FROM');
       callerId = await assertCallerIdForSession(session, preferredCallerId);
       const extension = session.extensionId ? await getExtension(session.extensionId) : undefined;
-      authorizeOutboundCall(config, {
+      authorizeOutboundCall(pbxForOrganization(config, organizationId), {
         extension: extension?.extension,
         department: extension?.department,
         internationalAllowed: profile?.permissions?.international !== false,
@@ -52,6 +61,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       organizationId,
       destination,
       callerId,
+      callerName,
+      callerExtension,
       flow: requestedFlow,
       phase: 'dialing',
       createdAt: new Date(now).toISOString(),
@@ -63,9 +74,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       organizationId: route.organizationId,
       destination: route.destination,
       callerId: route.callerId,
+      callerName: route.callerName,
+      callerExtension: route.callerExtension,
       flow: route.flow,
     });
-    return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId });
+    return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId, callerName: route.callerName, callerExtension: route.callerExtension });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && /Caller ID|organization|owned|verified|Internal calling|destination|outbound rule|International calling/i.test(error.message)) return res.status(403).json({ error: error.message });

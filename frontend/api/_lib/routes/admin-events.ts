@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireOwner } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed } from '../http.js';
 import { listCallEvents } from '../call-event-store.js';
 
@@ -7,8 +7,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
-    await requireOwner(req);
-    const events = await listCallEvents(100);
+    const access = await requireAdmin(req);
+    const allEvents = await listCallEvents(250);
+    const events = access.superadmin ? allEvents.slice(0, 100) : allEvents.filter((event) => (event.organizationId || 'primary') === access.organizationId).slice(0, 100);
     res.setHeader('Cache-Control', 'private, max-age=15');
     return res.status(200).json({ events, meta: { source: 'vocivo-webhooks' } });
   } catch (error) {

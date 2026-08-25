@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireOwner } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { vocivoVoices, voiceDefinition } from '../voice-catalog.js';
 import { telnyx } from '../telnyx.js';
@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
-    await requireOwner(req);
+    await requireAdmin(req);
     if (req.query.preview === '1') {
       const voice = typeof req.query.voice === 'string' ? req.query.voice.slice(0, 120) : '';
       const definition = voiceDefinition(voice);

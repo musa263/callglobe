@@ -9,6 +9,8 @@ export type ReservedVoiceRoute = {
   organizationId: string;
   destination: string;
   callerId?: string;
+  callerName?: string;
+  callerExtension?: string;
   flow: 'outbound' | 'internal';
   phase: 'dialing' | 'ringing' | 'connected' | 'ended' | 'failed';
   failureCause?: string;

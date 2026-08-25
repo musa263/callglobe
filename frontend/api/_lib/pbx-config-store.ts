@@ -10,6 +10,7 @@ export type PbxConfig = {
   activeOrganizationId: string;
   organizations: Array<{
     id: string; name: string; slug: string; extensionStart: number; extensionEnd: number;
+    accountType: 'business' | 'individual'; ownerDisplayName: string; ownerEmail: string;
     internalCallingEnabled: boolean; status: 'active' | 'suspended';
   }>;
   numberAssignments: Record<string, {
@@ -23,6 +24,7 @@ export type PbxConfig = {
     enabled: boolean; voicemailEnabled: boolean; voicemailDelaySeconds: number; voicemailGreeting: string;
     companyName: string; greeting: string; waitingMessage: string; departments: string[]; voice: string; backgroundImageUrl: string;
   }>;
+  organizationSettings: Record<string, OrganizationPbxSettings>;
   userProfiles: Record<string, {
     outboundCallerId: string; did: string; twoFactorEnabled: boolean; noAnswerSeconds: number;
     forwardBusy: string; forwardNoAnswer: string; forwardUnavailable: string; simultaneousRing: string;
@@ -49,6 +51,8 @@ export type PbxConfig = {
   updatedAt: string;
 };
 
+export type OrganizationPbxSettings = Pick<PbxConfig, 'company' | 'departments' | 'outboundRules' | 'officeHours' | 'callHandling' | 'ai' | 'system'>;
+
 const pathname = 'vocivo/pbx/config.bin';
 
 const weekdays = Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, { enabled: !['Saturday', 'Sunday'].includes(day), start: '09:00', end: '17:00' }]));
@@ -58,9 +62,10 @@ export function defaultPbxConfig(): PbxConfig {
     version: 2,
     company: { name: 'Global Heritage', timezone: 'Asia/Riyadh', defaultCallerId: '', emergencyAddress: '' },
     activeOrganizationId: 'primary',
-    organizations: [{ id: 'primary', name: 'Global Heritage', slug: 'global-heritage', extensionStart: 2000, extensionEnd: 2019, internalCallingEnabled: true, status: 'active' }],
+    organizations: [{ id: 'primary', name: 'Global Heritage', slug: 'global-heritage', accountType: 'business', ownerDisplayName: 'Global Heritage', ownerEmail: '', extensionStart: 2000, extensionEnd: 2019, internalCallingEnabled: true, status: 'active' }],
     numberAssignments: {},
     businessVoiceConfigs: {},
+    organizationSettings: {},
     userProfiles: {},
     departments: [{ id: 'general', name: 'General', managerExtension: '' }, { id: 'sales', name: 'Sales', managerExtension: '' }, { id: 'operations', name: 'Operations', managerExtension: '' }],
     outboundRules: [{ id: 'international', name: 'International calling', prefix: '+', extensionRange: '', numberLength: '', department: 'All', routes: ['Vocivo Telnyx'], enabled: true }],
@@ -95,12 +100,43 @@ function mergeConfig(stored?: Partial<PbxConfig>): PbxConfig {
     callHandling: { ...base.callHandling, ...(stored.callHandling || {}) },
     ai: { ...base.ai, ...(stored.ai || {}) }, system: { ...base.system, ...(stored.system || {}) },
     platform: { ...base.platform, ...(stored.platform || {}) },
-    organizations: stored.organizations?.length ? stored.organizations : base.organizations,
+    organizations: stored.organizations?.length ? stored.organizations.map((organization) => ({
+      ...organization,
+      accountType: organization.accountType || 'business',
+      ownerDisplayName: organization.ownerDisplayName || organization.name || 'Account owner',
+      ownerEmail: organization.ownerEmail || '',
+    })) : base.organizations,
     numberAssignments: stored.numberAssignments || {},
     businessVoiceConfigs: stored.businessVoiceConfigs || {},
+    organizationSettings: Object.fromEntries(Object.entries(stored.organizationSettings || {}).map(([organizationId, settings]) => [organizationId, {
+      company: { ...base.company, ...(settings.company || {}) },
+      departments: settings.departments || base.departments,
+      outboundRules: settings.outboundRules || base.outboundRules,
+      officeHours: { ...base.officeHours, ...(settings.officeHours || {}), weekdays: { ...base.officeHours.weekdays, ...(settings.officeHours?.weekdays || {}) } },
+      callHandling: { ...base.callHandling, ...(settings.callHandling || {}) },
+      ai: { ...base.ai, ...(settings.ai || {}) },
+      system: { ...base.system, ...(settings.system || {}) },
+    }])),
     activeOrganizationId: stored.activeOrganizationId || base.activeOrganizationId,
     userProfiles: stored.userProfiles || {}, updatedAt: stored.updatedAt || base.updatedAt,
   };
+}
+
+export function organizationSettingsFrom(config: PbxConfig): OrganizationPbxSettings {
+  return {
+    company: config.company,
+    departments: config.departments,
+    outboundRules: config.outboundRules,
+    officeHours: config.officeHours,
+    callHandling: config.callHandling,
+    ai: config.ai,
+    system: config.system,
+  };
+}
+
+export function pbxForOrganization(config: PbxConfig, organizationId: string): PbxConfig {
+  const settings = config.organizationSettings[organizationId];
+  return settings ? { ...config, ...settings, activeOrganizationId: organizationId } : { ...config, activeOrganizationId: organizationId };
 }
 
 function validateOrganizations(config: PbxConfig) {
@@ -110,6 +146,8 @@ function validateOrganizations(config: PbxConfig) {
     if (!organization.id || ids.has(organization.id)) throw new Error('Each organization must have a unique ID.');
     ids.add(organization.id);
     if (!organization.name.trim()) throw new Error('Organization name is required.');
+    if (!['business', 'individual'].includes(organization.accountType)) throw new Error('Choose a valid account type.');
+    if (organization.accountType === 'individual' && organization.internalCallingEnabled) throw new Error('Individual accounts cannot enable company extension calling.');
     if (!Number.isInteger(organization.extensionStart) || !Number.isInteger(organization.extensionEnd) || organization.extensionStart < 10 || organization.extensionEnd > 99999 || organization.extensionEnd < organization.extensionStart) throw new Error('Extension ranges must contain 2 to 5 digit numbers in ascending order.');
     if (organization.extensionEnd - organization.extensionStart + 1 > 10000) throw new Error('An organization extension range cannot exceed 10,000 slots.');
   }
@@ -196,8 +234,12 @@ export async function savePbxConfig(input: Partial<PbxConfig>) {
   const current = await readPbxConfig();
   const next = mergeConfig({ ...current, ...input, updatedAt: new Date().toISOString() });
   validateOrganizations(next);
-  validateCallHandling(next);
-  validateOfficeHours(next);
+  for (const organization of next.organizations) {
+    const tenant = pbxForOrganization(next, organization.id);
+    tenant.numberAssignments = Object.fromEntries(Object.entries(next.numberAssignments).filter(([, assignment]) => assignment.organizationId === organization.id));
+    validateCallHandling(tenant);
+    validateOfficeHours(tenant);
+  }
   validateUserProfiles(next);
   await put(pathname, encrypt(next), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
   return next;

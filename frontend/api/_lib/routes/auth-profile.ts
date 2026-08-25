@@ -11,9 +11,9 @@ function baseProfile(session: Awaited<ReturnType<typeof requireSession>>): Store
   const owner = session.sub === 'vocivo-owner';
   return {
     id: session.sub || 'vocivo-user',
-    fullName: owner ? process.env.APP_ADMIN_NAME || 'Vocivo Owner' : session.name || `Extension ${session.extension || ''}`,
+    fullName: owner ? process.env.APP_ADMIN_NAME || 'Vocivo Superadmin' : session.name || `Extension ${session.extension || ''}`,
     email: session.email || '',
-    jobTitle: owner ? 'Account owner' : '',
+    jobTitle: owner ? 'Platform superadmin' : '',
     department: '',
     mobile: '',
     location: '',

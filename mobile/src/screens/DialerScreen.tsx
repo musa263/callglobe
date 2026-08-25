@@ -29,11 +29,12 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const [callError, setCallError] = useState('');
   const [contactName, setContactName] = useState<string | undefined>();
   const [dialMode, setDialMode] = useState<'external' | 'extension'>('external');
+  const businessAccount = profile?.account_type === 'business';
   const balance = Number(profile?.balance ?? 0);
   const balanceVisible = profile?.balance != null;
   const minutes = selected.rate_per_min ? Math.floor(balance / selected.rate_per_min) : null;
   const fullNumber = `${selected.dial_code}${number}`;
-  const internalCandidate = dialMode === 'extension';
+  const internalCandidate = dialMode === 'extension' && businessAccount;
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
   const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
@@ -89,7 +90,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         <Pressable onPress={onWallet} style={styles.balancePill}><View style={styles.liveDot} /><Text style={styles.balance}>{balanceVisible ? `$${balance.toFixed(2)}` : 'Managed'}</Text><Plus size={15} color={colors.mint} strokeWidth={3} /></Pressable>
       </View>
 
-      <View style={styles.mode}><Pressable onPress={() => { setDialMode('external'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'external' && styles.modeActive]}><Text style={dialMode === 'external' ? styles.modeActiveText : styles.modeText}>External</Text></Pressable><Pressable onPress={() => { setDialMode('extension'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'extension' && styles.modeActive]}><Text style={dialMode === 'extension' ? styles.modeActiveText : styles.modeText}>Extension</Text></Pressable><Pressable onPress={onConference} style={styles.modeButton}><Text style={styles.modeText}>Conference</Text></Pressable></View>
+      <View style={styles.mode}><Pressable onPress={() => { setDialMode('external'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'external' && styles.modeActive]}><Text style={dialMode === 'external' ? styles.modeActiveText : styles.modeText}>External</Text></Pressable>{businessAccount && <Pressable onPress={() => { setDialMode('extension'); setNumber(''); setCallError(''); }} style={[styles.modeButton, dialMode === 'extension' && styles.modeActive]}><Text style={dialMode === 'extension' ? styles.modeActiveText : styles.modeText}>Extension</Text></Pressable>}<Pressable onPress={onConference} style={styles.modeButton}><Text style={styles.modeText}>Conference</Text></Pressable></View>
 
       <View style={styles.destinationBlock}>
         <Text style={styles.eyebrow}>CALLING</Text>
