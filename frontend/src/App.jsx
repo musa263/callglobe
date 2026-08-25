@@ -59,7 +59,7 @@ function Login({ onLogin, onPreview }) {
         <div className="login-message">
           <p className="eyebrow">YOUR PRIVATE CALLING DESK</p>
           <h1>International calls, on your own line.</h1>
-          <p>Place and receive calls from your browser using the Telnyx numbers you control.</p>
+          <p>Place and receive calls from your browser using numbers assigned through Vocivo.</p>
         </div>
         <div className="trust-row">
           <span><ShieldCheck size={17} /> Secure connection</span>
@@ -69,7 +69,7 @@ function Login({ onLogin, onPreview }) {
       </section>
       <section className="login-panel">
         <form className="login-form" onSubmit={submit}>
-          <div><p className="eyebrow">WELCOME BACK</p><h2>Sign in to call</h2><p className="muted">Use your Vocivo owner account.</p></div>
+          <div><p className="eyebrow">WELCOME BACK</p><h2>Sign in to Vocivo</h2><p className="muted">Use your Vocivo platform or company account.</p></div>
           <label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="you@example.com" required /></label>
           <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="Your password" minLength={8} required /></label>
           {error && <div className="form-error" role="alert">{error}</div>}
@@ -190,7 +190,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
               <button key={rate.id} onClick={() => { setCountry(rate); setCountryOpen(false); setSearch(''); }}><span className="country-code">{rate.country_code}</span><span><strong>{rate.country_name}</strong><small>{rate.dial_code}</small></span><em>{rate.rate_per_min ? `$${rate.rate_per_min.toFixed(3)}/min` : 'Available'}</em></button>
             ))}</div></div>}
           </div>
-          {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See Telnyx rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
+          {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See live rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
           <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key, letters)}><strong>{key}</strong><small>{letters}</small></button>)}</div>
           {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
           <button className="call-button" onClick={call} disabled={!number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (!preview && !voice.ready)}><Phone size={22} /> {voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'}</button>
@@ -201,16 +201,15 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
 }
 
 function WalletView({ balance, preview }) {
-  const billingUrl = 'https://portal.telnyx.com/#/billing/payment';
   return <section className="content-view wallet-view">
     <header className="workspace-header"><div><p className="eyebrow">CALLING CREDIT</p><h1>Top up balance</h1></div></header>
     <div className="wallet-layout">
       <div className="wallet-balance"><span className="balance-icon"><CircleDollarSign size={21} /></span><div><small>AVAILABLE TELNYX CREDIT</small><strong>${balance.toFixed(2)}</strong><p>Calls are deducted directly from this balance.</p></div><span>USD</span></div>
       <div className="payment-panel">
-        <div className="payment-heading"><span><CreditCard size={20} /></span><div><h2>Add funds securely</h2><p>Enter your card details on Telnyx's protected billing page. The new balance appears in Vocivo after payment.</p></div></div>
-        <div className="payment-facts"><span><Check size={16} /><strong>Minimum top-up</strong><small>$10 USD</small></span><span><ShieldCheck size={16} /><strong>Payment security</strong><small>Handled by Telnyx</small></span><span><WalletCards size={16} /><strong>Available methods</strong><small>Card, PayPal, ACH or Bitcoin</small></span></div>
-        <button className="topup-button" disabled={preview} onClick={() => window.open(billingUrl, '_blank', 'noopener,noreferrer')}><CreditCard size={19} /> Continue to secure payment</button>
-        <p className="payment-note">Apple Pay is not currently offered for direct Telnyx balance funding. Vocivo never receives or stores your card details.</p>
+        <div className="payment-heading"><span><CreditCard size={20} /></span><div><h2>Vocivo billing</h2><p>Calling credit and subscription payments are managed by Vocivo without exposing the underlying carrier account.</p></div></div>
+        <div className="payment-facts"><span><Check size={16} /><strong>Account</strong><small>Vocivo calling credit</small></span><span><ShieldCheck size={16} /><strong>Payment security</strong><small>Secure billing support</small></span><span><WalletCards size={16} /><strong>Currency</strong><small>USD</small></span></div>
+        <button className="topup-button" disabled={preview} onClick={() => window.location.href = 'mailto:billing@vocivo.app?subject=Vocivo%20calling%20credit'}><CreditCard size={19} /> Contact Vocivo billing</button>
+        <p className="payment-note">Online self-service payment processing will be enabled when the Vocivo billing provider is connected.</p>
       </div>
     </div>
   </section>;
@@ -223,7 +222,7 @@ function HistoryView({ history, onCallAgain }) {
 function RatesView({ rates }) {
   const [search, setSearch] = useState('');
   const filtered = rates.filter((rate) => `${rate.country_name} ${rate.country_code} ${rate.dial_code}`.toLowerCase().includes(search.toLowerCase()));
-  return <section className="content-view"><header className="workspace-header"><div><p className="eyebrow">WORLDWIDE</p><h1>Country codes</h1></div><div className="view-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Country or code" /></div></header><div className="rates-list">{filtered.map((rate) => <article key={rate.id} className="rate-item"><span className="rate-code">{rate.country_code}</span><div><strong>{rate.country_name}</strong><small>International destination</small></div><strong>{rate.dial_code} {rate.rate_per_min ? <small>from ${rate.rate_per_min.toFixed(3)}/min</small> : <small>Telnyx live rate</small>}</strong></article>)}</div><p className="rate-note">Vocivo accepts complete international numbers in E.164 format. Final Telnyx pricing varies by number type and destination network.</p></section>;
+  return <section className="content-view"><header className="workspace-header"><div><p className="eyebrow">WORLDWIDE</p><h1>Country codes</h1></div><div className="view-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Country or code" /></div></header><div className="rates-list">{filtered.map((rate) => <article key={rate.id} className="rate-item"><span className="rate-code">{rate.country_code}</span><div><strong>{rate.country_name}</strong><small>International destination</small></div><strong>{rate.dial_code} {rate.rate_per_min ? <small>from ${rate.rate_per_min.toFixed(3)}/min</small> : <small>Vocivo live rate</small>}</strong></article>)}</div><p className="rate-note">Vocivo accepts complete international numbers in E.164 format. Final pricing varies by number type and destination network.</p></section>;
 }
 
 function VerifiedNumbersPanel({ numbers, pending, busy, error, preview, onRequest, onVerify, onRemove, onCancel }) {
@@ -243,7 +242,7 @@ function VerifiedNumbersPanel({ numbers, pending, busy, error, preview, onReques
       </form>}
 
       {!preview && pending && <form className="verification-form code-form" onSubmit={(event) => { event.preventDefault(); onVerify(pending.phone_number, code); }}>
-        <div className="verification-copy"><strong>Enter the code sent to {pending.phone_number}</strong><small>Telnyx sent it by {pending.verification_method === 'call' ? 'voice call' : 'text message'}.</small>{pending.verification_method === 'sms' && <button type="button" className="voice-fallback" onClick={() => onRequest(pending.phone_number, 'call')} disabled={busy}><PhoneCall size={14} /> No text? Send by voice call</button>}</div>
+        <div className="verification-copy"><strong>Enter the code sent to {pending.phone_number}</strong><small>Vocivo sent it by {pending.verification_method === 'call' ? 'voice call' : 'text message'}.</small>{pending.verification_method === 'sms' && <button type="button" className="voice-fallback" onClick={() => onRequest(pending.phone_number, 'call')} disabled={busy}><PhoneCall size={14} /> No text? Send by voice call</button>}</div>
         <label>Verification code<input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="123456" inputMode="numeric" autoFocus required /></label>
         <div className="verification-actions"><button type="button" className="secondary-small" onClick={onCancel}>Cancel</button><button className="add-number-button" disabled={busy}>{busy ? 'Checking...' : 'Confirm number'}</button></div>
       </form>}
@@ -257,8 +256,8 @@ function SettingsView({ profile, ownedNumbers, verifiedNumbers, voice, preview, 
   return (
     <section className="content-view settings-view">
       <header className="workspace-header"><div><p className="eyebrow">ACCOUNT</p><h1>Phone settings</h1></div></header>
-      <div className="settings-section"><h2>Connection</h2><div className="setting-row"><span className={voice.ready ? 'setting-icon good' : 'setting-icon'}>{voice.ready ? <Wifi /> : <WifiOff />}</span><div><strong>Telnyx web phone</strong><small>{preview ? 'Preview mode does not connect to Telnyx.' : voice.statusLabel}</small></div><span className={voice.ready ? 'state good' : 'state'}>{voice.ready ? 'Connected' : preview ? 'Preview' : 'Waiting'}</span></div><div className="setting-row"><span className="setting-icon"><Mic /></span><div><strong>Microphone</strong><small>Your browser will ask before sharing audio.</small></div><span className="state">Browser managed</span></div></div>
-      <div className="settings-section"><div className="section-heading"><div><h2>Incoming Vocivo numbers</h2><p>Calls to these Telnyx-owned numbers ring Vocivo while the web phone is connected.</p></div></div>{ownedNumbers.map((number) => <div className="setting-row" key={number.id}><span className="setting-icon"><PhoneIncoming /></span><div><strong>{number.phone_number}</strong><small>{number.label}</small></div><span className={number.receives_calls ? 'state good' : 'state'}>{number.receives_calls ? 'Incoming enabled' : 'Needs routing'}</span></div>)}</div>
+      <div className="settings-section"><h2>Connection</h2><div className="setting-row"><span className={voice.ready ? 'setting-icon good' : 'setting-icon'}>{voice.ready ? <Wifi /> : <WifiOff />}</span><div><strong>Vocivo web phone</strong><small>{preview ? 'Preview mode does not connect to the voice service.' : voice.statusLabel}</small></div><span className={voice.ready ? 'state good' : 'state'}>{voice.ready ? 'Connected' : preview ? 'Preview' : 'Waiting'}</span></div><div className="setting-row"><span className="setting-icon"><Mic /></span><div><strong>Microphone</strong><small>Your browser will ask before sharing audio.</small></div><span className="state">Browser managed</span></div></div>
+      <div className="settings-section"><div className="section-heading"><div><h2>Incoming Vocivo numbers</h2><p>Calls to these assigned numbers ring Vocivo while the web phone is connected.</p></div></div>{ownedNumbers.map((number) => <div className="setting-row" key={number.id}><span className="setting-icon"><PhoneIncoming /></span><div><strong>{number.phone_number}</strong><small>{number.label}</small></div><span className={number.receives_calls ? 'state good' : 'state'}>{number.receives_calls ? 'Incoming enabled' : 'Needs routing'}</span></div>)}</div>
       <VerifiedNumbersPanel numbers={verifiedNumbers} pending={verification.pending} busy={verification.busy} error={verification.error} preview={preview} onRequest={verification.request} onVerify={verification.verify} onRemove={verification.remove} onCancel={verification.cancel} />
       <div className="settings-section"><h2>Profile</h2><div className="setting-row">{profile.photo_url ? <img className="settings-avatar" src={profile.photo_url} alt={profile.full_name} /> : <span className="setting-icon"><ContactRound /></span>}<div><strong>{profile.full_name}</strong><small>{profile.job_title || profile.department || profile.email}</small><small>{[profile.mobile, profile.location].filter(Boolean).join(' · ')}</small></div><button className="logout-button" onClick={onLogout}><LogOut size={16} /> Sign out</button></div></div>
     </section>
@@ -284,7 +283,7 @@ export default function App() {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const voiceIdentity = useMemo(() => ({ name: profile?.full_name || 'Vocivo', extension: profile?.extension }), [profile?.extension, profile?.full_name]);
-  const voice = useTelnyxVoice(session?.token, !preview && Boolean(session), voiceIdentity);
+  const voice = useTelnyxVoice(session?.token, !preview && Boolean(session) && Boolean(profile) && profile?.admin_only !== true, voiceIdentity);
 
   useEffect(() => {
     if (!session) return;
@@ -293,17 +292,23 @@ export default function App() {
     (async () => {
       try {
         const sessionData = await api('/api/auth/session');
-        const [accountData, numberData, verifiedData, userData] = await Promise.all([
+        const userData = await api('/api/auth/profile').catch(() => ({ profile: {} }));
+        const details = userData.profile || {};
+        const resolvedProfile = { ...sessionData.profile, full_name: details.fullName || sessionData.profile.full_name, photo_url: details.photoUrl, job_title: details.jobTitle, department: details.department, mobile: details.mobile, location: details.location, bio: details.bio };
+        if (resolvedProfile.admin_only) {
+          if (!active) return;
+          setProfile(resolvedProfile); setBalance(0); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
+          return;
+        }
+        const [accountData, numberData, verifiedData] = await Promise.all([
           api('/api/telnyx/account').catch(() => ({ balance: null, rates: [] })),
           api('/api/telnyx/numbers').catch(() => ({ numbers: [] })),
           api('/api/telnyx/verified-numbers').catch(() => ({ numbers: [] })),
-          api('/api/auth/profile').catch(() => ({ profile: {} })),
         ]);
         if (!active) return;
         const owned = numberData.numbers || [];
         const verified = verifiedData.numbers || [];
-        const details = userData.profile || {};
-        setProfile({ ...sessionData.profile, full_name: details.fullName || sessionData.profile.full_name, photo_url: details.photoUrl, job_title: details.jobTitle, department: details.department, mobile: details.mobile, location: details.location, bio: details.bio });
+        setProfile(resolvedProfile);
         setBalance(Number(accountData.balance) || 0);
         setRates(buildDialingDirectory(accountData.rates || []));
         setNumbers(owned);
@@ -365,7 +370,7 @@ export default function App() {
   }
   if (!session && !preview) return <Login onLogin={setSession} onPreview={() => { setPreview(true); setLoading(false); }} />;
   if (loading) return <div className="loading-screen"><span className="brand-mark"><Globe2 /></span><p>Opening your phone...</p></div>;
-  const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ['wallet', WalletCards, 'Top up'], ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ...(canAdmin ? [['admin', ShieldCheck, shellData.profile?.role === 'superadmin' ? 'Superadmin' : 'Company admin']] : [])];
+  const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ...(shellData.profile?.account_type === 'business' ? [] : [['wallet', WalletCards, 'Top up']]), ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ...(canAdmin ? [['admin', ShieldCheck, shellData.profile?.role === 'superadmin' ? 'Superadmin' : 'Company admin']] : [])];
   return (
     <div className={`app-shell ${view === 'admin' ? 'admin-mode' : ''}`}>
       {view !== 'admin' && <aside className="side-nav"><div className="brand-lockup"><span className="brand-mark"><Globe2 size={22} /></span><span>Vocivo</span></div><nav>{navItems.map(([id, Icon, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="side-footer">{shellData.profile?.photo_url ? <img className="account-avatar" src={shellData.profile.photo_url} alt={shellData.profile.full_name} /> : <div className="account-avatar">{(shellData.profile?.organization_name || shellData.profile?.full_name)?.charAt(0) || 'V'}</div>}<div><strong>{shellData.profile?.account_type === 'business' ? shellData.profile?.organization_name : shellData.profile?.full_name}</strong><small>{preview ? 'Preview workspace' : shellData.profile?.account_type === 'business' ? `${shellData.profile?.full_name} · ${String(shellData.profile?.role || 'user').replaceAll('_', ' ')}` : shellData.profile?.role === 'superadmin' ? 'Platform superadmin' : 'Individual account'}</small></div><button onClick={logout} title={preview ? 'Exit preview' : 'Sign out'}><LogOut size={17} /></button></div></aside>}

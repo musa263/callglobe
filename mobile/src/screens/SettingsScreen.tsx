@@ -173,7 +173,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
         <Label>VOICE</Label><View style={styles.choice}>{[{ label: 'Joanna', value: 'AWS.Polly.Joanna-Neural' }, { label: 'Matthew', value: 'AWS.Polly.Matthew-Neural' }].map((voice) => <Pressable key={voice.value} onPress={() => setDraft((value) => ({ ...value, voice: voice.value }))} style={[styles.choiceButton, draft.voice === voice.value && styles.choiceActive]}><Text style={[styles.choiceText, draft.voice === voice.value && styles.choiceTextActive]}>{voice.label}</Text></Pressable>)}</View>
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Pressable disabled={saving} onPress={saveBusiness} style={[styles.save, saving && styles.disabled]}>{saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.saveText}>Save and apply to phone number</Text>}</Pressable>
-        <Text style={styles.note}>When enabled, Telnyx answers the call, speaks this menu, then rings Vocivo. Standard voice charges apply.</Text>
+        <Text style={styles.note}>When enabled, Vocivo answers the call, speaks this menu, then rings your team. Standard voice charges apply.</Text>
       </ScrollView>
     </Modal>
 

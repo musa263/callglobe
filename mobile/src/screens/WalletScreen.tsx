@@ -9,31 +9,32 @@ import { colors, shadow } from '../theme';
 export function WalletScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
   const { profile, refresh } = useAuth();
+  const organizationManaged = profile?.balance == null;
   return (
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}><Pressable accessibilityLabel="Back to dialer" onPress={onBack} style={styles.back}><ArrowLeft size={21} color={colors.text} /></Pressable><View><Text style={styles.eyebrow}>TELNYX ACCOUNT</Text><Text style={styles.title}>Balance</Text></View></View>
+      <View style={styles.header}><Pressable accessibilityLabel="Back to dialer" onPress={onBack} style={styles.back}><ArrowLeft size={21} color={colors.text} /></Pressable><View><Text style={styles.eyebrow}>VOCIVO BILLING</Text><Text style={styles.title}>{organizationManaged ? 'Service plan' : 'Balance'}</Text></View></View>
       <LinearGradient colors={['#17486A', '#10243D']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.balanceCard}>
         <View style={styles.balanceTop}><Text style={styles.balanceLabel}>AVAILABLE CALLING CREDIT</Text><View style={styles.currency}><Text style={styles.currencyText}>{profile?.currency || 'USD'}</Text></View></View>
-        <Text style={styles.balance}>${Number(profile?.balance ?? 0).toFixed(2)}</Text>
-        <View style={styles.balanceBottom}><View style={styles.available}><View style={styles.liveDot} /><Text style={styles.availableText}>Synced from Telnyx</Text></View><Pressable accessibilityLabel="Refresh balance" onPress={refresh} style={styles.refresh}><RefreshCw size={16} color={colors.text} /></Pressable></View>
+        <Text adjustsFontSizeToFit numberOfLines={1} style={styles.balance}>{organizationManaged ? (profile?.organization_name || 'Organization managed') : `$${Number(profile?.balance).toFixed(2)}`}</Text>
+        <View style={styles.balanceBottom}><View style={styles.available}><View style={styles.liveDot} /><Text style={styles.availableText}>{organizationManaged ? 'Managed by your company' : 'Vocivo calling credit'}</Text></View><Pressable accessibilityLabel="Refresh account" onPress={refresh} style={styles.refresh}><RefreshCw size={16} color={colors.text} /></Pressable></View>
       </LinearGradient>
 
       <Text style={styles.sectionTitle}>Account control</Text>
       <View style={styles.infoBand}>
         <View style={styles.infoIcon}><Building2 size={21} color={colors.blue} /></View>
-        <View style={styles.infoCopy}><Text style={styles.infoTitle}>Direct Telnyx billing</Text><Text style={styles.infoBody}>Your calls use your Telnyx balance directly. Vocivo does not add a recharge fee.</Text></View>
+        <View style={styles.infoCopy}><Text style={styles.infoTitle}>{organizationManaged ? 'Company-managed service' : 'Vocivo calling credit'}</Text><Text style={styles.infoBody}>{organizationManaged ? 'Your company administrator controls the subscription, calling access and billing.' : 'Your calling service and available credit are managed securely by Vocivo.'}</Text></View>
       </View>
 
-      <Pressable onPress={() => Linking.openURL('https://portal.telnyx.com/#/billing/payment')} style={({ pressed }) => [styles.manage, pressed && styles.managePressed]}>
-        <Text style={styles.manageText}>Top up securely by card</Text><ArrowUpRight size={20} color={colors.ink} />
+      <Pressable onPress={() => Linking.openURL('mailto:billing@vocivo.app?subject=Vocivo%20billing%20request')} style={({ pressed }) => [styles.manage, pressed && styles.managePressed]}>
+        <Text style={styles.manageText}>{organizationManaged ? 'Contact company billing' : 'Manage billing'}</Text><ArrowUpRight size={20} color={colors.ink} />
       </Pressable>
 
-      <Text style={styles.paymentNote}>Payment details are entered directly with Telnyx. Apple Pay is not currently available for direct Telnyx balance funding.</Text>
+      <Text style={styles.paymentNote}>{organizationManaged ? 'Subscription changes are approved by your company administrator.' : 'Vocivo support can help with plan, invoice and calling-credit questions.'}</Text>
 
       <View style={styles.checks}>
-        <View style={styles.checkRow}><CircleCheck size={18} color={colors.mint} /><Text style={styles.checkText}>No third-party wallet or stored card data</Text></View>
-        <View style={styles.checkRow}><CircleCheck size={18} color={colors.mint} /><Text style={styles.checkText}>Balance comes from the official Telnyx API</Text></View>
-        <View style={styles.checkRow}><ShieldCheck size={18} color={colors.mint} /><Text style={styles.checkText}>API credentials remain on Vercel</Text></View>
+        <View style={styles.checkRow}><CircleCheck size={18} color={colors.mint} /><Text style={styles.checkText}>No payment details stored in the app</Text></View>
+        <View style={styles.checkRow}><CircleCheck size={18} color={colors.mint} /><Text style={styles.checkText}>Company access follows the assigned Vocivo plan</Text></View>
+        <View style={styles.checkRow}><ShieldCheck size={18} color={colors.mint} /><Text style={styles.checkText}>Carrier credentials remain protected on the server</Text></View>
       </View>
     </ScrollView>
   );

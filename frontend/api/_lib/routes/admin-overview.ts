@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const config = await readPbxConfig();
     const organizationId = access.organizationId || config.activeOrganizationId;
     const [balance, numbers, connection, extensions, business] = await Promise.all([
-      data('/balance') as Promise<{ balance?: string; currency?: string }>,
+      access.superadmin ? data('/balance') as Promise<{ balance?: string; currency?: string }> : Promise.resolve(null),
       data('/phone_numbers?page[size]=250&filter[status]=active') as Promise<Array<{ id: string; phone_number: string; status?: string }>>,
       data(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`) as Promise<{ active?: boolean; registration_status?: string; connection_name?: string; ios_push_credential_id?: string | null }>,
       listExtensions(organizationId),
@@ -27,13 +27,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ]);
     return res.status(200).json({
       metrics: {
-        balance: Number(balance?.balance || 0),
-        currency: balance?.currency || 'USD',
-        phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => access.superadmin || config.numberAssignments[item.phone_number]?.organizationId === organizationId).length : 0,
+        balance: access.superadmin ? Number(balance?.balance || 0) : null,
+        currency: access.superadmin ? balance?.currency || 'USD' : null,
+        phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => config.numberAssignments[item.phone_number]?.organizationId === organizationId).length : 0,
         extensions: extensions.length,
         activeExtensions: extensions.filter((item) => item.status === 'active').length,
       },
-      phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => access.superadmin || config.numberAssignments[item.phone_number]?.organizationId === organizationId).map(({ id, phone_number, status }) => ({ id, phone_number, status })) : [],
+      phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => config.numberAssignments[item.phone_number]?.organizationId === organizationId).map(({ id, phone_number, status }) => ({ id, phone_number, status })) : [],
       connection: { name: connection?.connection_name || 'Vocivo Mobile', active: Boolean(connection?.active), registrationStatus: connection?.registration_status || 'Unknown', pushConfigured: Boolean(connection?.ios_push_credential_id) },
       business,
     });

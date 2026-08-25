@@ -118,9 +118,9 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
       </View>
 
       <View style={styles.rateLine}>
-        <Text style={styles.rate}>{internalCandidate ? 'Free internal call' : selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)}/min est.` : 'Live Telnyx rate'}</Text>
+        <Text style={styles.rate}>{internalCandidate ? 'Free internal call' : selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)}/min est.` : 'Live carrier rate'}</Text>
         <View style={styles.dividerDot} />
-        <Text style={styles.minutes}>{internalCandidate ? 'No phone number required' : minutes ? `about ${minutes.toLocaleString()} minutes available` : balanceVisible ? 'charged to your Telnyx balance' : 'organization billing'}</Text>
+        <Text style={styles.minutes}>{internalCandidate ? 'No phone number required' : minutes ? `about ${minutes.toLocaleString()} minutes available` : balanceVisible ? 'charged to your calling credit' : 'organization billing'}</Text>
       </View>
 
       {routeRisk && <View style={styles.routeWarning}><AlertTriangle size={17} color={colors.amber} /><View style={styles.routeCopy}><Text style={styles.routeTitle}>Caller ID may not ring locally</Text><Text style={styles.routeText}>Some countries filter same-country caller IDs arriving through international routes.</Text></View>{ownedFallback && <Pressable onPress={() => { setSelectedCaller(ownedFallback); setCallError(''); }} style={styles.routeButton}><Text style={styles.routeButtonText}>Use +1 line</Text></Pressable>}</View>}

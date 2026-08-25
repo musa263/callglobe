@@ -5,6 +5,7 @@ import { organizationSettingsFrom, pbxForOrganization, readPbxConfig, savePbxCon
 import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice } from '../voice-catalog.js';
 import { findExtension } from '../pbx.js';
+import { requireFeature } from '../saas-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -12,6 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const access = await requireAdmin(req);
     const current = await readPbxConfig();
+    await requireFeature(access.session, 'aiReceptionist', current);
     const organizationId = access.organizationId || current.activeOrganizationId;
     const tenant = pbxForOrganization(current, organizationId);
     const ai = { ...tenant.ai, ...(req.body ?? {}) };
@@ -52,6 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ ai: saved, synced: Boolean(saved.assistantId) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'AI receptionist is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }
 }

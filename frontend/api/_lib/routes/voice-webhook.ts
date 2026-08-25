@@ -21,6 +21,7 @@ import { clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-stor
 import { normalizeE164 } from '../tenancy.js';
 import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
+import { accessForOrganization } from '../saas-access.js';
 
 type VoiceEvent = {
   data?: {
@@ -462,6 +463,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch(() => undefined);
         return res.status(200).json({ received: true });
       }
+      try {
+        const access = await accessForOrganization(reservation.organizationId);
+        const feature = reservation.flow === 'internal' ? 'internalCalling' : 'outboundCalling';
+        if (!access.features[feature]) throw new Error('Feature not enabled');
+      } catch {
+        await callAction(callControlId, 'hangup', { command_id: `${eventId}-service-unavailable` }).catch(() => undefined);
+        return res.status(200).json({ received: true });
+      }
       await callAction(callControlId, 'answer', { command_id: `${eventId}-answer-client` });
       const appUrl = requiredEnv('VITE_APP_URL').replace(/\/+$/, '');
       await callAction(callControlId, 'playback_start', {
@@ -702,6 +711,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (eventType === 'call.initiated' && isInboundInitiated) {
+      try {
+        const access = await accessForOrganization(eventOrganizationId);
+        if (!access.features.phoneNumbers) throw new Error('Feature not enabled');
+      } catch {
+        await callAction(callControlId, 'hangup', { command_id: `${eventId}-service-unavailable` }).catch(() => undefined);
+        return res.status(200).json({ received: true });
+      }
       await callAction(callControlId, 'answer', { command_id: `${eventId}-answer` });
     }
 

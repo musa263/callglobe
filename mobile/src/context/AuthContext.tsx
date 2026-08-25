@@ -93,6 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadAccount = useCallback(async (baseProfile?: Omit<Profile, 'balance'>) => {
     if (!baseProfile?.id) throw new Error('Account identity was not returned.');
+    if (baseProfile.admin_only) throw new Error('This administrator account uses the Vocivo web portal. Assign a calling extension before using the mobile app.');
     const fallbackProfile: UserProfileResponse = { profile: { id: baseProfile.id, fullName: baseProfile.full_name || '', email: baseProfile.email, jobTitle: baseProfile.job_title || '', department: baseProfile.department || '', mobile: baseProfile.mobile || '', location: baseProfile.location || '', bio: baseProfile.bio || '', photoUrl: baseProfile.photo_url } };
     const [account, numbers, verified, storedHistory, serverHistory, userProfile] = await Promise.all([
       api.get<AccountResponse>('/api/telnyx/account').catch(() => ({ balance: null, currency: baseProfile.currency || 'USD', rates: [], can_call: false })),

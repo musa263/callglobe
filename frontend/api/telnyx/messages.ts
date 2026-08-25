@@ -6,6 +6,7 @@ import { listStoredMessages, storeMessageEvent } from '../_lib/message-store.js'
 import { listOwnedNumbers } from '../_lib/phone-number-access.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { normalizeE164, numberOrganizationId, sessionOrganizationId } from '../_lib/tenancy.js';
+import { requireFeature } from '../_lib/saas-access.js';
 
 const e164Pattern = /^\+[1-9]\d{6,14}$/;
 
@@ -16,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const config = await readPbxConfig();
+    await requireFeature(session, 'sms', config);
     const organizationId = sessionOrganizationId(session, config);
     if (req.method === 'GET') {
       res.setHeader('Cache-Control', 'no-store');
@@ -48,6 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'SMS messaging is not enabled for this company.' });
     if (error instanceof TelnyxApiError && [400, 403, 404, 422].includes(error.status)) return res.status(error.status).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }

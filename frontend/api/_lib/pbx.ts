@@ -146,6 +146,7 @@ export async function updateExtension(id: string, input: Partial<ExtensionUser>)
   if (duplicate) throw new Error(`Extension ${value.extension} already exists.`);
   const response = await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name: encodeName(value), tag: extensionTag }) });
   const payload = await response.json() as { data?: CredentialResource };
+  await revokeExtensionSessions(id);
   return payload.data ? parseCredential(payload.data) : null;
 }
 

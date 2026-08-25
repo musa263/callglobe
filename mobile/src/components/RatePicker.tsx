@@ -40,7 +40,7 @@ export function RatePicker({ visible, rates, selected, onSelect, onClose }: { vi
                 <Text style={styles.flag}>{flagFromCode(item.country_code)}</Text>
                 <View style={styles.country}>
                   <Text style={styles.countryName}>{item.country_name}</Text>
-                  <Text style={styles.rate}>{item.rate_per_min ? `$${item.rate_per_min.toFixed(3)} per min est.` : 'Live Telnyx rate'}</Text>
+                  <Text style={styles.rate}>{item.rate_per_min ? `$${item.rate_per_min.toFixed(3)} per min est.` : 'Live carrier rate'}</Text>
                 </View>
                 <Text style={styles.code}>{item.dial_code}</Text>
                 <View style={[styles.check, !active && styles.checkInactive]}>{active && <Check size={16} color={colors.ink} strokeWidth={3} />}</View>

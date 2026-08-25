@@ -26,6 +26,103 @@
   white-space: nowrap;
 }
 
+.portfolio-list {
+  border-top: 1px solid #d9e3ec;
+}
+
+.portfolio-list > div {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 40px minmax(180px, 1.5fr) minmax(130px, .7fr) 90px;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #e5edf3;
+}
+
+.portfolio-list strong,
+.portfolio-list small {
+  display: block;
+}
+
+.portfolio-list strong { font-size: 11px; }
+.portfolio-list small { margin-top: 4px; color: #687d91; font-size: 9px; }
+.company-monogram { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; background: #e5f2ff; color: #0b65c2; font-size: 13px; font-weight: 900; }
+
+.customer-editor > section {
+  padding: 22px;
+  border-bottom: 1px solid #d9e3ec;
+}
+
+.customer-editor h3 { margin: 0 0 16px; color: #132a42; font-size: 13px; }
+.customer-editor > footer { padding: 14px 22px; display: flex; justify-content: flex-end; gap: 8px; background: #f7fafc; }
+.section-copy { margin: -8px 0 18px; color: #687d91; font-size: 9px; line-height: 1.55; }
+.range-input { min-height: 38px; display: grid; grid-template-columns: 1fr 32px 1fr; align-items: center; border: 1px solid #cad8e4; border-radius: 6px; overflow: hidden; }
+.range-input input { min-width: 0; border: 0 !important; border-radius: 0 !important; }
+.range-input span { height: 100%; display: grid; place-items: center; background: #eef3f7; color: #687d91; font-size: 8px; }
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.plan-grid > section {
+  min-height: 190px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border: 1px solid #d9e3ec;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.plan-grid > section > div:first-child > span { color: #0b65c2; font-size: 9px; font-weight: 900; text-transform: uppercase; }
+.plan-grid > section > div:first-child > strong { display: block; margin-top: 9px; color: #132a42; font-size: 22px; }
+.plan-grid > section > div:first-child > strong small { color: #687d91; font-size: 9px; font-weight: 600; }
+.plan-grid p { min-height: 36px; margin: 9px 0 0; color: #687d91; font-size: 9px; line-height: 1.5; }
+.plan-limits { width: 100%; margin: 15px 0; padding: 11px 0; display: flex; flex-wrap: wrap; gap: 6px 10px; border-top: 1px solid #e5edf3; border-bottom: 1px solid #e5edf3; }
+.plan-limits span { color: #466178; font-size: 8px; font-weight: 750; }
+
+.company-select {
+  min-width: 210px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #c8d7e4;
+  border-radius: 6px;
+  background: #fff;
+  color: #31516e;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.entitlement-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid #d9e3ec;
+  border-radius: 7px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.entitlement-summary > div { min-height: 82px; padding: 16px; display: grid; grid-template-columns: 24px 1fr; align-content: center; column-gap: 9px; border-right: 1px solid #d9e3ec; }
+.entitlement-summary > div:last-child { border: 0; }
+.entitlement-summary svg { grid-row: 1 / 3; width: 18px; color: #0b65c2; }
+.entitlement-summary span { color: #687d91; font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.entitlement-summary strong { margin-top: 5px; color: #132a42; font-size: 11px; text-transform: capitalize; }
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid #d9e3ec;
+  border-left: 1px solid #d9e3ec;
+}
+
+.feature-grid > div { min-height: 72px; padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-right: 1px solid #d9e3ec; border-bottom: 1px solid #d9e3ec; }
+.feature-grid strong, .feature-grid span { display: block; }
+.feature-grid strong { color: #132a42; font-size: 10px; }
+.feature-grid span { margin-top: 5px; color: #687d91; font-size: 8px; }
+
 .handling-label {
   display: block;
   margin-bottom: 4px;
@@ -101,4 +198,9 @@
   .ivr-options {
     grid-template-columns: 1fr;
   }
+
+  .portfolio-list > div { grid-template-columns: 36px 1fr auto; }
+  .portfolio-list > div > span:nth-child(3) { display: none; }
+  .plan-grid, .entitlement-summary, .feature-grid { grid-template-columns: 1fr; }
+  .entitlement-summary > div { border-right: 0; border-bottom: 1px solid #d9e3ec; }
 }

@@ -88,6 +88,7 @@ export type Profile = {
   mobile?: string;
   location?: string;
   bio?: string;
+  admin_only?: boolean;
 };
 
 export type CallPhase = 'idle' | 'connecting' | 'ringing' | 'active' | 'ended' | 'failed';

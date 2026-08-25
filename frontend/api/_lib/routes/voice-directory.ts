@@ -4,6 +4,7 @@ import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
 import { readUserProfile } from '../profile-store.js';
 import { readPbxConfig } from '../pbx-config-store.js';
+import { requireFeature } from '../saas-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -11,6 +12,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const config = await readPbxConfig();
+    await requireFeature(session, 'internalCalling', config);
     const organizationId = session.organizationId || config.activeOrganizationId;
     const organization = config.organizations.find((item) => item.id === organizationId);
     if (organization?.accountType !== 'business' || !organization.internalCallingEnabled || organization.status !== 'active') return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
@@ -23,6 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ users, organization });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && ['Organization inactive', 'Subscription inactive', 'Feature not enabled'].includes(error.message)) return res.status(403).json({ error: 'Internal calling is not available for this account.' });
     return res.status(500).json({ error: publicError(error) });
   }
 }

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { put } from '@vercel/blob';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { requireFeature } from '../saas-access.js';
 
 const allowed = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -10,6 +11,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
   try {
     const access = await requireAdmin(req);
+    await requireFeature(access.session, 'customBranding');
     const contentType = typeof req.body?.contentType === 'string' ? req.body.contentType : '';
     const base64 = typeof req.body?.base64 === 'string' ? req.body.base64 : '';
     if (!allowed.has(contentType) || !base64) return res.status(400).json({ error: 'Choose a PNG, JPG or WebP image.' });
@@ -21,6 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(201).json({ url: blob.url });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Custom branding is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }
 }

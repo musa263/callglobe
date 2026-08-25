@@ -10,6 +10,7 @@ import { sessionOrganizationId } from '../tenancy.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
+import { requireFeature } from '../saas-access.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 const internalSip = /^sip:([A-Za-z0-9_.-]+)@sip\.telnyx\.com$/i;
@@ -24,6 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const requestedFlow = req.body?.flow === 'internal' ? 'internal' : 'outbound';
     if (!isVoiceRouteId(routeId)) return res.status(400).json({ error: 'A valid call route is required.' });
     const config = await readPbxConfig();
+    await requireFeature(session, requestedFlow === 'internal' ? 'internalCalling' : 'outboundCalling', config);
     const organizationId = sessionOrganizationId(session, config);
     let callerId: string | undefined;
     let callerName: string | undefined;
@@ -81,6 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId, callerName: route.callerName, callerExtension: route.callerExtension });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });
     if (error instanceof Error && /Caller ID|organization|owned|verified|Internal calling|destination|outbound rule|International calling/i.test(error.message)) return res.status(403).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }

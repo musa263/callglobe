@@ -34,7 +34,7 @@ export function ConferenceScreen({ onDirect, onWallet }: { onDirect: () => void;
       {participants.length < 5 && <Pressable onPress={() => setParticipants((rows) => [...rows, ''])} style={styles.add}><Plus size={17} color={colors.mint} /><Text style={styles.addText}>Add participant</Text></Pressable>}
       {!!error && <Text style={styles.error}>{error}</Text>}
       <Pressable disabled={!valid || busy} onPress={start} style={[styles.start, (!valid || busy) && styles.disabled]}>{busy ? <ActivityIndicator color={colors.ink} /> : <><UsersRound size={20} color={colors.ink} /><Text style={styles.startText}>Start merged conference</Text></>}</Pressable>
-      <Text style={styles.note}>Use full international format beginning with +. Standard Telnyx charges apply to each participant leg.</Text>
+      <Text style={styles.note}>Use full international format beginning with +. Standard calling charges apply to each participant leg.</Text>
     </>}
   </ScrollView>;
 }

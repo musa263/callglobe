@@ -6,6 +6,7 @@ import { readUserProfile } from '../profile-store.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { sessionOrganizationId } from '../tenancy.js';
 import { readVideoRoom, saveVideoRoom } from '../video-room-store.js';
+import { requireFeature } from '../saas-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -13,6 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const config = await readPbxConfig();
+    await requireFeature(session, 'videoCalling', config);
     const organizationId = sessionOrganizationId(session, config);
     if (session.extensionId && config.userProfiles[session.extensionId]?.permissions.video === false) return res.status(403).json({ error: 'Video calling is disabled for this extension.' });
     let roomId = typeof req.body?.roomId === 'string' ? req.body.roomId.trim() : '';
@@ -33,6 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(201).json({ roomId, token: tokenPayload.data.token, tokenExpiresAt: tokenPayload.data.token_expires_at, participantName: profile?.fullName || session.name || session.email || session.extension || 'Vocivo user', participantPhotoUrl: profile?.photoUrl });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Video calling is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }
 }

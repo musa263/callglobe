@@ -3,6 +3,7 @@ import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { telnyx } from '../telnyx.js';
 import { deleteTrunkPolicy, normalizeTrunkPolicy, readTrunkPolicies, saveTrunkPolicy, type TrunkPolicy } from '../trunk-policy-store.js';
+import { requireFeature } from '../saas-access.js';
 
 type UacConnection = {
   id: string;
@@ -27,6 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
     const access = await requireAdmin(req);
+    await requireFeature(access.session, 'sipTrunks');
     if (req.method === 'GET') {
       const [connectionResponse, uacResponse, policies] = await Promise.all([telnyx(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`), telnyx('/uac_connections?page[size]=100'), readTrunkPolicies()]);
       const connection = (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {};
@@ -65,6 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(id ? 200 : 201).json({ trunk: safeUac(payload.data, policy) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'SIP trunk management is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { jwtVerify, SignJWT, type JWTPayload } from 'jose';
 import { requiredEnv } from './http.js';
 import { isExtensionSessionRevoked } from './extension-session-store.js';
+import { activeTenantAdmin, type TenantAdminAccount } from './saas-store.js';
 
 const issuer = 'vocivo-vercel';
 const audience = 'vocivo-mobile';
@@ -30,7 +31,30 @@ export type VocivoSession = JWTPayload & {
   extensionId?: string;
   extension?: string;
   organizationId?: string;
+  accountId?: string;
+  forcePasswordChange?: boolean;
 };
+
+export async function createTenantAdminSession(account: TenantAdminAccount) {
+  return new SignJWT({
+    email: account.email,
+    name: account.name,
+    role: account.role,
+    accountType: 'business',
+    accountId: account.id,
+    extensionId: account.extensionId,
+    extension: account.extension,
+    organizationId: account.organizationId,
+    forcePasswordChange: account.forcePasswordChange,
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(`vocivo-account:${account.id}`)
+    .setIssuer(issuer)
+    .setAudience(audience)
+    .setIssuedAt()
+    .setExpirationTime('12h')
+    .sign(key());
+}
 
 export async function createExtensionSession(input: { id: string; email: string; name: string; role: 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual'; extension: string; organizationId: string; accountType: 'business' | 'individual' }) {
   return new SignJWT({ email: input.email, name: input.name, role: input.role, accountType: input.accountType, extensionId: input.id, extension: input.extension, organizationId: input.organizationId })
@@ -66,10 +90,26 @@ export async function requireSession(req: VercelRequest) {
   if (!header?.startsWith('Bearer ')) throw new Error('Unauthorized');
   const token = header.slice(7);
   const { payload } = await jwtVerify(token, key(), { issuer, audience });
-  if (payload.sub !== 'vocivo-owner' && !payload.sub?.startsWith('vocivo-extension:')) throw new Error('Unauthorized');
+  if (payload.sub !== 'vocivo-owner' && !payload.sub?.startsWith('vocivo-extension:') && !payload.sub?.startsWith('vocivo-account:')) throw new Error('Unauthorized');
   if (payload.sub.startsWith('vocivo-extension:')) {
     if (typeof payload.extensionId !== 'string' || typeof payload.iat !== 'number') throw new Error('Unauthorized');
     if (await isExtensionSessionRevoked(payload.extensionId, payload.iat)) throw new Error('Unauthorized');
+  }
+  if (payload.sub.startsWith('vocivo-account:')) {
+    if (typeof payload.accountId !== 'string') throw new Error('Unauthorized');
+    const account = await activeTenantAdmin(payload.accountId);
+    if (!account) throw new Error('Unauthorized');
+    return {
+      ...payload,
+      email: account.email,
+      name: account.name,
+      role: account.role,
+      accountType: 'business',
+      extensionId: account.extensionId,
+      extension: account.extension,
+      organizationId: account.organizationId,
+      forcePasswordChange: account.forcePasswordChange,
+    } as VocivoSession;
   }
   return payload as VocivoSession;
 }
@@ -83,7 +123,7 @@ export async function requireOwner(req: VercelRequest) {
 export async function requireAdmin(req: VercelRequest) {
   const session = await requireSession(req);
   const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
-  const companyAdmin = Boolean(session.extensionId && session.organizationId && ['admin', 'company_owner', 'company_admin'].includes(session.role || ''));
+  const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['admin', 'company_owner', 'company_admin'].includes(session.role || ''));
   if (!superadmin && !companyAdmin) throw new Error('Forbidden');
   return { session, superadmin, organizationId: superadmin ? undefined : session.organizationId };
 }

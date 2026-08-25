@@ -3,6 +3,7 @@ import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { organizationSettingsFrom, pbxForOrganization, readPbxConfig, savePbxConfig, type PbxConfig } from '../pbx-config-store.js';
 import { listExtensions } from '../pbx.js';
+import { requireFeature } from '../saas-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -32,6 +33,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? requestedOrganizationId
         : current.activeOrganizationId;
       const currentTenant = pbxForOrganization(current, access.superadmin && organizationId !== current.activeOrganizationId ? organizationId : access.organizationId || current.activeOrganizationId);
+      if (!access.superadmin) {
+        if (editable.outboundRules) await requireFeature(access.session, 'outboundCalling', current);
+        if (editable.callHandling?.ringGroups?.length || editable.callHandling?.queues?.length) await requireFeature(access.session, 'queues', current);
+        if (editable.callHandling?.ivrs?.length) await requireFeature(access.session, 'ivr', current);
+        if (editable.system?.recordingEnabled) await requireFeature(access.session, 'callRecording', current);
+      }
       if (editable.callHandling && (!access.superadmin || organizationId === current.activeOrganizationId)) {
         const extensionIds = new Set((await listExtensions(organizationId)).filter((item) => item.status === 'active').map((item) => item.id));
         const groups = [...(editable.callHandling.ringGroups || []), ...(editable.callHandling.queues || [])];
@@ -52,7 +59,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           name: typeof protectedOrganization.name === 'string' ? protectedOrganization.name : organization.name,
           ownerDisplayName: typeof protectedOrganization.ownerDisplayName === 'string' ? protectedOrganization.ownerDisplayName : organization.ownerDisplayName,
           ownerEmail: typeof protectedOrganization.ownerEmail === 'string' ? protectedOrganization.ownerEmail : organization.ownerEmail,
-          internalCallingEnabled: organization.accountType === 'business' && protectedOrganization.internalCallingEnabled !== false,
+          internalCallingEnabled: organization.internalCallingEnabled,
         } : organization;
         const organizationExtensions = new Set((await listExtensions(organizationId)).map((item) => item.id));
         const scopedProfiles = Object.fromEntries(Object.entries(editable.userProfiles || {}).filter(([id]) => organizationExtensions.has(id))) as typeof current.userProfiles;
@@ -117,6 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This phone-system capability is not enabled for your company.' });
     if (error instanceof Error && /call-handling|Ring group|Queue|Voice menu|phone number points|Office hours|office-hours|holiday|user|forwarding/i.test(error.message)) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }
