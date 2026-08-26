@@ -29,6 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const organizationId = sessionOrganizationId(session, config);
     let callerId: string | undefined;
     let callerName: string | undefined;
+    let callerPhotoUrl: string | undefined;
     let callerExtension: string | undefined;
     let sourceExtensionId: string | undefined;
     let destinationName: string | undefined;
@@ -48,6 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
       if (source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
       callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);
+      callerPhotoUrl = profile?.photoUrl && /^https:\/\//i.test(profile.photoUrl) ? profile.photoUrl.slice(0, 500) : undefined;
       callerExtension = source.extension;
       sourceExtensionId = source.id;
       destinationName = target.name;
@@ -79,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destination,
       callerId,
       callerName,
+      callerPhotoUrl,
       callerExtension,
       sourceExtensionId,
       destinationName,
@@ -96,6 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destination: route.destination,
       callerId: route.callerId,
       callerName: route.callerName,
+      callerPhotoUrl: route.callerPhotoUrl,
       callerExtension: route.callerExtension,
       sourceExtensionId: route.sourceExtensionId,
       destinationName: route.destinationName,
@@ -103,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destinationExtensionId: route.destinationExtensionId,
       flow: route.flow,
     });
-    return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId, callerName: route.callerName, callerExtension: route.callerExtension });
+    return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId, callerName: route.callerName, callerExtension: route.callerExtension, callerPhotoUrl: route.callerPhotoUrl });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });

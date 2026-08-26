@@ -1,7 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import {
-  createTelnyxVoipClient,
   createCredentialConfig,
   TelnyxCallState,
   TelnyxConnectionState,
@@ -12,10 +11,9 @@ import {
 } from '@telnyx/react-voice-commons-sdk';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
+import { voipClient } from '../lib/voipClient';
 import type { ActiveCall, CallerNumber, CallPhase, CallRate, MergedConference } from '../types';
 import { useAuth } from './AuthContext';
-
-const voipClient = createTelnyxVoipClient({ enableAppStateManagement: true, debug: __DEV__, useTrickleIce: true });
 
 type VoiceContextValue = {
   connection: TelnyxConnectionState;
@@ -28,7 +26,7 @@ type VoiceContextValue = {
   isReady: boolean;
   pushRegistration: 'not_required' | 'registering' | 'registered' | 'unavailable';
   refreshIncomingCalls: () => Promise<void>;
-  startCall: (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string) => Promise<void>;
+  startCall: (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string, photoUrl?: string) => Promise<void>;
   startSecondCall: (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => Promise<void>;
   startInternalCall: (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => Promise<void>;
   transferCall: (targetExtensionId: string) => Promise<void>;
@@ -97,9 +95,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const callRouteIdsRef = useRef(new Map<string, string>());
   const conferenceCallIdsRef = useRef<string[]>([]);
   const multiCallBusyRef = useRef(false);
+  const startingCallRef = useRef(false);
+  const startAttemptRef = useRef(0);
   const activeCallRef = useRef<ActiveCall | null>(null);
   const durationRef = useRef(0);
   const loggedCalls = useRef(new Set<string>());
+  const endingCallIdsRef = useRef(new Set<string>());
   const callSubscriptions = useRef<Array<{ unsubscribe: () => void }>>([]);
   const routePollGenerationRef = useRef(0);
   const loginConfigRef = useRef<{ sipUser: string; sipPassword: string; ringtone: string } | null>(null);
@@ -139,7 +140,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       speaker: false,
       onHold: call.currentIsHeld,
       isIncoming: call.isIncoming,
-      photoUrl: meta.photoUrl,
+      photoUrl: meta.photoUrl || inviteHeader(call, 'X-Vocivo-Caller-Photo') || undefined,
       routeId: meta.routeId,
       callerId: meta.callerId,
     };
@@ -181,6 +182,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       setDuration(0);
       return;
     }
+    if (endingCallIdsRef.current.has(call.callId) && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
+      call.hangup().catch(() => undefined);
+      return;
+    }
 
     const base = describeCall(call);
     if (!callMetaRef.current.has(call.callId)) callMetaRef.current.set(call.callId, { startedAt: base.startedAt, connectedAt: base.connectedAt });
@@ -194,6 +199,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
     callSubscriptions.current = [
       call.callState$.subscribe((state) => {
+        if (endingCallIdsRef.current.has(call.callId) && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(state)) {
+          setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'ended' } : current);
+          return;
+        }
         const pendingRoute = callRouteIdsRef.current.has(call.callId) && !callMetaRef.current.get(call.callId)?.connectedAt;
         const phase = pendingRoute && [TelnyxCallState.CONNECTING, TelnyxCallState.RINGING, TelnyxCallState.ACTIVE].includes(state) ? 'ringing' : toPhase(state);
         setActiveCall((current) => {
@@ -202,6 +211,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           return next;
         });
         if (phase === 'ended' || phase === 'failed') {
+          endingCallIdsRef.current.delete(call.callId);
           routePollGenerationRef.current += 1;
           stopRingback();
           finalizeCall(phase, call.callId);
@@ -402,10 +412,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [stopRingback]);
 
-  const startCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string) => {
+  const startCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string, photoUrl?: string) => {
     setError(null);
+    if (startingCallRef.current) throw new Error('A call is already starting.');
     if (isPreview) {
-      const previewCall: ActiveCall = { number, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, phase: 'connecting', startedAt: Date.now(), muted: false, speaker: false, onHold: false };
+      const previewCall: ActiveCall = { number, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, phase: 'connecting', startedAt: Date.now(), muted: false, speaker: false, onHold: false };
       activeCallRef.current = previewCall;
       setActiveCall(previewCall);
       setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'ringing' } : null), 650);
@@ -414,24 +425,38 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     const routeId = createRouteId();
-    const reservation = await api.post<{ routeId: string; routeToken: string; callerId?: string }>('/api/voice/route', { routeId, destination: number, callerId: callerNumber?.phone_number, flow: 'outbound' });
-    startRingback();
-    let call: Call;
+    const attempt = ++startAttemptRef.current;
+    const startedAt = Date.now();
+    const optimisticCall: ActiveCall = { number, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, phase: 'connecting', startedAt, muted: false, speaker: false, onHold: false, routeId };
+    activeCallRef.current = optimisticCall;
+    setActiveCall(optimisticCall);
+    startingCallRef.current = true;
     try {
-      call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+      const reservation = await api.post<{ routeId: string; routeToken: string; callerId?: string }>('/api/voice/route', { routeId, destination: number, callerId: callerNumber?.phone_number, flow: 'outbound' });
+      if (startAttemptRef.current !== attempt) {
+        await api.post('/api/voice/cancel', { routeId }).catch(() => undefined);
+        return;
+      }
+      startRingback();
+      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+      if (startAttemptRef.current !== attempt) {
+        await Promise.all([call.hangup().catch(() => undefined), api.post('/api/voice/cancel', { routeId }).catch(() => undefined)]);
+        return;
+      }
+      callRouteIdsRef.current.set(call.callId, routeId);
+      callMetaRef.current.set(call.callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, startedAt, routeId, callerId: reservation.callerId });
+      attachCall(call);
+      followRoute(routeId, call.callId);
     } catch (startError) {
       stopRingback();
+      if (startAttemptRef.current === attempt) {
+        activeCallRef.current = null;
+        setActiveCall(null);
+      }
       throw startError;
+    } finally {
+      if (startAttemptRef.current === attempt) startingCallRef.current = false;
     }
-    callRouteIdsRef.current.set(call.callId, routeId);
-    callMetaRef.current.set(call.callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now(), routeId, callerId: reservation.callerId });
-    attachCall(call);
-    followRoute(routeId, call.callId);
-    setActiveCall((current) => {
-      const next = current ? { ...current, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined } : current;
-      activeCallRef.current = next;
-      return next;
-    });
   }, [attachCall, connection, followRoute, isPreview, profile?.full_name, startRingback, stopRingback]);
 
   const startSecondCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => {
@@ -466,6 +491,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const startInternalCall = useCallback(async (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => {
     setError(null);
+    if (startingCallRef.current) throw new Error('A call is already starting.');
     if (isPreview) {
       const previewCall: ActiveCall = { number: extension, displayName, destinationCountry: 'Internal', photoUrl, phase: 'connecting', startedAt: Date.now(), muted: false, speaker: false, onHold: false };
       activeCallRef.current = previewCall;
@@ -476,19 +502,38 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     const destination = `sip:${sipUsername}@sip.telnyx.com`;
     const routeId = createRouteId();
-    const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string }>('/api/voice/route', { routeId, destination, flow: 'internal' });
-    startRingback();
-    let call: Call;
+    const attempt = ++startAttemptRef.current;
+    const startedAt = Date.now();
+    const optimisticCall: ActiveCall = { number: extension, displayName, destinationCountry: 'Internal', photoUrl, phase: 'connecting', startedAt, muted: false, speaker: false, onHold: false, routeId };
+    activeCallRef.current = optimisticCall;
+    setActiveCall(optimisticCall);
+    startingCallRef.current = true;
     try {
-      call = await voipClient.newCall(destination, reservation.callerName || profile?.full_name || 'Vocivo', reservation.callerExtension || profile?.extension, outboundHeaders(destination, undefined, 'internal', routeId, reservation.routeToken));
+      const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string }>('/api/voice/route', { routeId, destination, flow: 'internal' });
+      if (startAttemptRef.current !== attempt) {
+        await api.post('/api/voice/cancel', { routeId }).catch(() => undefined);
+        return;
+      }
+      startRingback();
+      const call = await voipClient.newCall(destination, reservation.callerName || profile?.full_name || 'Vocivo', reservation.callerExtension || profile?.extension, outboundHeaders(destination, undefined, 'internal', routeId, reservation.routeToken));
+      if (startAttemptRef.current !== attempt) {
+        await Promise.all([call.hangup().catch(() => undefined), api.post('/api/voice/cancel', { routeId }).catch(() => undefined)]);
+        return;
+      }
+      callRouteIdsRef.current.set(call.callId, routeId);
+      callMetaRef.current.set(call.callId, { number: extension, displayName, destinationCountry: 'Internal', photoUrl, startedAt, routeId });
+      attachCall(call);
+      followRoute(routeId, call.callId);
     } catch (startError) {
       stopRingback();
+      if (startAttemptRef.current === attempt) {
+        activeCallRef.current = null;
+        setActiveCall(null);
+      }
       throw startError;
+    } finally {
+      if (startAttemptRef.current === attempt) startingCallRef.current = false;
     }
-    callRouteIdsRef.current.set(call.callId, routeId);
-    callMetaRef.current.set(call.callId, { number: extension, displayName, destinationCountry: 'Internal', photoUrl, startedAt: Date.now(), routeId });
-    attachCall(call);
-    followRoute(routeId, call.callId);
   }, [attachCall, connection, followRoute, isPreview, profile?.extension, profile?.full_name, startRingback, stopRingback]);
 
   const transferCall = useCallback(async (targetExtensionId: string) => {
@@ -565,32 +610,44 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, [activeCall?.connectedAt, activeCall?.phase]);
 
   const endCall = useCallback(async () => {
+    startAttemptRef.current += 1;
+    startingCallRef.current = false;
     routePollGenerationRef.current += 1;
     stopRingback();
     if (conferenceCallIdsRef.current.length) {
       const mergedIds = [...conferenceCallIdsRef.current];
       const mergedCalls = mergedIds.map((id) => voipClient.getCall(id)).filter((call): call is Call => Boolean(call));
+      const routeIds = mergedIds.map((id) => callRouteIdsRef.current.get(id)).filter((id): id is string => Boolean(id));
+      mergedIds.forEach((id) => endingCallIdsRef.current.add(id));
       conferenceCallIdsRef.current = [];
       setConference(null);
       setHeldCall(null);
       finalizeCall('ended', activeCall?.id);
-      await Promise.all(mergedCalls.map((call) => call.hangup().catch(() => undefined)));
-      await Promise.all(mergedIds.map((id) => VoicePnBridge.endCall(id).catch(() => false)));
       setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
+      await Promise.all([
+        ...routeIds.map((routeId) => api.post('/api/voice/cancel', { routeId }).catch(() => undefined)),
+        ...mergedCalls.map((call) => call.hangup().catch(() => undefined)),
+        ...mergedIds.map((id) => VoicePnBridge.endCall(id).catch(() => false)),
+      ]);
       setTimeout(() => setActiveCall(null), 200);
       return;
     }
+    const routeId = activeCall?.routeId || (activeCall?.id ? callRouteIdsRef.current.get(activeCall.id) : undefined);
+    if (activeCall?.id) endingCallIdsRef.current.add(activeCall.id);
     const resumeAfterEnd = voipClient.currentCalls.find((call) => call.callId !== callRef.current?.callId && call.currentState === TelnyxCallState.HELD);
     finalizeCall('ended', activeCall?.id);
-    if (callRef.current) await callRef.current.hangup();
-    if (activeCall?.id) await VoicePnBridge.endCall(activeCall.id).catch(() => false);
+    setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
+    await Promise.all([
+      ...(routeId ? [api.post('/api/voice/cancel', { routeId }).catch(() => undefined)] : []),
+      ...(callRef.current ? [callRef.current.hangup().catch(() => undefined)] : []),
+      ...(activeCall?.id ? [VoicePnBridge.endCall(activeCall.id).catch(() => false)] : []),
+    ]);
     if (resumeAfterEnd) {
       await resumeAfterEnd.resume().catch(() => undefined);
       voipClient.setActiveCall(resumeAfterEnd.callId);
       attachCall(resumeAfterEnd);
       return;
     }
-    setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
     setTimeout(() => setActiveCall(null), 200);
   }, [activeCall?.id, attachCall, finalizeCall, stopRingback]);
 

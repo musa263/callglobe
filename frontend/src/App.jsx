@@ -105,10 +105,11 @@ function IncomingCall({ call, onAnswer, onDecline }) {
   const remoteNumber = call?.options?.remoteCallerNumber || call?.options?.callerNumber || 'Unknown caller';
   const number = extension ? `Extension ${extension}` : String(remoteNumber).startsWith('sip:') ? 'Internal call' : remoteNumber;
   const name = header('X-Vocivo-Caller-Name') || displayMatch?.[1] || remoteName || 'Incoming call';
+  const photoUrl = header('X-Vocivo-Caller-Photo');
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal incoming-modal">
-        <span className="ring-icon"><PhoneIncoming size={29} /></span><p className="eyebrow">INCOMING CALL</p><h2>{name}</h2><p className="call-number">{formatPhone(number)}</p>
+        {photoUrl ? <img className="ring-icon incoming-photo" src={photoUrl} alt="" /> : <span className="ring-icon"><PhoneIncoming size={29} /></span>}<p className="eyebrow">INCOMING CALL</p><h2>{name}</h2><p className="call-number">{formatPhone(number)}</p>
         <div className="incoming-actions"><button className="round-action decline" onClick={onDecline} title="Decline call"><PhoneOff /></button><button className="round-action answer" onClick={onAnswer} title="Answer call"><Phone /></button></div>
         <div className="action-labels"><span>Decline</span><span>Answer</span></div>
       </div>
@@ -123,7 +124,7 @@ function ActiveCall({ voice, number, elapsed }) {
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal active-modal">
         <div className="live-pill"><span /> {voice.state === 'held' ? 'ON HOLD' : 'LIVE CALL'}</div>
-        <div className="call-avatar">{name.charAt(0).toUpperCase()}</div><h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p><strong className="call-timer">{formatDuration(elapsed)}</strong>
+        {voice.remoteIdentity?.photoUrl ? <img className="call-avatar call-avatar-photo" src={voice.remoteIdentity.photoUrl} alt="" /> : <div className="call-avatar">{name.charAt(0).toUpperCase()}</div>}<h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p><strong className="call-timer">{formatDuration(elapsed)}</strong>
         <div className="call-controls">
           <button className={voice.muted ? 'control active' : 'control'} onClick={voice.toggleMute} title={voice.muted ? 'Unmute' : 'Mute'}>{voice.muted ? <MicOff /> : <Mic />}<span>{voice.muted ? 'Unmute' : 'Mute'}</span></button>
           <button className={voice.state === 'held' ? 'control active' : 'control'} onClick={voice.toggleHold} title="Hold call"><Pause /><span>Hold</span></button>

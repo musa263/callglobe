@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ActivityIndicator, ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Building2, CircleDollarSign, Clock3, Phone, PhoneCall, UsersRound, Wifi } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandMark } from '../components/BrandMark';
@@ -29,17 +29,10 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
   const insets = useSafeAreaInsets();
   const { profile, callerNumbers, history } = useAuth();
   const { isReady } = useVoice();
-  const { profile: business, saveProfile } = useBusiness();
-  const [switchingMode, setSwitchingMode] = useState(false);
+  const { profile: business, callMode, setCallMode } = useBusiness();
   const firstName = profile?.full_name?.split(/\s+/)[0] || 'there';
-  const primaryNumber = callerNumbers.find((number) => number.source === 'owned')?.phone_number || callerNumbers[0]?.phone_number || (business.enabled ? 'No company number assigned' : 'No caller ID assigned');
+  const primaryNumber = callerNumbers.find((number) => number.source === 'owned')?.phone_number || callerNumbers[0]?.phone_number || (callMode === 'business' ? 'No company number assigned' : 'No caller ID assigned');
   const backgroundSource = business.backgroundImageUrl ? { uri: business.backgroundImageUrl } : heritageImage;
-
-  const changeMode = async (enabled: boolean) => {
-    if (business.enabled === enabled || switchingMode) return;
-    setSwitchingMode(true);
-    try { await saveProfile({ ...business, enabled }); } finally { setSwitchingMode(false); }
-  };
 
   return <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
     <View style={styles.header}>
@@ -50,15 +43,14 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
     <View style={styles.welcome}><Text style={styles.eyebrow}>VOCIVO WORKSPACE</Text><Text style={styles.title}>Hello, {firstName}</Text><Text style={styles.subtitle}>Your international phone system, ready when you are.</Text></View>
 
     <View style={styles.mode} accessibilityLabel="Call handling mode">
-      <Pressable onPress={() => changeMode(false)} style={[styles.modeButton, !business.enabled && styles.modeButtonActive]}><Phone size={16} color={!business.enabled ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, !business.enabled && styles.modeTextActive]}>Personal</Text></Pressable>
-      <Pressable onPress={() => changeMode(true)} style={[styles.modeButton, business.enabled && styles.modeButtonActive]}><Building2 size={16} color={business.enabled ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, business.enabled && styles.modeTextActive]}>Business</Text></Pressable>
-      {switchingMode && <View style={styles.modeBusy}><ActivityIndicator size="small" color={colors.mint} /></View>}
+      <Pressable onPress={() => setCallMode('personal')} style={[styles.modeButton, callMode === 'personal' && styles.modeButtonActive]}><Phone size={16} color={callMode === 'personal' ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, callMode === 'personal' && styles.modeTextActive]}>Personal</Text></Pressable>
+      <Pressable onPress={() => setCallMode('business')} style={[styles.modeButton, callMode === 'business' && styles.modeButtonActive]}><Building2 size={16} color={callMode === 'business' ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, callMode === 'business' && styles.modeTextActive]}>Business</Text></Pressable>
     </View>
 
     <ImageBackground source={backgroundSource} resizeMode="cover" style={styles.availability} imageStyle={styles.availabilityImage}>
       <View style={styles.imageShade} />
       <View style={styles.lineTop}><View style={[styles.onlinePill, !isReady && styles.waitingPill]}><View style={[styles.onlineDot, !isReady && styles.waitingDot]} /><Text style={[styles.onlineText, !isReady && styles.waitingText]}>{isReady ? 'AVAILABLE' : 'CONNECTING'}</Text></View><View style={styles.lineIcon}>{isReady ? <PhoneCall size={23} color={colors.white} /> : <Wifi size={23} color={colors.amber} />}</View></View>
-      <View style={styles.lineCopy}><Text style={styles.lineEyebrow}>{business.enabled ? 'BUSINESS LINE' : 'PERSONAL LINE'}</Text><Text style={styles.availabilityTitle}>{isReady ? 'Ready for incoming calls' : 'Connecting your line'}</Text><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={styles.number}>{primaryNumber}</Text></View>
+      <View style={styles.lineCopy}><Text style={styles.lineEyebrow}>{callMode === 'business' ? 'BUSINESS LINE' : 'PERSONAL LINE'}</Text><Text style={styles.availabilityTitle}>{isReady ? 'Ready for incoming calls' : 'Connecting your line'}</Text><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={styles.number}>{primaryNumber}</Text></View>
     </ImageBackground>
 
     <View style={styles.actions}>

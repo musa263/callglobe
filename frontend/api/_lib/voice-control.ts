@@ -24,6 +24,7 @@ export type VoiceState = {
   sourceExtensionId?: string;
   sourceExtension?: string;
   sourceName?: string;
+  sourcePhotoUrl?: string;
   destinationExtensionId?: string;
   destinationExtension?: string;
   destinationName?: string;

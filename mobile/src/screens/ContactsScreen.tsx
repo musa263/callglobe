@@ -33,12 +33,13 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
       setPermission('denied');
       return;
     }
-    const result = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers], sort: Contacts.SortTypes.FirstName });
+    const result = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Image], sort: Contacts.SortTypes.FirstName });
     const rows = result.data.flatMap((contact) => (contact.phoneNumbers ?? []).map((phone, index) => ({
       id: `${contact.id}-${phone.id ?? index}`,
       name: contact.name || phone.number || 'Unnamed contact',
       number: cleanNumber(phone.number ?? ''),
       label: phone.label,
+      photoUrl: contact.image?.uri,
     }))).filter((contact) => contact.number.length >= 4);
     setContacts(rows);
     setPermission('granted');

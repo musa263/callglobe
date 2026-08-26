@@ -52,7 +52,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (allowMobile(req, res)) return;
     if (method !== 'GET') return methodNotAllowed(res, ['GET']);
     try {
-      const storage = await storageHealth();
+      const deep = req.query.deep === '1';
+      const storage = deep ? await storageHealth() : { provider: 'postgres', status: 'unchecked' };
+      res.setHeader('Cache-Control', deep ? 'no-store' : 'public, s-maxage=5, stale-while-revalidate=30');
       return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', storage, controlPlane: 'vocivo', mediaPlane: process.env.PBX_SERVICE_URL ? 'vocivo' : 'telnyx', pstnProvider: 'telnyx', time: new Date().toISOString() });
     } catch (error) {
       console.error('Vocivo health check failed', error);

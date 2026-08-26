@@ -12,7 +12,8 @@
     "check": "vite build",
     "preview": "vite preview",
     "check:api": "tsc --noEmit -p tsconfig.api.json",
-    "test": "node --import tsx --test api/_lib/*.test.ts"
+    "test": "node --import tsx --test api/_lib/*.test.ts",
+    "test:load": "node scripts/load-test.mjs"
   },
   "dependencies": {
     "@telnyx/video": "^1.0.2",

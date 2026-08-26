@@ -7,6 +7,7 @@ export type VoiceRouteAuthorization = {
   destination: string;
   callerId?: string;
   callerName?: string;
+  callerPhotoUrl?: string;
   callerExtension?: string;
   sourceExtensionId?: string;
   destinationName?: string;
@@ -27,6 +28,7 @@ export function createVoiceRouteToken(route: Omit<VoiceRouteAuthorization, 'expi
     d: route.destination,
     c: route.callerId || '',
     n: route.callerName || '',
+    p: route.callerPhotoUrl || '',
     x: route.callerExtension || '',
     s: route.sourceExtensionId || '',
     m: route.destinationName || '',
@@ -58,6 +60,7 @@ export function verifyVoiceRouteToken(token: string): VoiceRouteAuthorization | 
     };
     if (typeof decoded.c === 'string' && decoded.c) authorization.callerId = decoded.c;
     if (typeof decoded.n === 'string' && decoded.n) authorization.callerName = decoded.n;
+    if (typeof decoded.p === 'string' && decoded.p) authorization.callerPhotoUrl = decoded.p;
     if (typeof decoded.x === 'string' && decoded.x) authorization.callerExtension = decoded.x;
     if (typeof decoded.s === 'string' && decoded.s) authorization.sourceExtensionId = decoded.s;
     if (typeof decoded.m === 'string' && decoded.m) authorization.destinationName = decoded.m;

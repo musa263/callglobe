@@ -20,10 +20,13 @@ export type BusinessProfile = {
 type BusinessContextValue = {
   profile: BusinessProfile;
   loading: boolean;
+  callMode: 'personal' | 'business';
+  setCallMode: (mode: 'personal' | 'business') => void;
   saveProfile: (profile: BusinessProfile) => Promise<void>;
 };
 
 const storageKey = (userId: string) => `vocivo.business-profile.v2.${userId}`;
+const callModeStorageKey = (userId: string) => `vocivo.call-mode.v1.${userId}`;
 const defaultProfile = (companyName = 'Your company'): BusinessProfile => ({
   enabled: false,
   voicemailEnabled: false,
@@ -42,6 +45,7 @@ const BusinessContext = createContext<BusinessContextValue | null>(null);
 export function BusinessProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isPreview, profile: authProfile } = useAuth();
   const [profile, setProfile] = useState(() => defaultProfile());
+  const [callModeState, setCallModeState] = useState<'personal' | 'business'>('personal');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -49,12 +53,17 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     const load = async () => {
       const defaults = defaultProfile(authProfile?.organization_name);
       setProfile(defaults);
+      setCallModeState(authProfile?.account_type === 'business' ? 'business' : 'personal');
       try {
-        const cached = authProfile?.id ? await AsyncStorage.getItem(storageKey(authProfile.id)) : null;
+        const [cached, cachedCallMode] = authProfile?.id ? await Promise.all([
+          AsyncStorage.getItem(storageKey(authProfile.id)),
+          AsyncStorage.getItem(callModeStorageKey(authProfile.id)),
+        ]) : [null, null];
         if (cached && active) {
           const parsed = JSON.parse(cached) as Partial<BusinessProfile> & { departmentOne?: string; departmentTwo?: string };
           setProfile({ ...defaults, ...parsed, departments: parsed.departments?.length ? parsed.departments : [parsed.departmentOne || 'Sales', parsed.departmentTwo || 'Operations'] });
         }
+        if (active && (cachedCallMode === 'personal' || cachedCallMode === 'business')) setCallModeState(cachedCallMode);
         if (isAuthenticated && !isPreview) {
           const result = await api.get<{ config: Omit<BusinessProfile, 'aiTone'> }>('/api/voice/settings');
           if (active) setProfile((current) => ({ ...current, ...result.config }));
@@ -84,7 +93,12 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     if (authProfile?.id) await AsyncStorage.setItem(storageKey(authProfile.id), JSON.stringify(normalized));
   }, [authProfile?.id, isAuthenticated, isPreview]);
 
-  const value = useMemo(() => ({ profile, loading, saveProfile }), [loading, profile, saveProfile]);
+  const setCallMode = useCallback((mode: 'personal' | 'business') => {
+    setCallModeState(mode);
+    if (authProfile?.id) AsyncStorage.setItem(callModeStorageKey(authProfile.id), mode).catch(() => undefined);
+  }, [authProfile?.id]);
+
+  const value = useMemo(() => ({ profile, loading, callMode: callModeState, setCallMode, saveProfile }), [callModeState, loading, profile, saveProfile, setCallMode]);
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
 }
 

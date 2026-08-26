@@ -11,6 +11,7 @@ import { RatePicker } from '../components/RatePicker';
 import type { CallerNumber, CallRate } from '../types';
 import { colors, shadow } from '../theme';
 import { api } from '../lib/api';
+import { findPhoneContact } from '../lib/contactDirectory';
 
 const formatTime = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
 
@@ -80,10 +81,13 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   useEffect(() => {
     if (!activeCall) { setRemotePhoto(undefined); return; }
     if (activeCall.photoUrl) { setRemotePhoto(activeCall.photoUrl); return; }
-    api.get<{ users: Array<{ extension: string; name: string; photoUrl?: string }> }>('/api/voice/directory').then(({ users }) => {
-      const match = users.find((user) => user.extension === activeCall.number.replace(/\D/g, '') || user.name.toLowerCase() === activeCall.displayName.toLowerCase());
-      setRemotePhoto(match?.photoUrl);
-    }).catch(() => setRemotePhoto(undefined));
+    const lookup = activeCall.destinationCountry === 'Internal'
+      ? api.get<{ users: Array<{ extension: string; name: string; photoUrl?: string }> }>('/api/voice/directory').then(({ users }) => {
+        const match = users.find((user) => user.extension === activeCall.number.replace(/\D/g, '') || user.name.toLowerCase() === activeCall.displayName.toLowerCase());
+        return match ? { name: match.name, photoUrl: match.photoUrl } : null;
+      })
+      : findPhoneContact(activeCall.number);
+    lookup.then((identity) => setRemotePhoto(identity?.photoUrl)).catch(() => setRemotePhoto(undefined));
   }, [activeCall?.displayName, activeCall?.number, activeCall?.photoUrl]);
   if (!activeCall) return null;
   const status = activeCall.phase === 'active' ? (activeCall.onHold ? 'On hold' : 'Connected') : activeCall.phase === 'ended' ? 'Call ended' : activeCall.phase === 'failed' ? 'Could not connect' : activeCall.phase === 'ringing' ? 'Ringing' : 'Connecting';

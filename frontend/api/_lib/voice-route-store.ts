@@ -10,6 +10,7 @@ export type ReservedVoiceRoute = {
   destination: string;
   callerId?: string;
   callerName?: string;
+  callerPhotoUrl?: string;
   callerExtension?: string;
   sourceExtensionId?: string;
   destinationName?: string;
@@ -51,12 +52,16 @@ export async function saveVoiceRoute(route: ReservedVoiceRoute) {
   return route;
 }
 
-export async function updateVoiceRoute(routeId: string, patch: Partial<ReservedVoiceRoute>) {
+export async function updateVoiceRoute(routeId: string, patch: Partial<ReservedVoiceRoute>): Promise<ReservedVoiceRoute | null> {
   let updated: ReservedVoiceRoute | null = null;
   await updateObject(pathname(routeId), (value) => {
     const current = decrypt(value);
     if (new Date(current.expiresAt).getTime() <= Date.now()) return value;
-    updated = { ...current, ...patch, routeId: current.routeId };
+    const terminal = current.phase === 'ended' || current.phase === 'failed';
+    const nextPatch = terminal && patch.phase && !['ended', 'failed'].includes(patch.phase)
+      ? { ...patch, phase: current.phase }
+      : patch;
+    updated = { ...current, ...nextPatch, routeId: current.routeId };
     return encrypt(updated);
   });
   return updated;

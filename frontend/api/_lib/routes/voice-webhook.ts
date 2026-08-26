@@ -8,7 +8,8 @@ import { callAction, decodeVoiceState, dialCall, encodeVoiceState } from '../voi
 import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
-import { clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, saveOutboundCallPair } from '../outbound-call-store.js';
+import { clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair } from '../outbound-call-store.js';
+import { terminateOutboundPair } from '../outbound-cancel.js';
 import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { bridgeOutboundCalls } from '../outbound-bridge.js';
@@ -68,6 +69,15 @@ function customHeader(payload: VoicePayload | undefined, name: string) {
 async function completeOutboundBridge(parentCallControlId: string, destinationCallControlId: string, eventId: string, routeId?: string) {
   const existingRoute = routeId ? await readVoiceRoute(routeId) : null;
   if (existingRoute?.phase === 'connected') return;
+  if (existingRoute && ['ended', 'failed'].includes(existingRoute.phase)) {
+    const pair = routeId ? await readOutboundCallPairByRoute(routeId) : null;
+    if (pair) await terminateOutboundPair(pair, `${eventId}-terminal`);
+    else await Promise.all([
+      callAction(parentCallControlId, 'hangup', { command_id: `${eventId}-terminal-client` }).catch(() => undefined),
+      callAction(destinationCallControlId, 'hangup', { command_id: `${eventId}-terminal-destination` }).catch(() => undefined),
+    ]);
+    return;
+  }
   await bridgeOutboundCalls(parentCallControlId, destinationCallControlId, eventId);
   const connectedAt = new Date().toISOString();
   const pair = await readOutboundCallPairByDestination(destinationCallControlId);
@@ -514,6 +524,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           state: {
             flow: 'outbound_destination', parentCallControlId: callControlId, organizationId: reservation.organizationId, routeId,
             sourceExtensionId: reservation.sourceExtensionId, sourceExtension: reservation.callerExtension, sourceName: reservation.callerName,
+            sourcePhotoUrl: reservation.callerPhotoUrl,
             destinationExtensionId: reservation.destinationExtensionId, destinationExtension: reservation.destinationExtension,
             destinationName: reservation.destinationName,
           },
@@ -524,6 +535,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             { name: 'X-Vocivo-Call-Type', value: 'internal' },
             ...(reservation.callerName ? [{ name: 'X-Vocivo-Caller-Name', value: reservation.callerName }] : []),
             ...(reservation.callerExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: reservation.callerExtension }] : []),
+            ...(reservation.callerPhotoUrl ? [{ name: 'X-Vocivo-Caller-Photo', value: reservation.callerPhotoUrl }] : []),
             { name: 'X-Vocivo-Organization-ID', value: reservation.organizationId },
           ] : undefined,
           commandId: `${eventId}-destination`,
@@ -539,18 +551,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-missing-leg` }).catch(() => undefined);
         return res.status(200).json({ received: true });
       }
-      background('outbound pair', Promise.all([
-        saveOutboundCallPair({
+      const pair = {
           clientCallControlId: callControlId,
           destinationCallControlId,
           routeId,
           destination,
-          status: 'direct',
-          phase: 'ringing',
+          status: 'direct' as const,
+          phase: 'ringing' as const,
           updatedAt: new Date().toISOString(),
-        }),
-        updateVoiceRoute(routeId, { phase: 'ringing' }),
-      ]));
+      };
+      await saveOutboundCallPair(pair);
+      const updatedRoute = await updateVoiceRoute(routeId, { phase: 'ringing' });
+      if (updatedRoute && ['ended', 'failed'].includes(updatedRoute.phase)) {
+        await terminateOutboundPair(pair, `${eventId}-canceled`);
+      }
       return res.status(200).json({ received: true });
     }
 
@@ -618,8 +632,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.hangup' && (state?.flow === 'outbound_destination' || endedOutboundPair)) {
       if (state?.flow === 'outbound_destination') {
         const phase = payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed';
-        if (state.routeId) background('ended route state', updateVoiceRoute(state.routeId, { phase, failureCause: payload?.hangup_cause }));
-        if (state.parentCallControlId) {
+        if (state.routeId) await updateVoiceRoute(state.routeId, { phase, failureCause: payload?.hangup_cause });
+        const pair = await readOutboundCallPairByDestination(callControlId)
+          || (state.routeId ? await readOutboundCallPairByRoute(state.routeId) : null);
+        if (pair) {
+          await terminateOutboundPair(pair, `${eventId}-destination-hangup`);
+        } else if (state.parentCallControlId) {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch(() => undefined);
           await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-client` }).catch(() => undefined);
         }
@@ -645,12 +663,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (eventType === 'call.hangup' && payload?.connection_id === requiredEnv('TELNYX_CONNECTION_ID')) {
-      const pair = await readOutboundCallPairByClient(callControlId);
+      const routeId = state?.routeId || eventRoute?.routeId;
+      const pair = await readOutboundCallPairByClient(callControlId)
+        || (routeId ? await readOutboundCallPairByRoute(routeId) : null);
+      if (!pair && routeId) await updateVoiceRoute(routeId, { phase: 'ended', failureCause: payload?.hangup_cause });
       if (!pair) return res.status(200).json({ received: true });
       if (pair.status === 'direct') {
         if (pair.routeId) await updateVoiceRoute(pair.routeId, { phase: 'ended', failureCause: payload?.hangup_cause });
-        await callAction(pair.destinationCallControlId, 'hangup', { command_id: `${eventId}-end-destination` }).catch(() => undefined);
-        await clearOutboundCallPair(pair).catch(() => undefined);
+        await terminateOutboundPair(pair, `${eventId}-client-hangup`);
       } else if (pair.status === 'conference' && pair.conferenceRole === 'host') {
         await Promise.all([pair.destinationCallControlId, pair.peerDestinationCallControlId]
           .filter((id): id is string => Boolean(id))

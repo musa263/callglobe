@@ -215,6 +215,7 @@ audio { display: none; }
 .call-overlay { position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:20px; background:rgba(17,27,23,.74); backdrop-filter:blur(8px); }
 .call-modal { width:min(100%,410px); min-height:500px; padding:40px 34px 32px; display:flex; flex-direction:column; align-items:center; border-radius:8px; text-align:center; background:#f9fbf8; box-shadow:0 30px 80px rgba(0,0,0,.3); }
 .ring-icon { width:78px; height:78px; margin-bottom:28px; display:grid; place-items:center; border-radius:50%; color:var(--green); background:var(--mint); box-shadow:0 0 0 12px rgba(223,244,233,.5); }
+.incoming-photo { object-fit:cover; }
 .call-modal h2 { margin:0; font-family:'Sora'; font-size:25px; }
 .call-number { margin:8px 0 0; color:var(--muted); font-size:16px; }
 .incoming-actions { width:230px; margin-top:auto; display:flex; justify-content:space-between; }
@@ -225,6 +226,7 @@ audio { display: none; }
 .live-pill { display:flex; align-items:center; gap:6px; color:var(--green); font-size:10px; font-weight:800; letter-spacing:.9px; }
 .live-pill span { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px var(--mint); }
 .call-avatar { width:88px; height:88px; margin:31px 0 20px; display:grid; place-items:center; border-radius:50%; color:white; background:#2c4b41; font-family:'Sora'; font-size:32px; }
+.call-avatar-photo { object-fit:cover; }
 .call-timer { margin-top:22px; font-family:'Sora'; font-size:22px; }
 .call-controls { width:100%; margin-top:auto; display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
 .control { height:70px; display:grid; place-content:center; justify-items:center; gap:5px; border:1px solid #dce2de; border-radius:6px; color:#4e5b56; background:white; }

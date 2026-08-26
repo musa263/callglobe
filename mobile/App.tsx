@@ -24,12 +24,9 @@ import { colors } from './src/theme';
 
 function AppContent() {
   const { loading, isAuthenticated, isPreview } = useAuth();
-  return <VoiceRoot>{loading
-    ? <View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View>
-    : !isAuthenticated && !isPreview
-      ? <AuthScreen />
-      : <BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider>
-  }</VoiceRoot>;
+  if (loading) return <VoiceRoot><View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View></VoiceRoot>;
+  if (!isAuthenticated && !isPreview) return <AuthScreen />;
+  return <VoiceRoot><BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider></VoiceRoot>;
 }
 
 class LaunchBoundary extends Component<{ children: React.ReactNode }, { failed: boolean }> {
@@ -56,9 +53,9 @@ function AuthenticatedApp() {
   if (activeCall && !callMinimized) return <ActiveCallScreen onMinimize={() => setCallMinimized(true)} />;
   if (showVideo) return <VideoMeetingScreen onClose={() => setShowVideo(false)} />;
   if (showWallet) return <WalletScreen onBack={() => setShowWallet(false)} />;
-  const openDialer = (number: string, name?: string, internal = false) => {
+  const openDialer = (number: string, name?: string, internal = false, photoUrl?: string) => {
     setCallSurface('direct');
-    setDialTarget({ number, name, internal, nonce: Date.now() });
+    setDialTarget({ number, name, internal, photoUrl, nonce: Date.now() });
     setTab('dial');
   };
   const openMessages = (number: string, name?: string, internal = false) => {
@@ -78,10 +75,10 @@ function AuthenticatedApp() {
       const normalized = contact.number.replace(/[\s()-]/g, '');
       const rate = [...rates].filter((item) => normalized.startsWith(item.dial_code)).sort((a, b) => b.dial_code.length - a.dial_code.length)[0];
       if (!normalized.startsWith('+') || !rate) {
-        openDialer(contact.number, contact.name);
+        openDialer(contact.number, contact.name, false, contact.photoUrl);
         return;
       }
-      await startCall(normalized, rate, callerNumbers.find((number) => number.status === 'active') ?? callerNumbers[0] ?? null, contact.name);
+      await startCall(normalized, rate, callerNumbers.find((number) => number.status === 'active') ?? callerNumbers[0] ?? null, contact.name, contact.photoUrl);
     } catch (callError) {
       Alert.alert('Call could not start', callError instanceof Error ? callError.message : 'Try again shortly.');
     }

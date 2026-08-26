@@ -13,6 +13,8 @@ export type PutEntry = { pathname: string; value: unknown; options?: PutOptions 
 type ListOptions = { prefix?: string; limit?: number; cursor?: string };
 type StoredRow = { pathname: string; body: Buffer; content_type: string; access: string; uploaded_at: Date; etag: string };
 let databaseClient: Sql | null = null;
+let storageHealthCache: { expiresAt: number; value: { provider: 'postgres'; status: 'available' } } | null = null;
+let storageHealthRequest: Promise<{ provider: 'postgres'; status: 'available' }> | null = null;
 
 function databaseUrl() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -23,6 +25,8 @@ function databaseUrl() {
 function database() {
   if (databaseClient) return databaseClient;
   const url = new URL(databaseUrl());
+  const requestedPoolSize = Number(process.env.DATABASE_POOL_MAX || 1);
+  const poolSize = Number.isFinite(requestedPoolSize) ? Math.min(5, Math.max(1, Math.floor(requestedPoolSize))) : 1;
   databaseClient = postgres({
     host: url.hostname,
     port: Number(url.port || 5432),
@@ -30,9 +34,9 @@ function database() {
     username: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     ssl: url.searchParams.get('sslmode') === 'disable' ? false : 'require',
-    // Serverless instances multiply this pool. One connection per instance keeps
-    // concurrent page loads inside the managed database connection budget.
-    max: 1,
+    // The current Prisma database has a low direct-connection ceiling. Keep one
+    // connection per serverless instance unless a pooled database is configured.
+    max: poolSize,
     prepare: false,
     connect_timeout: 3,
     idle_timeout: 5,
@@ -251,8 +255,16 @@ export async function del(pathnames: string | string[]) {
 }
 
 export async function storageHealth() {
-  return withDatabaseRetry(async (sql) => {
-    const rows = await sql<Array<{ count: number }>>`select count(*)::int as count from vocivo_objects`;
-    return { provider: 'postgres', objects: Number(rows[0]?.count || 0) };
+  if (storageHealthCache && storageHealthCache.expiresAt > Date.now()) return storageHealthCache.value;
+  if (storageHealthRequest) return storageHealthRequest;
+  storageHealthRequest = withDatabaseRetry(async (sql) => {
+    await sql`select 1`;
+    return { provider: 'postgres' as const, status: 'available' as const };
+  }).then((value) => {
+    storageHealthCache = { expiresAt: Date.now() + 5_000, value };
+    return value;
+  }).finally(() => {
+    storageHealthRequest = null;
   });
+  return storageHealthRequest;
 }

@@ -28,6 +28,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const [selectedCaller, setSelectedCaller] = useState(() => callerNumbers[0] ?? null);
   const [callError, setCallError] = useState('');
   const [contactName, setContactName] = useState<string | undefined>();
+  const [contactPhotoUrl, setContactPhotoUrl] = useState<string | undefined>();
   const [dialMode, setDialMode] = useState<'external' | 'extension'>('external');
   const businessAccount = profile?.account_type === 'business';
   const balance = Number(profile?.balance ?? 0);
@@ -49,6 +50,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
     if (!target) return;
     setDialMode(target.internal && businessAccount ? 'extension' : 'external');
     setContactName(target.name);
+    setContactPhotoUrl(target.photoUrl);
     const normalized = target.number.replace(/[^0-9+]/g, '');
     if (target.internal && businessAccount) {
       setNumber(sanitize(normalized));
@@ -81,7 +83,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         if (!colleague?.sipUsername) throw new Error(`Extension ${number} is not available in your organization.`);
         await startInternalCall(colleague.sipUsername, colleague.extension, colleague.name, colleague.photoUrl);
       } else {
-        await startCall(fullNumber, selected, selectedCaller, contactName);
+        await startCall(fullNumber, selected, selectedCaller, contactName, contactPhotoUrl);
       }
     } catch (startError) {
       setCallError(startError instanceof Error ? startError.message : 'The call could not be started.');
@@ -117,7 +119,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
       <View accessibilityLabel={`${internalCandidate ? 'Extension' : selected.dial_code} ${number || (internalCandidate ? 'Company extension' : 'Phone number')}`} style={styles.numberRow}>
         {!internalCandidate && <Text style={styles.dialCode}>{selected.dial_code}</Text>}
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[styles.numberInput, !number && styles.numberPlaceholder]}>{displayNumber || (internalCandidate ? 'Company extension' : 'Phone number')}</Text>
-        <Pressable accessibilityLabel="Delete last digit" onPress={() => { setContactName(undefined); setNumber((value) => value.slice(0, -1)); }} onLongPress={() => { setContactName(undefined); setNumber(''); }} style={styles.delete}>
+        <Pressable accessibilityLabel="Delete last digit" onPress={() => { setContactName(undefined); setContactPhotoUrl(undefined); setNumber((value) => value.slice(0, -1)); }} onLongPress={() => { setContactName(undefined); setContactPhotoUrl(undefined); setNumber(''); }} style={styles.delete}>
           <Delete size={22} color={number ? colors.textMuted : colors.textFaint} />
         </Pressable>
       </View>
@@ -132,7 +134,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
 
       {(callError || error) ? <Text style={styles.error}>{callError || error}</Text> : <NetworkStrength voiceReady={isReady} />}
 
-      <View style={styles.keypadWrap}><Keypad onPress={(digit) => { setContactName(undefined); setNumber((value) => sanitize(value + digit)); }} /></View>
+      <View style={styles.keypadWrap}><Keypad onPress={(digit) => { setContactName(undefined); setContactPhotoUrl(undefined); setNumber((value) => sanitize(value + digit)); }} /></View>
 
       <View style={styles.callArea}>
         <Pressable accessibilityLabel="Start call" disabled={!canCall} onPress={call} style={({ pressed }) => [styles.callButton, !canCall && styles.callDisabled, pressed && canCall && styles.callPressed]}>

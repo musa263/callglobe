@@ -27,7 +27,7 @@ const fallbackVoices: VoiceOption[] = [
 export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWallet }: { openBusinessNonce?: number; onBusinessConsumed?: () => void; onWallet: () => void }) {
   const insets = useSafeAreaInsets();
   const { profile, signOut, isPreview, updateProfile } = useAuth();
-  const { profile: business, saveProfile } = useBusiness();
+  const { profile: business, callMode, setCallMode, saveProfile } = useBusiness();
   const { pushRegistration, refreshIncomingCalls } = useVoice();
   const [showBusiness, setShowBusiness] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -40,7 +40,6 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [ringtone, setRingtone] = useState<RingtoneId>(defaultRingtone);
-  const [switchingMode, setSwitchingMode] = useState(false);
   const [showEsim, setShowEsim] = useState(false);
   const [network, setNetwork] = useState<NetInfoState | null>(null);
   const [profileDraft, setProfileDraft] = useState({ fullName: '', jobTitle: '', department: '', mobile: '', location: '', bio: '' });
@@ -63,6 +62,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
   const canManagePhoneSystem = isPreview || ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(profile?.role || '');
+  const businessAccount = isPreview || profile?.account_type === 'business';
   useEffect(() => {
     if (!canManagePhoneSystem || isPreview) return;
     api.get<{ voices: VoiceOption[]; carrierFallbacks: VoiceOption[] }>('/api/admin/voices')
@@ -153,22 +153,14 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
     } catch (previewError) { setError(previewError instanceof Error ? previewError.message : 'Voice preview is unavailable.'); }
   };
 
-  const changeCallMode = async (enabled: boolean) => {
-    if (business.enabled === enabled || switchingMode) return;
-    setSwitchingMode(true); setError('');
-    try { await saveProfile({ ...business, enabled }); }
-    catch (modeError) { Alert.alert('Could not change call mode', modeError instanceof Error ? modeError.message : 'Try again shortly.'); }
-    finally { setSwitchingMode(false); }
-  };
-
   return <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
       <View style={styles.header}><Text style={styles.eyebrow}>YOUR ACCOUNT</Text><Text style={styles.title}>Settings</Text></View>
       <Pressable onPress={openProfile} style={styles.profile}>{profile?.photo_url ? <Image source={{ uri: profile.photo_url }} style={styles.avatarImage} /> : <View style={styles.avatar}><Text style={styles.initials}>{initials}</Text></View>}<View style={styles.profileCopy}><Text style={styles.profileName}>{profile?.full_name || 'Vocivo member'}</Text><Text style={styles.profileEmail}>{profile?.job_title || profile?.email}</Text></View>{isPreview ? <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>PREVIEW</Text></View> : <ChevronRight size={18} color={colors.textFaint} />}</Pressable>
       <Text style={styles.sectionLabel}>ACCOUNT</Text>
       <View style={styles.group}><Row icon={UserRoundPen} title="Personal profile" subtitle="Photo, name, role and contact details" onPress={openProfile} /></View>
-      {canManagePhoneSystem && <><Text style={styles.sectionLabel}>CALL HANDLING</Text>
-      <View style={styles.callMode}><Pressable onPress={() => changeCallMode(false)} style={[styles.callModeButton, !business.enabled && styles.callModeActive]}><Phone size={17} color={!business.enabled ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, !business.enabled && styles.callModeTitleActive]}>Personal</Text><Text style={[styles.callModeHelp, !business.enabled && styles.callModeHelpActive]}>Ring the app</Text></View></Pressable><Pressable onPress={() => changeCallMode(true)} style={[styles.callModeButton, business.enabled && styles.callModeActive]}><Building2 size={17} color={business.enabled ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, business.enabled && styles.callModeTitleActive]}>Business</Text><Text style={[styles.callModeHelp, business.enabled && styles.callModeHelpActive]}>Greeting and extensions</Text></View></Pressable>{switchingMode && <View style={styles.callModeBusy}><ActivityIndicator size="small" color={colors.mint} /></View>}</View></>}
+      {businessAccount && <><Text style={styles.sectionLabel}>CALL HANDLING</Text>
+      <View style={styles.callMode}><Pressable onPress={() => setCallMode('personal')} style={[styles.callModeButton, callMode === 'personal' && styles.callModeActive]}><Phone size={17} color={callMode === 'personal' ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, callMode === 'personal' && styles.callModeTitleActive]}>Personal</Text><Text style={[styles.callModeHelp, callMode === 'personal' && styles.callModeHelpActive]}>Your direct line</Text></View></Pressable><Pressable onPress={() => setCallMode('business')} style={[styles.callModeButton, callMode === 'business' && styles.callModeActive]}><Building2 size={17} color={callMode === 'business' ? colors.ink : colors.textMuted} /><View><Text style={[styles.callModeTitle, callMode === 'business' && styles.callModeTitleActive]}>Business</Text><Text style={[styles.callModeHelp, callMode === 'business' && styles.callModeHelpActive]}>Company workspace</Text></View></Pressable></View></>}
       <Text style={styles.sectionLabel}>PHONE SYSTEM</Text>
       <View style={styles.group}>
         {canManagePhoneSystem && <Row icon={Building2} title="Professional Voice" subtitle={business.enabled ? `${business.companyName} IVR is active` : 'Greeting, departments and waiting message'} onPress={() => setShowBusiness(true)} />}

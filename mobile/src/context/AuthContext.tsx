@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { api } from '../lib/api';
 import type { CallerNumber, CallLog, CallRate, Profile } from '../types';
 import { fallbackRates } from '../data/fallbackRates';
+import { signOutVoiceDevice } from '../lib/voipClient';
 
 type AuthContextValue = {
   loading: boolean;
@@ -171,8 +172,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!await api.getSessionToken()) return;
         const session = await api.get<SessionResponse>('/api/auth/session');
         setProfile(initialProfile(session.profile));
-        await loadAccount(session.profile);
         setAuthenticated(true);
+        void loadAccount(session.profile).catch(() => undefined);
       } catch {
         await api.clearSessionToken();
         setAuthenticated(false);
@@ -190,8 +191,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await api.post<LoginResponse>('/api/auth/login', { email: email.trim(), password });
       await api.saveSessionToken(result.token);
       setProfile(initialProfile(result.profile));
-      await loadAccount(result.profile);
       setAuthenticated(true);
+      setLoading(false);
+      void loadAccount(result.profile).catch(() => undefined);
     } catch (error) {
       await api.clearSessionToken();
       setAuthenticated(false);
@@ -208,8 +210,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await api.post<LoginResponse>('/api/auth/enroll', { token });
       await api.saveSessionToken(result.token);
       setProfile(initialProfile(result.profile));
-      await loadAccount(result.profile);
       setAuthenticated(true);
+      setLoading(false);
+      void loadAccount(result.profile).catch(() => undefined);
     } catch (error) {
       await api.clearSessionToken();
       setAuthenticated(false);
@@ -221,6 +224,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccount]);
 
   const signOut = useCallback(async () => {
+    await signOutVoiceDevice();
     setIsPreview(false);
     setAuthenticated(false);
     setProfile(null);
@@ -228,15 +232,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCallerNumbers([]);
     historyRef.current = [];
     setHistory([]);
-    await AsyncStorage.multiRemove([
-      '@telnyx_username',
-      '@telnyx_password',
-      '@credential_token',
-      '@push_token',
-      '@push_when_active',
-      '@use_trickle_ice',
-      '@enable_missed_call_notifications',
-    ]);
     await api.clearSessionToken();
   }, []);
 

@@ -15,6 +15,7 @@ export type NavigationTarget = {
   number: string;
   name?: string;
   internal?: boolean;
+  photoUrl?: string;
   nonce: number;
 };
 
