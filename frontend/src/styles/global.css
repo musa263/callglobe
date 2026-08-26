@@ -229,6 +229,38 @@ audio { display: none; }
 .call-avatar-photo { object-fit:cover; }
 .call-timer { margin-top:22px; font-family:'Sora'; font-size:22px; }
 .call-controls { width:100%; margin-top:auto; display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.web-call-modal { max-height:calc(100dvh - 32px); overflow:auto; }
+.web-call-modal .call-controls { grid-template-columns:repeat(3,1fr); margin-top:22px; }
+.web-call-modal .control:disabled { opacity:.38; }
+.held-call-strip { width:100%; min-height:38px; margin-top:12px; padding:0 10px; display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--line); border-bottom:1px solid var(--line); color:var(--muted); font-size:10px; }
+.held-call-strip button { border:0; color:var(--blue); background:transparent; font-weight:800; }
+.web-call-tool { width:100%; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); text-align:left; }
+.web-call-tool-head { min-height:34px; display:flex; align-items:center; justify-content:space-between; }
+.web-call-tool-head strong { font-size:12px; }
+.web-call-tool-head button { width:32px; height:32px; display:grid; place-items:center; border:0; background:transparent; }
+.web-call-tool-head svg { width:17px; }
+.web-call-segments { height:38px; display:grid; grid-template-columns:1fr 1fr; padding:3px; background:#eaf1f7; }
+.web-call-segments button { border:0; color:var(--muted); background:transparent; font-size:10px; font-weight:800; }
+.web-call-segments button.active { color:var(--blue); background:white; box-shadow:0 1px 4px rgba(15,45,80,.12); }
+.web-call-input { min-height:46px; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:8px; border-bottom:1px solid var(--line); }
+.web-call-input>span { color:var(--blue); font-size:11px; font-weight:900; }
+.web-call-input input { min-width:0; height:40px; border:0; outline:0; background:transparent; font-size:14px; }
+.web-call-input button { height:34px; padding:0 12px; display:flex; align-items:center; gap:5px; border:0; border-radius:5px; color:white; background:var(--blue); font-size:10px; font-weight:800; }
+.web-call-input button svg { width:14px; }
+.web-team-list { max-height:184px; overflow:auto; border-top:1px solid var(--line); }
+.web-team-list>button,.web-team-list>div { width:100%; min-height:48px; padding:7px 2px; display:flex; align-items:center; justify-content:space-between; border:0; border-bottom:1px solid var(--line); color:var(--ink); background:transparent; text-align:left; }
+.web-team-list span { display:grid; gap:3px; }
+.web-team-list strong { font-size:11px; }
+.web-team-list small { color:var(--muted); font-size:9px; }
+.web-team-list svg { width:17px; color:var(--blue); }
+.web-team-list em { color:var(--blue); font-size:8px; font-style:normal; font-weight:900; }
+.web-team-list>div>button { width:34px; height:34px; display:grid; place-items:center; border:0; border-radius:50%; color:var(--coral); background:#fff0ed; }
+.web-team-list>div>button svg { color:var(--coral); }
+.web-dtmf { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
+.web-dtmf button { height:42px; display:grid; place-content:center; border:1px solid var(--line); border-radius:5px; background:white; }
+.web-dtmf strong { font-size:15px; }
+.web-dtmf small { min-height:8px; color:var(--muted); font-size:7px; }
+.web-call-error { margin-top:8px; color:var(--coral); font-size:10px; line-height:1.4; }
 .control { height:70px; display:grid; place-content:center; justify-items:center; gap:5px; border:1px solid #dce2de; border-radius:6px; color:#4e5b56; background:white; }
 .control svg { width:19px; }
 .control span { font-size:10px; font-weight:700; }

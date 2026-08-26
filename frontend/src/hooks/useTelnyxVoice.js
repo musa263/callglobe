@@ -25,6 +25,10 @@ function describeRemote(call, fallbackNumber = '') {
   };
 }
 
+function getCallId(call) {
+  return call?.id || call?.callId || '';
+}
+
 export function useTelnyxVoice(token, enabled, identity = {}) {
   const clientRef = useRef(null);
   const callRef = useRef(null);
@@ -33,39 +37,102 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const routePollRef = useRef(0);
   const callIdentityRef = useRef(new Map());
   const locallyEndedCallIdsRef = useRef(new Set());
+  const incomingToneRef = useRef(null);
+  const incomingNotificationRef = useRef(null);
+  const incomingCallRef = useRef(null);
+  const heldCallRef = useRef(null);
+  const conferenceRef = useRef(null);
+  const callActionBusyRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [statusLabel, setStatusLabel] = useState('Connecting...');
   const [error, setError] = useState('');
   const [call, setCall] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
+  const [heldCall, setHeldCall] = useState(null);
+  const [conference, setConference] = useState(null);
   const [state, setState] = useState(null);
   const [muted, setMuted] = useState(false);
   const [dialedNumber, setDialedNumber] = useState('');
   const [endedCall, setEndedCall] = useState(null);
   const [routePhase, setRoutePhase] = useState(null);
+  const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const [remoteIdentity, setRemoteIdentity] = useState({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
 
   // The parked Telnyx leg supplies ringback. A second browser loop can survive
   // the bridge event and overlap the connected call audio.
   const stopRingback = useCallback(() => undefined, []);
   const startRingback = useCallback(() => undefined, []);
+  const stopIncomingRingtone = useCallback(() => {
+    const tone = incomingToneRef.current;
+    incomingToneRef.current = null;
+    if (tone) {
+      tone.pause();
+      tone.currentTime = 0;
+    }
+    incomingNotificationRef.current?.close?.();
+    incomingNotificationRef.current = null;
+    navigator.vibrate?.(0);
+  }, []);
+  const startIncomingRingtone = useCallback((incoming) => {
+    if (!incomingToneRef.current) {
+      const tone = new Audio('/audio/ringback.wav');
+      tone.loop = true;
+      tone.volume = 0.72;
+      incomingToneRef.current = tone;
+      tone.play().catch(() => undefined);
+    }
+    navigator.vibrate?.([450, 250, 450, 650]);
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !incomingNotificationRef.current) {
+      const identity = describeRemote(incoming);
+      const notification = new Notification(identity.name || 'Incoming Vocivo call', {
+        body: identity.number || 'Open Vocivo to answer',
+        icon: '/vocivo-icon-192.png',
+        tag: `vocivo-incoming-${incoming.id || incoming.callId || 'call'}`,
+        requireInteraction: true,
+      });
+      notification.onclick = () => { window.focus(); notification.close(); };
+      incomingNotificationRef.current = notification;
+    }
+  }, []);
+  const enableBrowserAlerts = useCallback(async () => {
+    const probe = new Audio('/audio/ringback.wav');
+    probe.volume = 0.01;
+    await probe.play().catch(() => undefined);
+    probe.pause();
+    probe.currentTime = 0;
+    if (typeof Notification === 'undefined') {
+      setNotificationPermission('unsupported');
+      return 'unsupported';
+    }
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+    return permission;
+  }, []);
 
   const disconnect = useCallback(() => {
     const routeId = routeIdRef.current;
-    if (routeId) api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch(() => undefined);
+    const extraRoutes = [heldCallRef.current?.routeId, ...(conferenceRef.current?.participants || []).map((item) => item.routeId)].filter(Boolean);
+    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch(() => undefined));
     try { callRef.current?.hangup?.(); } catch { /* already closed */ }
+    try { heldCallRef.current?.call?.hangup?.(); } catch { /* already closed */ }
     try { clientRef.current?.disconnect?.(); } catch { /* already disconnected */ }
     clientRef.current = null;
     callRef.current = null;
+    incomingCallRef.current = null;
+    heldCallRef.current = null;
+    conferenceRef.current = null;
     routeIdRef.current = null;
     routePollRef.current += 1;
     stopRingback();
+    stopIncomingRingtone();
     setReady(false);
     setCall(null);
     setIncomingCall(null);
+    setHeldCall(null);
+    setConference(null);
     setState(null);
     setRoutePhase(null);
-  }, [stopRingback]);
+  }, [stopIncomingRingtone, stopRingback]);
 
   useEffect(() => {
     if (!enabled || !token) return undefined;
@@ -102,18 +169,57 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           try { updatedCall.hangup?.(); } catch { /* already closing */ }
           return;
         }
+        const activeId = getCallId(callRef.current);
+        const heldId = heldCallRef.current?.id;
+        if (callId && heldId === callId && activeId !== callId) {
+          if (TERMINAL_STATES.has(nextState)) {
+            heldCallRef.current = null;
+            setHeldCall(null);
+          } else {
+            const nextHeld = { ...heldCallRef.current, call: updatedCall, state: nextState };
+            heldCallRef.current = nextHeld;
+            setHeldCall(nextHeld);
+          }
+          return;
+        }
+        if (direction === 'inbound' && ['new', 'ringing', 'early', 'requesting'].includes(nextState) && activeId && activeId !== callId) {
+          incomingCallRef.current = updatedCall;
+          setIncomingCall(updatedCall);
+          startIncomingRingtone(updatedCall);
+          return;
+        }
+        if (callId && activeId && activeId !== callId && TERMINAL_STATES.has(nextState)) {
+          if (getCallId(incomingCallRef.current) === callId) {
+            incomingCallRef.current = null;
+            setIncomingCall(null);
+            stopIncomingRingtone();
+          }
+          callIdentityRef.current.delete(callId);
+          return;
+        }
+        if (activeId && activeId !== callId && !TERMINAL_STATES.has(nextState)) return;
         callRef.current = updatedCall;
         setCall(updatedCall);
         setRemoteIdentity(callIdentityRef.current.get(callId) || describeRemote(updatedCall, dialedNumber));
         setState(nextState);
-        if (direction === 'inbound' && ['new', 'ringing', 'early', 'requesting'].includes(nextState)) setIncomingCall(updatedCall);
-        if (['active', 'held'].includes(nextState)) setIncomingCall(null);
+        if (direction === 'inbound' && ['new', 'ringing', 'early', 'requesting'].includes(nextState)) {
+          incomingCallRef.current = updatedCall;
+          setIncomingCall(updatedCall);
+          startIncomingRingtone(updatedCall);
+        }
+        if (['active', 'held'].includes(nextState)) {
+          incomingCallRef.current = null;
+          setIncomingCall(null);
+          stopIncomingRingtone();
+          document.getElementById('remoteMedia')?.play?.().catch?.(() => undefined);
+        }
         if (TERMINAL_STATES.has(nextState)) {
           if (callId) locallyEndedCallIdsRef.current.delete(callId);
           routePollRef.current += 1;
           routeIdRef.current = null;
           setRoutePhase(null);
           stopRingback();
+          stopIncomingRingtone();
           const endedCallId = callId || `${Date.now()}`;
           if (endedIdRef.current !== endedCallId) {
             endedIdRef.current = endedCallId;
@@ -124,12 +230,29 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
             setEndedCall({ id: endedCallId, number: number || 'Unknown', direction: direction === 'inbound' ? 'incoming' : 'outgoing' });
           }
           callRef.current = null;
+          incomingCallRef.current = null;
           callIdentityRef.current.delete(endedCallId);
           setCall(null);
           setIncomingCall(null);
           setState(null);
           setMuted(false);
           setRemoteIdentity({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
+          const held = heldCallRef.current;
+          if (held && !conferenceRef.current) {
+            heldCallRef.current = null;
+            setHeldCall(null);
+            Promise.resolve(held.call?.unhold?.()).then(() => {
+              callRef.current = held.call;
+              routeIdRef.current = held.routeId || null;
+              setCall(held.call);
+              setState('active');
+              setRoutePhase('connected');
+              setRemoteIdentity(held.identity);
+            }).catch(() => undefined);
+          } else if (conferenceRef.current) {
+            conferenceRef.current = null;
+            setConference(null);
+          }
         }
       });
       client.connect();
@@ -139,7 +262,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setStatusLabel('Unable to connect');
     });
     return () => { cancelled = true; disconnect(); };
-  }, [disconnect, enabled, stopRingback, token]);
+  }, [disconnect, enabled, startIncomingRingtone, stopIncomingRingtone, stopRingback, token]);
 
   const followRoute = useCallback(async (routeId) => {
     const generation = ++routePollRef.current;
@@ -203,6 +326,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       });
       if (!newCall) throw new Error('The web phone is not ready yet.');
       callRef.current = newCall;
+      incomingCallRef.current = null;
       callIdentityRef.current.set(newCall.id || newCall.callId, { name: 'Outbound call', number: destinationNumber, internal: false });
       setCall(newCall);
       setRemoteIdentity({ name: 'Outbound call', number: destinationNumber, internal: false, photoUrl: '' });
@@ -211,6 +335,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     } catch (callError) {
       stopRingback();
       setError(callError.message || 'The call could not be started. Check microphone permission.');
+      throw callError;
     }
   }, [followRoute, identity.name, startRingback, stopRingback]);
 
@@ -237,6 +362,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       });
       if (!newCall) throw new Error('The web phone is not ready yet.');
       callRef.current = newCall;
+      incomingCallRef.current = null;
       callIdentityRef.current.set(newCall.id || newCall.callId, { name: displayName, number: `Extension ${extension}`, internal: true });
       setCall(newCall);
       setRemoteIdentity({ name: displayName, number: `Extension ${extension}`, internal: true, photoUrl: '' });
@@ -245,33 +371,72 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     } catch (callError) {
       stopRingback();
       setError(callError.message || 'The extension call could not be started.');
+      throw callError;
     }
   }, [followRoute, identity.extension, identity.name, startRingback, stopRingback]);
 
   const answer = useCallback(async () => {
     try {
-      await callRef.current?.answer?.({ remoteElement: 'remoteMedia', audio: true });
+      stopIncomingRingtone();
+      const incoming = incomingCallRef.current || incomingCall;
+      const current = callRef.current;
+      if (!incoming) return;
+      if (current && getCallId(current) !== getCallId(incoming) && ['active', 'held'].includes(String(current.state || '').toLowerCase())) {
+        const snapshot = { id: getCallId(current), call: current, identity: remoteIdentity, routeId: routeIdRef.current, state: 'held' };
+        heldCallRef.current = snapshot;
+        setHeldCall(snapshot);
+        await current.hold?.();
+      }
+      await incoming.answer?.({ remoteElement: 'remoteMedia', audio: true });
+      callRef.current = incoming;
+      incomingCallRef.current = null;
+      routeIdRef.current = null;
+      setCall(incoming);
+      setState('answering');
+      setRoutePhase(null);
+      setRemoteIdentity(callIdentityRef.current.get(getCallId(incoming)) || describeRemote(incoming));
+      await document.getElementById('remoteMedia')?.play?.().catch?.(() => undefined);
       setIncomingCall(null);
     } catch (answerError) { setError(answerError.message || 'The call could not be answered.'); }
-  }, []);
-  const decline = useCallback(() => { callRef.current?.hangup?.(); setIncomingCall(null); }, []);
+  }, [incomingCall, remoteIdentity, stopIncomingRingtone]);
+  const decline = useCallback(() => {
+    stopIncomingRingtone();
+    const incoming = incomingCallRef.current || incomingCall;
+    incoming?.hangup?.();
+    incomingCallRef.current = null;
+    setIncomingCall(null);
+    if (getCallId(callRef.current) === getCallId(incoming)) {
+      callRef.current = null;
+      setCall(null);
+      setState(null);
+    }
+  }, [incomingCall, stopIncomingRingtone]);
   const hangup = useCallback(() => {
     const routeId = routeIdRef.current;
     const current = callRef.current;
+    const held = heldCallRef.current;
+    const extraRoutes = [held?.routeId, ...(conferenceRef.current?.participants || []).map((item) => item.routeId)].filter(Boolean);
     const callId = current?.id || current?.callId;
     if (callId) locallyEndedCallIdsRef.current.add(callId);
     routePollRef.current += 1;
     routeIdRef.current = null;
     stopRingback();
-    if (routeId) api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch(() => undefined);
+    stopIncomingRingtone();
+    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch(() => undefined));
     try { current?.hangup?.(); } catch { /* already closed */ }
+    try { held?.call?.hangup?.(); } catch { /* already closed */ }
     callRef.current = null;
+    incomingCallRef.current = null;
+    heldCallRef.current = null;
+    conferenceRef.current = null;
     setCall(null);
     setIncomingCall(null);
+    setHeldCall(null);
+    setConference(null);
     setState(null);
     setMuted(false);
     setRoutePhase('ended');
-  }, [stopRingback]);
+  }, [stopIncomingRingtone, stopRingback]);
   const toggleMute = useCallback(() => {
     if (!callRef.current) return;
     if (muted) callRef.current.unmuteAudio?.(); else callRef.current.muteAudio?.();
@@ -282,10 +447,124 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     if (state === 'held') callRef.current.unhold?.(); else callRef.current.hold?.();
   }, [state]);
 
+  const startSecondCall = useCallback(async (destinationNumber, callerNumber) => {
+    const current = callRef.current;
+    if (!current || !['active'].includes(String(current.state || '').toLowerCase()) || heldCallRef.current || conferenceRef.current) throw new Error('Connect the first call before adding another caller.');
+    const snapshot = { id: getCallId(current), call: current, identity: remoteIdentity, routeId: routeIdRef.current, state: 'held' };
+    heldCallRef.current = snapshot;
+    setHeldCall(snapshot);
+    await current.hold?.();
+    try {
+      await startCall(destinationNumber, callerNumber);
+    } catch (secondCallError) {
+      heldCallRef.current = null;
+      setHeldCall(null);
+      await current.unhold?.();
+      callRef.current = current;
+      routeIdRef.current = snapshot.routeId;
+      setCall(current);
+      setState('active');
+      setRoutePhase('connected');
+      setRemoteIdentity(snapshot.identity);
+      throw secondCallError;
+    }
+  }, [remoteIdentity, startCall]);
+
+  const startSecondInternalCall = useCallback(async (sipUsername, extension, displayName) => {
+    const current = callRef.current;
+    if (!current || String(current.state || '').toLowerCase() !== 'active' || heldCallRef.current || conferenceRef.current) throw new Error('Connect the first call before adding another caller.');
+    const snapshot = { id: getCallId(current), call: current, identity: remoteIdentity, routeId: routeIdRef.current, state: 'held' };
+    heldCallRef.current = snapshot;
+    setHeldCall(snapshot);
+    await current.hold?.();
+    try {
+      await startInternalCall(sipUsername, extension, displayName);
+    } catch (secondCallError) {
+      heldCallRef.current = null;
+      setHeldCall(null);
+      await current.unhold?.();
+      callRef.current = current;
+      routeIdRef.current = snapshot.routeId;
+      setCall(current);
+      setState('active');
+      setRoutePhase('connected');
+      setRemoteIdentity(snapshot.identity);
+      throw secondCallError;
+    }
+  }, [remoteIdentity, startInternalCall]);
+
+  const swapCalls = useCallback(async () => {
+    if (callActionBusyRef.current) throw new Error('Another call action is still completing.');
+    const current = callRef.current;
+    const held = heldCallRef.current;
+    if (!current || !held || conferenceRef.current) throw new Error('There is no held call to swap.');
+    callActionBusyRef.current = true;
+    const currentSnapshot = { id: getCallId(current), call: current, identity: remoteIdentity, routeId: routeIdRef.current, state: 'held' };
+    try {
+      await current.hold?.();
+      await held.call?.unhold?.();
+      heldCallRef.current = currentSnapshot;
+      setHeldCall(currentSnapshot);
+      callRef.current = held.call;
+      routeIdRef.current = held.routeId || null;
+      setCall(held.call);
+      setState('active');
+      setRoutePhase('connected');
+      setRemoteIdentity(held.identity);
+    } finally {
+      callActionBusyRef.current = false;
+    }
+  }, [remoteIdentity]);
+
+  const mergeCalls = useCallback(async () => {
+    if (callActionBusyRef.current) throw new Error('Another call action is still completing.');
+    const active = callRef.current;
+    const held = heldCallRef.current;
+    if (!active || !held || !routeIdRef.current || !held.routeId) throw new Error('Two connected Vocivo calls are required before merging.');
+    callActionBusyRef.current = true;
+    try {
+      const result = await api('/api/voice/merge', { method: 'POST', body: { routeIds: [routeIdRef.current, held.routeId] } });
+      const merged = {
+        id: result.conferenceId,
+        participants: [
+          { id: held.id, routeId: held.routeId, ...held.identity },
+          { id: getCallId(active), routeId: routeIdRef.current, ...remoteIdentity },
+        ],
+      };
+      conferenceRef.current = merged;
+      setConference(merged);
+      heldCallRef.current = null;
+      setHeldCall(null);
+    } finally {
+      callActionBusyRef.current = false;
+    }
+  }, [remoteIdentity]);
+
+  const removeConferenceParticipant = useCallback(async (participantId) => {
+    const current = conferenceRef.current;
+    const participant = current?.participants.find((item) => item.id === participantId);
+    if (!current || !participant?.routeId || current.participants[0]?.id === participantId) throw new Error('Only an added participant can be removed.');
+    await api('/api/voice/merge', { method: 'POST', body: { action: 'remove_participant', conferenceId: current.id, routeId: participant.routeId } });
+    const next = { ...current, participants: current.participants.filter((item) => item.id !== participantId) };
+    if (participantId === getCallId(callRef.current) && next.participants[0]) {
+      routeIdRef.current = next.participants[0].routeId || null;
+      setRemoteIdentity(next.participants[0]);
+    }
+    conferenceRef.current = next;
+    setConference(next);
+  }, []);
+
+  const transferCall = useCallback(async (targetExtensionId) => {
+    await api('/api/voice/transfer', { method: 'POST', body: { targetExtensionId } });
+  }, []);
+
+  const sendDtmf = useCallback((digit) => callRef.current?.dtmf?.(digit), []);
+
   return {
-    ready, statusLabel, error, call, incomingCall, remoteIdentity, state: routePhase === 'connected' ? 'active' : routePhase || state, muted, dialedNumber, endedCall,
+    ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state: routePhase === 'connected' ? 'active' : routePhase || state, muted, dialedNumber, endedCall,
     connected: routePhase ? routePhase === 'connected' : state === 'active',
     active: (routePhase ? ['ringing', 'connected'].includes(routePhase) : ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state)) && !incomingCall,
-    startCall, startInternalCall, answer, decline, hangup, toggleMute, toggleHold, disconnect,
+    notificationPermission, enableBrowserAlerts,
+    startCall, startInternalCall, startSecondCall, startSecondInternalCall, swapCalls, mergeCalls, removeConferenceParticipant, transferCall, sendDtmf, answer, decline, hangup, toggleMute, toggleHold, disconnect,
   };
 }

@@ -91,6 +91,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const session = await requireSession(req);
+    if (req.body?.action === 'remove_participant') {
+      const routeId = typeof req.body?.routeId === 'string' ? req.body.routeId.trim() : '';
+      const conferenceId = typeof req.body?.conferenceId === 'string' ? req.body.conferenceId.trim() : '';
+      if (!isVoiceRouteId(routeId) || !conferenceId) return res.status(400).json({ error: 'Choose a valid conference participant.' });
+      const reservation = await readVoiceRoute(routeId);
+      if (!reservation || reservation.userId !== session.sub) return res.status(403).json({ error: 'This conference participant does not belong to your account.' });
+      const pair = await waitForPair(readOutboundCallPairByRoute, routeId);
+      if (!pair || pair.status !== 'conference' || pair.conferenceId !== conferenceId) return res.status(409).json({ error: 'This participant is no longer in the conference.' });
+      await telnyx(`/conferences/${encodeURIComponent(conferenceId)}/actions/leave`, {
+        method: 'POST',
+        body: JSON.stringify({ call_control_id: pair.destinationCallControlId, beep_enabled: 'never', command_id: `vocivo-remove-${Date.now()}` }),
+      }).catch((error) => {
+        if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
+      });
+      await callAction(pair.destinationCallControlId, 'hangup', { command_id: `vocivo-remove-hangup-${Date.now()}` }).catch((error) => {
+        if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
+      });
+      const updatedAt = new Date().toISOString();
+      await Promise.all([
+        saveOutboundCallPair({ ...pair, phase: 'ended', updatedAt }),
+        updateVoiceRoute(routeId, { phase: 'ended' }),
+      ]);
+      return res.status(200).json({ removed: true, routeId, conferenceId });
+    }
     const routeIds = Array.isArray(req.body?.routeIds)
       ? Array.from(new Set<string>(req.body.routeIds.filter((value: unknown): value is string => typeof value === 'string').map((value: string) => value.trim())))
       : [];

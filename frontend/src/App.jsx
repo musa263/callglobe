@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowDownLeft, ArrowUpRight, AlertTriangle, CreditCard, Delete, Check, ChevronDown, CircleDollarSign,
+  ArrowDownLeft, ArrowUpRight, ArrowLeftRight, AlertTriangle, BellRing, CreditCard, Delete, Check, ChevronDown, CircleDollarSign,
   Clock3, ContactRound, Globe2, Headphones, History, LogOut, Mic, MicOff, Pause,
-  Phone, PhoneCall, PhoneIncoming, PhoneOff, Plus, Search, Settings, ShieldCheck,
-  Trash2, Volume2, WalletCards, Wifi, WifiOff, X,
+  Grid3X3, Merge, Phone, PhoneCall, PhoneForwarded, PhoneIncoming, PhoneOff, Plus, Search, Settings, ShieldCheck,
+  Trash2, UserMinus, UserPlus, Volume2, WalletCards, Wifi, WifiOff, X,
 } from 'lucide-react';
 import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { api, clearSession, getStoredSession, storeSession } from './lib/api';
@@ -117,19 +117,76 @@ function IncomingCall({ call, onAnswer, onDecline }) {
   );
 }
 
-function ActiveCall({ voice, number, elapsed }) {
+function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
   const remote = voice.remoteIdentity?.number || number;
   const name = voice.remoteIdentity?.name || 'Phone call';
+  const [tool, setTool] = useState('');
+  const [mode, setMode] = useState('external');
+  const [target, setTarget] = useState('');
+  const [team, setTeam] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [toolError, setToolError] = useState('');
+  const status = voice.connected ? (voice.state === 'held' ? 'ON HOLD' : voice.conference ? 'CONFERENCE' : 'LIVE CALL') : 'CALLING';
+  const openTool = async (next) => {
+    setTool(next); setToolError(''); setTarget('');
+    if (next === 'transfer') {
+      try { const result = await api('/api/voice/directory'); setTeam((result.users || []).filter((user) => user.id !== profile?.id)); }
+      catch (directoryError) { setToolError(directoryError.message || 'The company directory is unavailable.'); }
+    }
+  };
+  const addCaller = async () => {
+    if (!target || busy) return;
+    setBusy(true); setToolError('');
+    try {
+      if (mode === 'extension') {
+        const result = await api(`/api/voice/directory?extension=${encodeURIComponent(target)}`);
+        const colleague = result.users?.[0];
+        if (!colleague?.sipUsername) throw new Error('That extension is not available.');
+        await voice.startSecondInternalCall(colleague.sipUsername, colleague.extension, colleague.name);
+      } else {
+        await voice.startSecondCall(target.startsWith('+') ? target : `+${target}`, selectedNumber?.phone_number);
+      }
+      setTool(''); setTarget('');
+    } catch (addError) { setToolError(addError.message || 'The second call could not be started.'); }
+    finally { setBusy(false); }
+  };
+  const transfer = async (member) => {
+    setBusy(true); setToolError('');
+    try { await voice.transferCall(member.id); setTool(''); }
+    catch (transferError) { setToolError(transferError.message || 'The call could not be transferred.'); }
+    finally { setBusy(false); }
+  };
+  const action = async (operation) => {
+    setBusy(true); setToolError('');
+    try { await operation(); }
+    catch (actionError) { setToolError(actionError.message || 'The call action could not be completed.'); }
+    finally { setBusy(false); }
+  };
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
-      <div className="call-modal active-modal">
-        <div className="live-pill"><span /> {voice.state === 'held' ? 'ON HOLD' : 'LIVE CALL'}</div>
+      <div className="call-modal active-modal web-call-modal">
+        <div className="live-pill"><span /> {status}</div>
         {voice.remoteIdentity?.photoUrl ? <img className="call-avatar call-avatar-photo" src={voice.remoteIdentity.photoUrl} alt="" /> : <div className="call-avatar">{name.charAt(0).toUpperCase()}</div>}<h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p><strong className="call-timer">{formatDuration(elapsed)}</strong>
         <div className="call-controls">
           <button className={voice.muted ? 'control active' : 'control'} onClick={voice.toggleMute} title={voice.muted ? 'Unmute' : 'Mute'}>{voice.muted ? <MicOff /> : <Mic />}<span>{voice.muted ? 'Unmute' : 'Mute'}</span></button>
           <button className={voice.state === 'held' ? 'control active' : 'control'} onClick={voice.toggleHold} title="Hold call"><Pause /><span>Hold</span></button>
-          <button className="control" disabled title="Audio output"><Volume2 /><span>Audio</span></button>
+          <button className="control" onClick={() => openTool('keypad')} title="Open keypad"><Grid3X3 /><span>Keypad</span></button>
+          <button className="control" disabled={!voice.connected || voice.heldCall || voice.conference} onClick={() => openTool('add')} title="Add caller"><UserPlus /><span>Add caller</span></button>
+          <button className="control" disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.swapCalls)} title="Swap calls"><ArrowLeftRight /><span>Swap</span></button>
+          <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.mergeCalls)} title="Merge calls"><Merge /><span>Merge</span></button>
+          <button className="control" disabled={!voice.connected || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
+          <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.conference} onClick={() => openTool('participants')} title="Conference participants"><UserMinus /><span>Participants</span></button>
+          <button className="control" disabled title="Browser audio"><Volume2 /><span>Audio</span></button>
         </div>
+        {voice.heldCall && !voice.conference && <div className="held-call-strip"><span>{voice.heldCall.identity?.name || voice.heldCall.identity?.number} on hold</span><button onClick={() => action(voice.swapCalls)}>Swap</button></div>}
+        {tool && <div className="web-call-tool">
+          <div className="web-call-tool-head"><strong>{tool === 'add' ? 'Add caller' : tool === 'transfer' ? 'Transfer call' : tool === 'participants' ? 'Conference participants' : 'Keypad'}</strong><button onClick={() => { setTool(''); setToolError(''); }} title="Close"><X /></button></div>
+          {tool === 'add' && <><div className="web-call-segments"><button className={mode === 'external' ? 'active' : ''} onClick={() => { setMode('external'); setTarget(''); }}>External</button><button className={mode === 'extension' ? 'active' : ''} onClick={() => { setMode('extension'); setTarget(''); }}>Extension</button></div><div className="web-call-input"><span>{mode === 'extension' ? 'EXT' : '+'}</span><input inputMode="tel" value={target} onChange={(event) => setTarget(event.target.value.replace(/\D/g, '').slice(0, mode === 'extension' ? 5 : 18))} placeholder={mode === 'extension' ? 'Company extension' : 'International number'} /><button disabled={!target || busy} onClick={addCaller}><Phone />{busy ? 'Calling' : 'Call'}</button></div></>}
+          {tool === 'transfer' && <div className="web-team-list">{team.map((member) => <button key={member.id} disabled={busy} onClick={() => transfer(member)}><span><strong>{member.name}</strong><small>Extension {member.extension} · {member.department}</small></span><PhoneForwarded /></button>)}</div>}
+          {tool === 'participants' && <div className="web-team-list">{voice.conference?.participants.map((participant, index) => <div key={participant.id}><span><strong>{participant.name || participant.number}</strong><small>{index === 0 ? 'Primary caller' : participant.number}</small></span>{index === 0 ? <em>PRIMARY</em> : <button disabled={busy} onClick={() => action(() => voice.removeConferenceParticipant(participant.id))}><UserMinus /></button>}</div>)}</div>}
+          {tool === 'keypad' && <div className="web-dtmf">{KEYS.map(([digit, letters]) => <button key={digit} onClick={() => voice.sendDtmf(digit)}><strong>{digit}</strong><small>{letters}</small></button>)}</div>}
+          {toolError && <div className="web-call-error">{toolError}</div>}
+        </div>}
         <button className="hangup-button" onClick={voice.hangup}><PhoneOff size={24} /> End call</button>
       </div>
     </div>
@@ -257,7 +314,7 @@ function SettingsView({ profile, ownedNumbers, verifiedNumbers, voice, preview, 
   return (
     <section className="content-view settings-view">
       <header className="workspace-header"><div><p className="eyebrow">ACCOUNT</p><h1>Phone settings</h1></div></header>
-      <div className="settings-section"><h2>Connection</h2><div className="setting-row"><span className={voice.ready ? 'setting-icon good' : 'setting-icon'}>{voice.ready ? <Wifi /> : <WifiOff />}</span><div><strong>Vocivo web phone</strong><small>{preview ? 'Preview mode does not connect to the voice service.' : voice.statusLabel}</small></div><span className={voice.ready ? 'state good' : 'state'}>{voice.ready ? 'Connected' : preview ? 'Preview' : 'Waiting'}</span></div><div className="setting-row"><span className="setting-icon"><Mic /></span><div><strong>Microphone</strong><small>Your browser will ask before sharing audio.</small></div><span className="state">Browser managed</span></div></div>
+      <div className="settings-section"><h2>Connection</h2><div className="setting-row"><span className={voice.ready ? 'setting-icon good' : 'setting-icon'}>{voice.ready ? <Wifi /> : <WifiOff />}</span><div><strong>Vocivo web phone</strong><small>{preview ? 'Preview mode does not connect to the voice service.' : voice.statusLabel}</small></div><span className={voice.ready ? 'state good' : 'state'}>{voice.ready ? 'Connected' : preview ? 'Preview' : 'Waiting'}</span></div><div className="setting-row"><span className="setting-icon"><Mic /></span><div><strong>Microphone</strong><small>Your browser will ask before sharing audio.</small></div><span className="state">Browser managed</span></div><div className="setting-row"><span className="setting-icon"><BellRing /></span><div><strong>Browser call alerts</strong><small>Play a ringtone, vibrate and show incoming-call notifications while Vocivo is open.</small></div><button className="logout-button" disabled={preview || voice.notificationPermission === 'granted'} onClick={() => voice.enableBrowserAlerts()}>{voice.notificationPermission === 'granted' ? 'Enabled' : voice.notificationPermission === 'denied' ? 'Blocked' : 'Enable'}</button></div></div>
       <div className="settings-section"><div className="section-heading"><div><h2>Incoming Vocivo numbers</h2><p>Calls to these assigned numbers ring Vocivo while the web phone is connected.</p></div></div>{ownedNumbers.map((number) => <div className="setting-row" key={number.id}><span className="setting-icon"><PhoneIncoming /></span><div><strong>{number.phone_number}</strong><small>{number.label}</small></div><span className={number.receives_calls ? 'state good' : 'state'}>{number.receives_calls ? 'Incoming enabled' : 'Needs routing'}</span></div>)}</div>
       <VerifiedNumbersPanel numbers={verifiedNumbers} pending={verification.pending} busy={verification.busy} error={verification.error} preview={preview} onRequest={verification.request} onVerify={verification.verify} onRemove={verification.remove} onCancel={verification.cancel} />
       <div className="settings-section"><h2>Profile</h2><div className="setting-row">{profile.photo_url ? <img className="settings-avatar" src={profile.photo_url} alt={profile.full_name} /> : <span className="setting-icon"><ContactRound /></span>}<div><strong>{profile.full_name}</strong><small>{profile.job_title || profile.department || profile.email}</small><small>{[profile.mobile, profile.location].filter(Boolean).join(' · ')}</small></div><button className="logout-button" onClick={onLogout}><LogOut size={16} /> Sign out</button></div></div>
@@ -392,7 +449,7 @@ export default function App() {
       {view !== 'admin' && <nav className="mobile-nav">{navItems.map(([id, Icon, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon /><span>{label}</span></button>)}</nav>}
       <audio id="remoteMedia" autoPlay playsInline />
       {voice.incomingCall && <IncomingCall call={voice.incomingCall} onAnswer={voice.answer} onDecline={voice.decline} />}
-      {voice.active && <ActiveCall voice={voice} number={voice.dialedNumber} elapsed={elapsed} />}
+      {voice.active && <ActiveCall voice={voice} number={voice.dialedNumber} elapsed={elapsed} selectedNumber={selectedNumber} profile={shellData.profile} />}
     </div>
   );
 }

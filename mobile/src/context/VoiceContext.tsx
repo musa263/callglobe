@@ -34,6 +34,7 @@ type VoiceContextValue = {
   rejectWaitingCall: () => Promise<void>;
   swapCalls: () => Promise<void>;
   mergeCalls: () => Promise<void>;
+  removeConferenceParticipant: (participantId: string) => Promise<void>;
   endCall: () => Promise<void>;
   answerCall: () => Promise<void>;
   toggleMute: () => Promise<void>;
@@ -590,12 +591,48 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await api.post<{ conferenceId: string }>('/api/voice/merge', { routeIds });
       conferenceCallIdsRef.current = [current.callId];
-      setConference({ id: result.conferenceId, participants: [describeCall(current), describeCall(held)] });
+      setConference({ id: result.conferenceId, participants: [describeCall(held), describeCall(current)] });
       setHeldCall(null);
     } finally {
       multiCallBusyRef.current = false;
     }
   }, [describeCall, heldCall?.id, isPreview]);
+
+  const removeConferenceParticipant = useCallback(async (participantId: string) => {
+    const currentConference = conference;
+    const participant = currentConference?.participants.find((item) => item.id === participantId);
+    if (!currentConference || !participant?.routeId) throw new Error('This conference participant is no longer available.');
+    if (participant.id === currentConference.participants[0]?.id) throw new Error('The primary caller cannot be removed while the conference is active.');
+    if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
+    multiCallBusyRef.current = true;
+    try {
+      await api.post('/api/voice/merge', {
+        action: 'remove_participant',
+        conferenceId: currentConference.id,
+        routeId: participant.routeId,
+      });
+      const remaining = currentConference.participants.filter((item) => item.id !== participantId);
+      const primary = remaining[0];
+      const localHostId = activeCallRef.current?.id;
+      if (participant.id && participant.id !== localHostId) {
+        callRouteIdsRef.current.delete(participant.id);
+        callMetaRef.current.delete(participant.id);
+      }
+      if (participant.id === localHostId && primary && localHostId) {
+        if (primary.routeId) callRouteIdsRef.current.set(localHostId, primary.routeId);
+        callMetaRef.current.set(localHostId, { ...primary, id: undefined });
+        setActiveCall((current) => {
+          if (current?.id !== localHostId) return current;
+          const next = { ...current, ...primary, id: localHostId, phase: current.phase, connectedAt: current.connectedAt, onHold: false };
+          activeCallRef.current = next;
+          return next;
+        });
+      }
+      setConference((current) => current?.id === currentConference.id ? { ...current, participants: remaining } : current);
+    } finally {
+      multiCallBusyRef.current = false;
+    }
+  }, [conference]);
 
   useEffect(() => {
     if (activeCall?.phase !== 'active' || !activeCall.connectedAt) return;
@@ -651,7 +688,23 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => setActiveCall(null), 200);
   }, [activeCall?.id, attachCall, finalizeCall, stopRingback]);
 
-  const answerCall = useCallback(async () => { if (callRef.current) await callRef.current.answer(); }, []);
+  const answerCall = useCallback(async () => {
+    const call = callRef.current;
+    if (!call || !call.isIncoming) return;
+    if (![TelnyxCallState.RINGING, TelnyxCallState.CONNECTING].includes(call.currentState)) return;
+    setError(null);
+    setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'connecting' } : current);
+    try {
+      voipClient.setActiveCall(call.callId);
+      await call.answer();
+      if (Platform.OS === 'android') await VoicePnBridge.hideIncomingCallNotification();
+      attachCall(call);
+    } catch (answerError) {
+      setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'ringing' } : current);
+      setError(answerError instanceof Error ? answerError.message : 'The incoming call could not be answered.');
+      throw answerError;
+    }
+  }, [attachCall]);
   const toggleMute = useCallback(async () => {
     if (callRef.current) await callRef.current.toggleMute();
     else setActiveCall((current) => current ? { ...current, muted: !current.muted } : current);
@@ -666,7 +719,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, [activeCall?.speaker]);
   const sendDtmf = useCallback(async (digit: string) => { if (callRef.current) await callRef.current.dtmf(digit); }, []);
 
-  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || connection === TelnyxConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
+  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || connection === TelnyxConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>;
 }

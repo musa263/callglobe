@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { ArrowLeftRight, Check, ChevronDown, Delete, Grid3X3, Merge, Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, UserPlus, Volume2, VolumeX, X } from 'lucide-react-native';
+import { ArrowLeftRight, Check, ChevronDown, Delete, Grid3X3, Merge, Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, UserMinus, UserPlus, Volume2, VolumeX, X } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Keypad } from '../components/Keypad';
@@ -67,7 +67,7 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
 export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const insets = useSafeAreaInsets();
   const { rates, callerNumbers, profile } = useAuth();
-  const { activeCall, waitingCall, heldCall, conference, duration, endCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls } = useVoice();
+  const { activeCall, waitingCall, heldCall, conference, duration, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant } = useVoice();
   const [showKeypad, setShowKeypad] = useState(false);
   const [showAddCall, setShowAddCall] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -78,6 +78,9 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeError, setMergeError] = useState('');
   const [swapBusy, setSwapBusy] = useState(false);
+  const [answerBusy, setAnswerBusy] = useState(false);
+  const [showParticipants, setShowParticipants] = useState(false);
+  const [removingParticipant, setRemovingParticipant] = useState('');
   useEffect(() => {
     if (!activeCall) { setRemotePhoto(undefined); return; }
     if (activeCall.photoUrl) { setRemotePhoto(activeCall.photoUrl); return; }
@@ -90,7 +93,16 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
     lookup.then((identity) => setRemotePhoto(identity?.photoUrl)).catch(() => setRemotePhoto(undefined));
   }, [activeCall?.displayName, activeCall?.number, activeCall?.photoUrl]);
   if (!activeCall) return null;
-  const status = activeCall.phase === 'active' ? (activeCall.onHold ? 'On hold' : 'Connected') : activeCall.phase === 'ended' ? 'Call ended' : activeCall.phase === 'failed' ? 'Could not connect' : activeCall.phase === 'ringing' ? 'Ringing' : 'Connecting';
+  const incomingPending = Boolean(activeCall.isIncoming && ['ringing', 'connecting'].includes(activeCall.phase));
+  const status = activeCall.phase === 'active'
+    ? (activeCall.onHold ? 'On hold' : 'Connected')
+    : activeCall.phase === 'ended'
+      ? 'Call ended'
+      : activeCall.phase === 'failed'
+        ? 'Could not connect'
+        : activeCall.isIncoming
+          ? (activeCall.phase === 'connecting' ? 'Answering' : 'Ringing')
+          : 'Calling';
   const extensionNumber = activeCall.number.replace(/\D/g, '');
   const visibleNumber = activeCall.destinationCountry === 'Internal' ? (extensionNumber ? `Extension ${extensionNumber}` : 'Internal call') : activeCall.number;
   const transferEnabled = Boolean(profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
@@ -123,6 +135,20 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
     catch (swapFailure) { setMergeError(swapFailure instanceof Error ? swapFailure.message : 'The calls could not be swapped.'); }
     finally { setSwapBusy(false); }
   };
+  const acceptIncoming = async () => {
+    if (answerBusy) return;
+    setAnswerBusy(true); setMergeError('');
+    try { await answerCall(); }
+    catch (answerFailure) { setMergeError(answerFailure instanceof Error ? answerFailure.message : 'The call could not be answered.'); }
+    finally { setAnswerBusy(false); }
+  };
+  const removeParticipant = async (participantId: string) => {
+    if (removingParticipant) return;
+    setRemovingParticipant(participantId); setMergeError('');
+    try { await removeConferenceParticipant(participantId); }
+    catch (removeFailure) { setMergeError(removeFailure instanceof Error ? removeFailure.message : 'The participant could not be removed.'); }
+    finally { setRemovingParticipant(''); }
+  };
 
   return (
     <View style={styles.page}>
@@ -143,11 +169,14 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
         <Text style={[styles.status, activeCall.phase === 'active' && styles.statusLive]}>{status}</Text>
         <Text style={styles.timer}>{formatTime(duration)}</Text>
         {activeCall.ratePerMinute ? <Text style={styles.rate}>${activeCall.ratePerMinute.toFixed(3)} per minute</Text> : null}
-        {conference ? <View style={styles.conference}><View style={styles.conferenceIcon}><Merge size={15} color={colors.ink} /></View><View style={styles.conferenceCopy}><Text style={styles.conferenceLabel}>MERGED CONFERENCE</Text><Text numberOfLines={1} style={styles.conferenceNames}>{conference.participants.map((participant) => participant.displayName || participant.number).join(' + ')}</Text></View><View style={styles.liveBadge}><Text style={styles.liveBadgeText}>LIVE</Text></View></View> : heldCall ? <View style={styles.held}><View style={styles.heldCheck}><Check size={13} color={colors.mint} /></View><Text numberOfLines={1} style={styles.heldText}>{heldCall.displayName || heldCall.number} is on hold</Text><Pressable disabled={swapBusy} onPress={swap} style={styles.swapButton}><Text style={styles.swapText}>{swapBusy ? 'Wait' : 'Swap'}</Text></Pressable></View> : null}
+        {conference ? <Pressable accessibilityRole="button" accessibilityLabel="Manage conference participants" onPress={() => setShowParticipants(true)} style={styles.conference}><View style={styles.conferenceIcon}><Merge size={15} color={colors.ink} /></View><View style={styles.conferenceCopy}><Text style={styles.conferenceLabel}>MERGED CONFERENCE</Text><Text numberOfLines={1} style={styles.conferenceNames}>{conference.participants.map((participant) => participant.displayName || participant.number).join(' + ')}</Text></View><View style={styles.liveBadge}><Text style={styles.liveBadgeText}>MANAGE</Text></View></Pressable> : heldCall ? <View style={styles.held}><View style={styles.heldCheck}><Check size={13} color={colors.mint} /></View><Text numberOfLines={1} style={styles.heldText}>{heldCall.displayName || heldCall.number} is on hold</Text><Pressable disabled={swapBusy} onPress={swap} style={styles.swapButton}><Text style={styles.swapText}>{swapBusy ? 'Wait' : 'Swap'}</Text></Pressable></View> : null}
         {!!mergeError && <Text style={styles.mergeError}>{mergeError}</Text>}
       </View>
 
-      <View style={[styles.controlsSection, { paddingBottom: Math.max(insets.bottom + 20, 34) }]}>
+      {incomingPending ? <View style={[styles.incomingActions, { paddingBottom: Math.max(insets.bottom + 28, 42) }]}>
+        <Pressable accessibilityLabel="Decline incoming call" disabled={answerBusy} onPress={endCall} style={({ pressed }) => [styles.incomingAction, styles.incomingDecline, pressed && styles.endPressed]}><PhoneOff size={29} color={colors.white} /><Text style={styles.incomingActionLabel}>Decline</Text></Pressable>
+        <Pressable accessibilityLabel="Answer incoming call" disabled={answerBusy} onPress={acceptIncoming} style={({ pressed }) => [styles.incomingAction, styles.incomingAccept, pressed && styles.endPressed]}>{answerBusy ? <ActivityIndicator color={colors.ink} /> : <Phone size={29} color={colors.ink} fill={colors.ink} />}<Text style={[styles.incomingActionLabel, styles.incomingAcceptLabel]}>{answerBusy ? 'Answering' : 'Answer'}</Text></Pressable>
+      </View> : <View style={[styles.controlsSection, { paddingBottom: Math.max(insets.bottom + 20, 34) }]}>
         <View style={styles.controlsRow}>
           <Control label="Mute" active={activeCall.muted} onPress={toggleMute}>{activeCall.muted ? <MicOff size={24} color={colors.ink} /> : <Mic size={24} color={colors.text} />}</Control>
           <Control label="Keypad" onPress={() => setShowKeypad(true)}><Grid3X3 size={24} color={colors.text} /></Control>
@@ -159,7 +188,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <Control label="Transfer" disabled={!transferEnabled} onPress={openTransfer}><PhoneForwarded size={24} color={transferEnabled ? colors.text : colors.textFaint} /></Control>
         </View>
         <Pressable accessibilityLabel="End call" onPress={endCall} style={({ pressed }) => [styles.end, pressed && styles.endPressed]}><PhoneOff size={30} color={colors.white} strokeWidth={2.4} /></Pressable>
-      </View>
+      </View>}
 
       <Modal visible={showKeypad} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowKeypad(false)}>
         <View style={[styles.keypadModal, { paddingTop: Math.max(insets.top, 24), paddingBottom: Math.max(insets.bottom, 24) }]}>
@@ -171,6 +200,9 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
       <AddCallModal visible={showAddCall} rates={rates} caller={selectedCaller} onClose={() => setShowAddCall(false)} onStart={startSecondCall} />
       <Modal visible={showTransfer} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowTransfer(false)}>
         <View style={styles.transferPage}><View style={styles.addHeader}><View><Text style={styles.addEyebrow}>BUSINESS CALL</Text><Text style={styles.addTitle}>Transfer to colleague</Text></View><Pressable accessibilityLabel="Close transfer" onPress={() => setShowTransfer(false)} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View><Text style={styles.transferHelp}>The caller will be connected directly to the selected extension.</Text>{!!transferError && <Text style={styles.transferError}>{transferError}</Text>}<ScrollView style={styles.transferList}>{team.map((member) => <Pressable key={member.id} disabled={!!transferBusy} onPress={() => sendTransfer(member)} style={({ pressed }) => [styles.transferRow, pressed && styles.pressed]}>{member.photoUrl ? <Image source={{ uri: member.photoUrl }} style={styles.transferPhoto} /> : <View style={styles.transferAvatar}><Text style={styles.transferInitial}>{member.name.charAt(0).toUpperCase()}</Text></View>}<View style={styles.transferCopy}><Text style={styles.transferName}>{member.name}</Text><Text style={styles.transferMeta}>Extension {member.extension} · {member.department}</Text></View>{transferBusy === member.id ? <ActivityIndicator color={colors.mint} /> : <PhoneForwarded size={19} color={colors.mint} />}</Pressable>)}</ScrollView></View>
+      </Modal>
+      <Modal visible={showParticipants} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowParticipants(false)}>
+        <View style={styles.transferPage}><View style={styles.addHeader}><View><Text style={styles.addEyebrow}>LIVE CONFERENCE</Text><Text style={styles.addTitle}>Participants</Text></View><Pressable accessibilityLabel="Close participants" onPress={() => setShowParticipants(false)} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View><Text style={styles.transferHelp}>The primary caller stays connected. Added participants can be removed individually.</Text><ScrollView style={styles.transferList}>{conference?.participants.map((participant, index) => <View key={participant.id || `${participant.number}-${index}`} style={styles.transferRow}>{participant.photoUrl ? <Image source={{ uri: participant.photoUrl }} style={styles.transferPhoto} /> : <View style={styles.transferAvatar}><Text style={styles.transferInitial}>{(participant.displayName || participant.number).charAt(0).toUpperCase()}</Text></View>}<View style={styles.transferCopy}><Text style={styles.transferName}>{participant.displayName || participant.number}</Text><Text style={styles.transferMeta}>{index === 0 ? 'Primary caller' : participant.destinationCountry === 'Internal' ? `Extension ${participant.number}` : participant.number}</Text></View>{index === 0 ? <Text style={styles.primaryParticipant}>PRIMARY</Text> : <Pressable accessibilityLabel={`Remove ${participant.displayName || participant.number}`} disabled={!!removingParticipant} onPress={() => participant.id && removeParticipant(participant.id)} style={styles.removeParticipant}>{removingParticipant === participant.id ? <ActivityIndicator size="small" color={colors.coral} /> : <UserMinus size={19} color={colors.coral} />}</Pressable>}</View>)}</ScrollView></View>
       </Modal>
     </View>
   );
@@ -217,6 +249,12 @@ const styles = StyleSheet.create({
   greetingLabel: { color: colors.blue, fontSize: 8, fontWeight: '900' },
   greetingText: { color: colors.text, fontSize: 11, lineHeight: 15, marginTop: 4 },
   controlsSection: { paddingHorizontal: 22, alignItems: 'center' },
+  incomingActions: { paddingHorizontal: 42, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  incomingAction: { width: 82, minHeight: 82, borderRadius: 41, alignItems: 'center', justifyContent: 'center', gap: 5, ...shadow },
+  incomingDecline: { backgroundColor: colors.coral },
+  incomingAccept: { backgroundColor: colors.mint },
+  incomingActionLabel: { color: colors.white, fontSize: 10, fontWeight: '800' },
+  incomingAcceptLabel: { color: colors.ink },
   controlsRow: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', rowGap: 16, marginBottom: 24 },
   controlWrap: { width: '33.333%', alignItems: 'center', gap: 7 },
   control: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.panelRaised, borderWidth: 1, borderColor: colors.line },
@@ -253,5 +291,5 @@ const styles = StyleSheet.create({
   addButton: { height: 52, borderRadius: 8, backgroundColor: colors.mint, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { opacity: 0.28 },
   addButtonText: { color: colors.ink, fontSize: 14, fontWeight: '900' },
-  transferPage: { flex: 1, paddingHorizontal: 22, paddingTop: 24, backgroundColor: colors.canvas }, transferHelp: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 4, marginBottom: 14 }, transferError: { color: colors.coral, fontSize: 11, lineHeight: 16, marginBottom: 8 }, transferList: { flex: 1, borderTopWidth: 1, borderTopColor: colors.line }, transferRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderBottomColor: colors.line }, transferAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#164361' }, transferPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.panel }, transferInitial: { color: colors.white, fontSize: 15, fontWeight: '900' }, transferCopy: { flex: 1, minWidth: 0 }, transferName: { color: colors.text, fontSize: 14, fontWeight: '800' }, transferMeta: { color: colors.textMuted, fontSize: 10, marginTop: 4 },
+  transferPage: { flex: 1, paddingHorizontal: 22, paddingTop: 24, backgroundColor: colors.canvas }, transferHelp: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 4, marginBottom: 14 }, transferError: { color: colors.coral, fontSize: 11, lineHeight: 16, marginBottom: 8 }, transferList: { flex: 1, borderTopWidth: 1, borderTopColor: colors.line }, transferRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderBottomColor: colors.line }, transferAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#164361' }, transferPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.panel }, transferInitial: { color: colors.white, fontSize: 15, fontWeight: '900' }, transferCopy: { flex: 1, minWidth: 0 }, transferName: { color: colors.text, fontSize: 14, fontWeight: '800' }, transferMeta: { color: colors.textMuted, fontSize: 10, marginTop: 4 }, primaryParticipant: { color: colors.mint, fontSize: 9, fontWeight: '900' }, removeParticipant: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#351E2A' },
 });
