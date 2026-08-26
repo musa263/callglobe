@@ -50,7 +50,7 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
     <View style={styles.welcome}><Text style={styles.eyebrow}>VOCIVO WORKSPACE</Text><Text style={styles.title}>Hello, {firstName}</Text><Text style={styles.subtitle}>Your international phone system, ready when you are.</Text></View>
 
     <View style={styles.mode} accessibilityLabel="Call handling mode">
-      <Pressable onPress={() => changeMode(false)} style={[styles.modeButton, !business.enabled && styles.modeButtonActive]}><Phone size={16} color={!business.enabled ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, !business.enabled && styles.modeTextActive]}>Direct</Text></Pressable>
+      <Pressable onPress={() => changeMode(false)} style={[styles.modeButton, !business.enabled && styles.modeButtonActive]}><Phone size={16} color={!business.enabled ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, !business.enabled && styles.modeTextActive]}>Personal</Text></Pressable>
       <Pressable onPress={() => changeMode(true)} style={[styles.modeButton, business.enabled && styles.modeButtonActive]}><Building2 size={16} color={business.enabled ? colors.ink : colors.textMuted} /><Text style={[styles.modeText, business.enabled && styles.modeTextActive]}>Business</Text></Pressable>
       {switchingMode && <View style={styles.modeBusy}><ActivityIndicator size="small" color={colors.mint} /></View>}
     </View>
@@ -58,7 +58,7 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
     <ImageBackground source={backgroundSource} resizeMode="cover" style={styles.availability} imageStyle={styles.availabilityImage}>
       <View style={styles.imageShade} />
       <View style={styles.lineTop}><View style={[styles.onlinePill, !isReady && styles.waitingPill]}><View style={[styles.onlineDot, !isReady && styles.waitingDot]} /><Text style={[styles.onlineText, !isReady && styles.waitingText]}>{isReady ? 'AVAILABLE' : 'CONNECTING'}</Text></View><View style={styles.lineIcon}>{isReady ? <PhoneCall size={23} color={colors.white} /> : <Wifi size={23} color={colors.amber} />}</View></View>
-      <View style={styles.lineCopy}><Text style={styles.lineEyebrow}>{business.enabled ? 'BUSINESS LINE' : 'DIRECT LINE'}</Text><Text style={styles.availabilityTitle}>{isReady ? 'Ready for incoming calls' : 'Connecting your line'}</Text><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={styles.number}>{primaryNumber}</Text></View>
+      <View style={styles.lineCopy}><Text style={styles.lineEyebrow}>{business.enabled ? 'BUSINESS LINE' : 'PERSONAL LINE'}</Text><Text style={styles.availabilityTitle}>{isReady ? 'Ready for incoming calls' : 'Connecting your line'}</Text><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={styles.number}>{primaryNumber}</Text></View>
     </ImageBackground>
 
     <View style={styles.actions}>
