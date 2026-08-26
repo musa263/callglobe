@@ -193,7 +193,7 @@ export async function saveSaasState(input: Partial<SaasState>, config?: PbxConfi
   for (const account of next.tenantAdmins) {
     if (!organizationIds.has(account.organizationId)) throw new Error('Administrator organization was not found.');
   }
-  await put(pathname, encrypt(next), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  await put(pathname, encrypt(next), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
   cachedStoredState = { expiresAt: Date.now() + cacheTtlMs, value: next };
   return next;
 }

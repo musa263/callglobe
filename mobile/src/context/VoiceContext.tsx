@@ -146,12 +146,18 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const finalizeCall = useCallback((phase: 'ended' | 'failed', callId?: string) => {
-    const snapshot = activeCallRef.current;
-    if (!snapshot) return;
-    const id = callId || snapshot.id || String(snapshot.startedAt);
+    const current = activeCallRef.current;
+    const id = callId || current?.id || '';
+    const nativeCall = id ? voipClient.getCall(id) : undefined;
+    const meta = id ? callMetaRef.current.get(id) : undefined;
+    const described = nativeCall ? describeCall(nativeCall) : null;
+    const snapshot = current?.id === id ? current : described ? { ...described, ...meta, id } : null;
+    if (!snapshot || !id) return;
     if (loggedCalls.current.has(id)) return;
     loggedCalls.current.add(id);
-    const seconds = durationRef.current;
+    const seconds = current?.id === id
+      ? durationRef.current
+      : nativeCall?.currentDuration ?? (snapshot.connectedAt ? Math.max(0, Math.floor((Date.now() - snapshot.connectedAt) / 1000)) : 0);
     const totalCost = snapshot.ratePerMinute ? Math.ceil(seconds / 60) * snapshot.ratePerMinute : 0;
     addHistory({
       id,
@@ -163,7 +169,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       status: phase === 'ended' && Boolean(snapshot.connectedAt) ? 'completed' : snapshot.isIncoming ? 'missed' : 'no_answer',
       started_at: new Date(snapshot.startedAt).toISOString(),
     }).catch(() => undefined);
-  }, [addHistory]);
+  }, [addHistory, describeCall]);
 
   const attachCall = useCallback((call: Call | null) => {
     clearCallSubscriptions();
@@ -375,6 +381,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         if (attempt > 8) {
           stopRingback();
           setError(routeError instanceof Error ? routeError.message : 'Call status could not be confirmed.');
+          const call = voipClient.getCall(callId);
+          if (call && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
+            await call.hangup().catch(() => undefined);
+          }
+          await VoicePnBridge.endCall(callId).catch(() => false);
           return;
         }
       }

@@ -29,7 +29,7 @@ function decrypt(value: Buffer) {
 }
 
 export async function saveQueueCall(value: QueueCall) {
-  await put(pathname(value.queueName), encrypt(value), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  await put(pathname(value.queueName), encrypt(value), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
 }
 
 export async function readQueueCall(queueName: string) {

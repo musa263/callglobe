@@ -65,8 +65,16 @@ function customHeader(payload: VoicePayload | undefined, name: string) {
   return (match?.value || match?.header_value || '').trim();
 }
 
-async function stopPlaybackBeforeBridge(callControlId: string, commandId: string) {
-  await callAction(callControlId, 'playback_stop', { stop: 'all', command_id: commandId }).catch(() => undefined);
+async function completeOutboundBridge(parentCallControlId: string, destinationCallControlId: string, eventId: string, routeId?: string) {
+  const existingRoute = routeId ? await readVoiceRoute(routeId) : null;
+  if (existingRoute?.phase === 'connected') return;
+  await bridgeOutboundCalls(parentCallControlId, destinationCallControlId, eventId);
+  const connectedAt = new Date().toISOString();
+  const pair = await readOutboundCallPairByDestination(destinationCallControlId);
+  await Promise.all([
+    ...(pair ? [saveOutboundCallPair({ ...pair, phase: 'connected', connectedAt, updatedAt: connectedAt })] : []),
+    ...(routeId ? [updateVoiceRoute(routeId, { phase: 'connected', connectedAt })] : []),
+  ]);
 }
 
 function background(label: string, task: Promise<unknown>) {
@@ -549,30 +557,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.answered' && (state?.flow === 'outbound_destination' || outboundPair)) {
       const parentCallControlId = state?.flow === 'outbound_destination' ? state.parentCallControlId : outboundPair?.clientCallControlId;
       if (parentCallControlId) {
-        await stopPlaybackBeforeBridge(parentCallControlId, `${eventId}-stop-ringback`);
+        const connectedRouteId = outboundPair?.routeId || (state?.flow === 'outbound_destination' ? state.routeId : undefined);
         try {
-          await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
           await callAction(parentCallControlId, 'playback_stop', {
             stop: 'all',
-            command_id: `${eventId}-confirm-ringback-stopped`,
-          }).catch(() => undefined);
-          const connectedAt = new Date().toISOString();
-          const connectedRouteId = outboundPair?.routeId || (state?.flow === 'outbound_destination' ? state.routeId : undefined);
-          background('connected route state', Promise.all([
-            ...(outboundPair ? [saveOutboundCallPair({ ...outboundPair, phase: 'connected', connectedAt, updatedAt: connectedAt })] : []),
-            ...(connectedRouteId ? [updateVoiceRoute(connectedRouteId, { phase: 'connected', connectedAt })] : []),
-          ]));
+            client_state: encodeVoiceState({
+              flow: 'outbound_bridge_pending',
+              parentCallControlId,
+              destinationCallControlId: callControlId,
+              organizationId: state?.organizationId,
+              routeId: connectedRouteId,
+            }),
+            command_id: `${eventId}-stop-ringback`,
+          });
         } catch (bridgeError) {
-          const failedRouteId = outboundPair?.routeId || (state?.flow === 'outbound_destination' ? state.routeId : undefined);
-          if (failedRouteId) background('bridge failure state', updateVoiceRoute(failedRouteId, { phase: 'failed', failureCause: 'bridge_failed' }));
-          await Promise.all([
-            callAction(parentCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-client` }).catch(() => undefined),
-            callAction(callControlId, 'hangup', { command_id: `${eventId}-bridge-failed-destination` }).catch(() => undefined),
-          ]);
-          return res.status(200).json({ received: true });
+          // If playback has already stopped, Telnyx may reject the stop command.
+          // The bridge remains safe because prevent_double_bridge is enabled.
+          try {
+            await completeOutboundBridge(parentCallControlId, callControlId, eventId, connectedRouteId);
+          } catch {
+            if (connectedRouteId) await updateVoiceRoute(connectedRouteId, { phase: 'failed', failureCause: 'bridge_failed' }).catch(() => undefined);
+            await Promise.all([
+              callAction(parentCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-client` }).catch(() => undefined),
+              callAction(callControlId, 'hangup', { command_id: `${eventId}-bridge-failed-destination` }).catch(() => undefined),
+            ]);
+          }
         }
         return res.status(200).json({ received: true });
       }
+    }
+
+    if (eventType === 'call.playback.ended' && state?.flow === 'outbound_bridge_pending' && state.parentCallControlId && state.destinationCallControlId) {
+      try {
+        await completeOutboundBridge(state.parentCallControlId, state.destinationCallControlId, eventId, state.routeId);
+      } catch {
+        if (state.routeId) await updateVoiceRoute(state.routeId, { phase: 'failed', failureCause: 'bridge_failed' }).catch(() => undefined);
+        await Promise.all([
+          callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-client` }).catch(() => undefined),
+          callAction(state.destinationCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-destination` }).catch(() => undefined),
+        ]);
+      }
+      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.bridged') {

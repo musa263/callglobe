@@ -43,10 +43,10 @@ async function readPath(pathname: string) {
 export async function saveOutboundCallPair(pair: OutboundCallPair) {
   const body = encrypt(pair);
   const paths = [
-    { pathname: path('client', pair.clientCallControlId), value: body, options: { access: 'public' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
-    { pathname: path('destination', pair.destinationCallControlId), value: body, options: { access: 'public' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
+    { pathname: path('client', pair.clientCallControlId), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
+    { pathname: path('destination', pair.destinationCallControlId), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
   ];
-  if (pair.routeId) paths.push({ pathname: path('route', pair.routeId), value: body, options: { access: 'public' as const, contentType: 'application/octet-stream', allowOverwrite: true } });
+  if (pair.routeId) paths.push({ pathname: path('route', pair.routeId), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } });
   await putMany(paths);
 }
 

@@ -24,35 +24,36 @@ type BusinessContextValue = {
 };
 
 const storageKey = (userId: string) => `vocivo.business-profile.v2.${userId}`;
-const defaultProfile: BusinessProfile = {
+const defaultProfile = (companyName = 'Your company'): BusinessProfile => ({
   enabled: false,
   voicemailEnabled: false,
   voicemailDelaySeconds: 25,
   voicemailGreeting: 'We are unable to answer your call. Please leave a message after the tone.',
-  companyName: 'Global Heritage',
-  greeting: 'Welcome to Global Heritage.',
+  companyName,
+  greeting: `Welcome to ${companyName}.`,
   waitingMessage: 'Thank you for waiting. A member of our team will be with you shortly.',
   departments: ['Sales', 'Operations'],
   voice: 'AWS.Polly.Joanna-Neural',
   backgroundImageUrl: '',
   aiTone: 'professional',
-};
+});
 const BusinessContext = createContext<BusinessContextValue | null>(null);
 
 export function BusinessProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isPreview, profile: authProfile } = useAuth();
-  const [profile, setProfile] = useState(defaultProfile);
+  const [profile, setProfile] = useState(() => defaultProfile());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
-      setProfile(defaultProfile);
+      const defaults = defaultProfile(authProfile?.organization_name);
+      setProfile(defaults);
       try {
         const cached = authProfile?.id ? await AsyncStorage.getItem(storageKey(authProfile.id)) : null;
         if (cached && active) {
           const parsed = JSON.parse(cached) as Partial<BusinessProfile> & { departmentOne?: string; departmentTwo?: string };
-          setProfile({ ...defaultProfile, ...parsed, departments: parsed.departments?.length ? parsed.departments : [parsed.departmentOne || 'Sales', parsed.departmentTwo || 'Operations'] });
+          setProfile({ ...defaults, ...parsed, departments: parsed.departments?.length ? parsed.departments : [parsed.departmentOne || 'Sales', parsed.departmentTwo || 'Operations'] });
         }
         if (isAuthenticated && !isPreview) {
           const result = await api.get<{ config: Omit<BusinessProfile, 'aiTone'> }>('/api/voice/settings');

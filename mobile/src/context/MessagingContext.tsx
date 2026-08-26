@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../lib/api';
 import type { SmsMessage } from '../types';
@@ -42,6 +43,14 @@ export function MessagingProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.getItem(storageKey(profile.id)).then((value) => {
       if (value) setMessages((JSON.parse(value) as SmsMessage[]).map((message) => ({ ...message, direction: message.direction ?? 'outbound' })));
     }).catch(() => undefined).finally(() => refreshMessages().catch(() => setLoading(false)));
+  }, [isAuthenticated, profile?.id, refreshMessages]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !profile?.id) return undefined;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshMessages().catch(() => undefined);
+    });
+    return () => subscription.remove();
   }, [isAuthenticated, profile?.id, refreshMessages]);
 
   const persist = useCallback((update: (current: SmsMessage[]) => SmsMessage[]) => {

@@ -248,7 +248,7 @@ export async function savePbxConfig(input: Partial<PbxConfig>) {
     validateOfficeHours(tenant);
   }
   validateUserProfiles(next);
-  await put(pathname, encrypt(next), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  await put(pathname, encrypt(next), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
   cachedConfig = { expiresAt: Date.now() + cacheTtlMs, value: structuredClone(next) };
   return next;
 }

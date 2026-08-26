@@ -47,7 +47,7 @@ export async function readVoiceRoute(routeId: string) {
 }
 
 export async function saveVoiceRoute(route: ReservedVoiceRoute) {
-  await put(pathname(route.routeId), encrypt(route), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  await put(pathname(route.routeId), encrypt(route), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
   return route;
 }
 

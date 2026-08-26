@@ -22,7 +22,7 @@ export async function readPlatformKeys() {
   } catch { return []; }
 }
 
-async function writePlatformKeys(value: PlatformKey[]) { await put(pathname, encrypt(value), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true }); }
+async function writePlatformKeys(value: PlatformKey[]) { await put(pathname, encrypt(value), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true }); }
 
 export async function createPlatformKey(input: { name?: unknown; organizationId?: unknown; scopes?: unknown }) {
   const name = typeof input.name === 'string' ? input.name.trim().slice(0, 80) : '';

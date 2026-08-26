@@ -23,7 +23,7 @@ function decrypt(value: Buffer) {
 }
 
 export async function saveVideoRoom(room: VideoRoom) {
-  await put(path(room.roomId), encrypt(room), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: false });
+  await put(path(room.roomId), encrypt(room), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: false });
   return room;
 }
 

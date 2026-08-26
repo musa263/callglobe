@@ -8,7 +8,7 @@ function pathname(id: string) { return `vocivo/session-revocations/${idHash(id)}
 
 export async function revokeExtensionSessions(extensionId: string) {
   const revokedAt = Date.now();
-  await put(pathname(extensionId), String(revokedAt), { access: 'public', contentType: 'text/plain', allowOverwrite: true });
+  await put(pathname(extensionId), String(revokedAt), { access: 'private', contentType: 'text/plain', allowOverwrite: true });
   cache.set(extensionId, { revokedAt, checkedAt: Date.now() });
 }
 

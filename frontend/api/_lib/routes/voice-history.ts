@@ -13,7 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const organizationId = sessionOrganizationId(session, await readPbxConfig());
-    const [directory, events] = await Promise.all([listExtensions(organizationId), listCallEvents(250)]);
+    const [directory, events] = await Promise.all([listExtensions(organizationId), listCallEvents(250, organizationId)]);
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({
       calls: callHistoryFromEvents(events, organizationId, 100, {

@@ -24,6 +24,11 @@ export function invalidatePhoneNumberCache(type: 'owned' | 'verified' | 'all' = 
   if (type !== 'owned') verifiedCache = null;
 }
 
+export function callerIdBelongsToOrganization(phoneNumber: string, organizationId: string, assignments: Record<string, { organizationId: string }>) {
+  const normalized = normalizeE164(phoneNumber);
+  return Boolean(normalized && assignments[normalized]?.organizationId === organizationId);
+}
+
 export async function listOwnedNumbers() {
   if (ownedCache?.expiresAt && ownedCache.expiresAt > Date.now()) return ownedCache.value;
   ownedRequest ||= (async () => {
@@ -51,12 +56,7 @@ export async function listVerifiedNumbers() {
 export async function assertCallerIdForOrganization(phoneNumber: string, organizationId: string) {
   const normalized = normalizeE164(phoneNumber);
   const config = await readPbxConfig();
-  const assignedOrganization = config.numberAssignments[normalized]?.organizationId;
-  if (assignedOrganization !== organizationId) throw new Error('Caller ID is not assigned to this organization.');
-  const [owned, verified] = await Promise.all([listOwnedNumbers(), listVerifiedNumbers()]);
-  if (!owned.some((item) => normalizeE164(item.phone_number) === normalized) && !verified.some((item) => normalizeE164(item.phone_number) === normalized)) {
-    throw new Error('Caller ID is not owned or verified on this account.');
-  }
+  if (!callerIdBelongsToOrganization(normalized, organizationId, config.numberAssignments)) throw new Error('Caller ID is not assigned to this organization.');
   return normalized;
 }
 

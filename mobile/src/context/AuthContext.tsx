@@ -29,6 +29,13 @@ type NumbersResponse = { numbers: CallerNumber[] };
 type HistoryResponse = { calls: CallLog[] };
 type DirectoryResponse = { users: Array<{ id: string; extension: string; name: string; sipUsername: string }> };
 type UserProfileResponse = { profile: { id: string; fullName: string; email: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photoUrl?: string } };
+type BootstrapResponse = {
+  profile: Omit<Profile, 'balance'>;
+  account: AccountResponse;
+  numbers: CallerNumber[];
+  directory: DirectoryResponse['users'];
+  calls: CallLog[];
+};
 
 function mobileProfile(value: UserProfileResponse['profile']): Omit<Profile, 'balance' | 'currency'> {
   return { id: value.id, email: value.email, full_name: value.fullName, photo_url: value.photoUrl, job_title: value.jobTitle, department: value.department, mobile: value.mobile, location: value.location, bio: value.bio };
@@ -119,6 +126,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loadAccount = useCallback(async (baseProfile?: Omit<Profile, 'balance'>) => {
     if (!baseProfile) throw new Error('Account identity was not returned.');
     initialProfile(baseProfile);
+    try {
+      const bootstrap = await api.get<BootstrapResponse>('/api/mobile/bootstrap');
+      const mergedProfile = { ...baseProfile, ...bootstrap.profile };
+      setProfile({ ...mergedProfile, balance: bootstrap.account.balance == null ? null : Number(bootstrap.account.balance), can_call: bootstrap.account.can_call !== false, currency: bootstrap.account.currency });
+      if (bootstrap.account.rates?.length) setRates(normalizeRates(bootstrap.account.rates));
+      setCallerNumbers(bootstrap.numbers ?? []);
+      const storedHistory = await readHistory(mergedProfile.id);
+      const mergedHistory = mergeHistory(
+        storedHistory.map((call) => normalizeHistoryIdentity(call, bootstrap.directory || [])),
+        (bootstrap.calls ?? []).map((call) => normalizeHistoryIdentity(call, bootstrap.directory || [])),
+      );
+      historyRef.current = mergedHistory;
+      setHistory(mergedHistory);
+      await AsyncStorage.setItem(historyKey(mergedProfile.id), JSON.stringify(mergedHistory));
+      return;
+    } catch {
+      // Preserve compatibility with an older deployment while web and mobile roll out together.
+    }
     const fallbackProfile: UserProfileResponse = { profile: { id: baseProfile.id, fullName: baseProfile.full_name || '', email: baseProfile.email, jobTitle: baseProfile.job_title || '', department: baseProfile.department || '', mobile: baseProfile.mobile || '', location: baseProfile.location || '', bio: baseProfile.bio || '', photoUrl: baseProfile.photo_url } };
     const [account, numbers, verified, storedHistory, serverHistory, userProfile, directory] = await Promise.all([
       api.get<AccountResponse>('/api/telnyx/account').catch(() => ({ balance: null, currency: baseProfile.currency || 'USD', rates: [], can_call: false })),

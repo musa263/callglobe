@@ -23,6 +23,10 @@ function userKey(id: string) {
   return createHash('sha256').update(id).digest('hex').slice(0, 24);
 }
 
+function profilePath(id: string) {
+  return `vocivo/profiles/v2/${userKey(id)}.bin`;
+}
+
 function encrypt(value: StoredUserProfile) {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key(), iv);
@@ -37,12 +41,18 @@ function decrypt(value: Buffer): StoredUserProfile {
 }
 
 export async function readUserProfile(id: string) {
+  const current = await readObject(profilePath(id));
+  if (current) {
+    try { return decrypt(current); } catch { /* fall through to the legacy record */ }
+  }
   const result = await list({ prefix: `vocivo/profiles/${userKey(id)}/`, limit: 100 });
   const latest = result.blobs.sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())[0];
   if (!latest) return null;
   try {
     const value = await readObject(latest.pathname);
-    return value ? decrypt(value) : null;
+    const profile = value ? decrypt(value) : null;
+    if (profile) await saveUserProfile(profile);
+    return profile;
   } catch {
     return null;
   }
@@ -50,7 +60,17 @@ export async function readUserProfile(id: string) {
 
 export async function readUserProfiles(ids: string[]) {
   if (!ids.length) return new Map<string, StoredUserProfile>();
-  const keys = new Map(ids.map((id) => [userKey(id), id]));
+  const currentPaths = new Map(ids.map((id) => [profilePath(id), id]));
+  const currentObjects = await readObjects([...currentPaths.keys()]);
+  const profiles = new Map<string, StoredUserProfile>();
+  for (const [pathname, value] of currentObjects) {
+    const id = currentPaths.get(pathname);
+    if (!id) continue;
+    try { profiles.set(id, decrypt(value)); } catch { /* fall back to a legacy record */ }
+  }
+  const missingIds = ids.filter((id) => !profiles.has(id));
+  if (!missingIds.length) return profiles;
+  const keys = new Map(missingIds.map((id) => [userKey(id), id]));
   const result = await list({ prefix: 'vocivo/profiles/', limit: 1000 });
   const latest = new Map<string, { pathname: string; uploadedAt: Date }>();
   for (const blob of result.blobs) {
@@ -61,20 +81,23 @@ export async function readUserProfiles(ids: string[]) {
     if (!current || blob.uploadedAt.getTime() > current.uploadedAt.getTime()) latest.set(id, blob);
   }
   const objects = await readObjects([...latest.values()].map((blob) => blob.pathname));
-  const profiles = new Map<string, StoredUserProfile>();
   for (const [id, blob] of latest) {
     const value = objects.get(blob.pathname);
     if (!value) continue;
-    try { profiles.set(id, decrypt(value)); } catch { /* ignore corrupt legacy profiles */ }
+    try {
+      const profile = decrypt(value);
+      profiles.set(id, profile);
+      await saveUserProfile(profile);
+    } catch { /* ignore corrupt legacy profiles */ }
   }
   return profiles;
 }
 
 export async function saveUserProfile(profile: StoredUserProfile) {
-  await put(`vocivo/profiles/${userKey(profile.id)}/${Date.now()}.bin`, encrypt(profile), {
-    access: 'public',
+  await put(profilePath(profile.id), encrypt(profile), {
+    access: 'private',
     contentType: 'application/octet-stream',
-    addRandomSuffix: true,
+    allowOverwrite: true,
   });
   return profile;
 }

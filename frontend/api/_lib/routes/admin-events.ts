@@ -10,7 +10,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const access = await requireAdmin(req);
     await requireFeature(access.session, 'analytics');
-    const allEvents = await listCallEvents(250);
+    const allEvents = await listCallEvents(250, access.superadmin ? undefined : access.organizationId);
     const events = access.superadmin ? allEvents.slice(0, 100) : allEvents.filter((event) => (event.organizationId || 'primary') === access.organizationId).slice(0, 100);
     res.setHeader('Cache-Control', 'private, max-age=15');
     return res.status(200).json({ events, meta: { source: 'vocivo-webhooks' } });

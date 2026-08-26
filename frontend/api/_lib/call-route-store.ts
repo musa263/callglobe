@@ -17,7 +17,7 @@ function decrypt(value: Buffer) {
 }
 
 export async function saveActiveCallRoute(route: ActiveCallRoute) {
-  await put(`vocivo/call-routes/${route.extensionId}.bin`, encrypt(route), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  await put(`vocivo/call-routes/${route.extensionId}.bin`, encrypt(route), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
 }
 
 export async function readActiveCallRoute(extensionId: string) {

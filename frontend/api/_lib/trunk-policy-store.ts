@@ -70,7 +70,7 @@ export async function readTrunkPolicies() {
 }
 
 async function writeTrunkPolicies(value: Record<string, TrunkPolicy>) {
-  await put(pathname, encrypt(value), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  await put(pathname, encrypt(value), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
 }
 
 export async function saveTrunkPolicy(id: string, input: Partial<TrunkPolicy>) {

@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, get, list, put, readObjects } from './object-store.js';
+import { del, get, list, put, putMany, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
+import { hasMigrationMarker, listAllStoredPaths, newestFirstTimestamp, overwriteEntries, saveMigrationMarker, tenantStorageKey } from './tenant-storage.js';
 
 export type StoredVoicemail = {
   id: string;
@@ -33,11 +34,13 @@ function decrypt(value: Buffer): StoredVoicemail {
 }
 
 export async function storeVoicemail(voicemail: StoredVoicemail) {
-  const newestFirst = String(9_999_999_999_999 - Date.now()).padStart(13, '0');
-  await put(`vocivo/voicemails/v2/${newestFirst}-${voicemail.id}.bin`, encrypt(voicemail), {
-    access: 'public',
+  const organizationId = voicemail.organizationId || 'primary';
+  const newestFirst = newestFirstTimestamp(voicemail.updatedAt || voicemail.createdAt);
+  const voicemailKey = createHash('sha256').update(`${voicemail.id}:${voicemail.updatedAt}`).digest('hex').slice(0, 20);
+  await put(`vocivo/voicemails/v3/${tenantStorageKey(organizationId)}/${newestFirst}-${voicemailKey}.bin`, encrypt({ ...voicemail, organizationId }), {
+    access: 'private',
     contentType: 'application/octet-stream',
-    addRandomSuffix: true,
+    allowOverwrite: true,
   });
 }
 
@@ -58,11 +61,27 @@ export async function readVoicemailAudio(pathname: string) {
 }
 
 export async function listVoicemails(organizationId: string) {
-  const [recent, legacy] = await Promise.all([
-    list({ prefix: 'vocivo/voicemails/v2/', limit: 1000 }),
-    list({ prefix: 'vocivo/voicemails/', limit: 1000 }),
-  ]);
-  const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
+  const tenantKey = tenantStorageKey(organizationId);
+  const marker = `vocivo/migrations/voicemails-v3/${tenantKey}.marker`;
+  if (!await hasMigrationMarker(marker)) {
+    const legacyPaths = [...new Set([
+      ...await listAllStoredPaths('vocivo/voicemails/v2/'),
+      ...await listAllStoredPaths('vocivo/voicemails/', 10_000),
+    ].filter((pathname) => !pathname.startsWith('vocivo/voicemails/v3/')))];
+    const legacyObjects = await readObjects(legacyPaths);
+    const tenantEvents = legacyPaths.map((pathname) => {
+      try { const value = legacyObjects.get(pathname); return value ? decrypt(value) : null; } catch { return null; }
+    }).filter((item): item is StoredVoicemail => item !== null && (item.organizationId || 'primary') === organizationId);
+    if (tenantEvents.length) {
+      await putMany(overwriteEntries(tenantEvents.map((voicemail) => ({
+        pathname: `vocivo/voicemails/v3/${tenantKey}/${newestFirstTimestamp(voicemail.updatedAt || voicemail.createdAt)}-${createHash('sha256').update(`${voicemail.id}:${voicemail.updatedAt}`).digest('hex').slice(0, 20)}.bin`,
+        value: encrypt({ ...voicemail, organizationId }),
+      }))));
+    }
+    await saveMigrationMarker(marker);
+  }
+  const recent = await list({ prefix: `vocivo/voicemails/v3/${tenantKey}/`, limit: 1000 });
+  const blobs = recent.blobs;
   const objects = await readObjects(blobs.map((blob) => blob.pathname));
   const events = blobs.map((blob) => {
     try {

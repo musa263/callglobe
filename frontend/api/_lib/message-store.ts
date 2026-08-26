@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put, readObjects } from './object-store.js';
+import { list, put, putMany, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
+import { hasMigrationMarker, listAllStoredPaths, newestFirstTimestamp, overwriteEntries, saveMigrationMarker, tenantStorageKey } from './tenant-storage.js';
 
 export type StoredMessage = {
   id: string;
@@ -40,8 +41,10 @@ function decrypt(value: Buffer): StoredMessage {
 }
 
 export async function storeMessageEvent(message: StoredMessage) {
-  const newestFirst = String(9_999_999_999_999 - Date.now()).padStart(13, '0');
-  await put(`vocivo/messages/v2/${newestFirst}-${message.id}.bin`, encrypt(message), { access: 'public', contentType: 'application/octet-stream', addRandomSuffix: true });
+  const organizationId = message.organizationId || 'primary';
+  const newestFirst = newestFirstTimestamp(message.updatedAt || message.createdAt);
+  const messageKey = createHash('sha256').update(`${message.id}:${message.updatedAt}`).digest('hex').slice(0, 20);
+  await put(`vocivo/messages/v3/${tenantStorageKey(organizationId)}/${newestFirst}-${messageKey}.bin`, encrypt({ ...message, organizationId }), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
 }
 
 export function messageForViewer(item: StoredMessage, viewerExtensionId?: string) {
@@ -58,11 +61,27 @@ export function messageForViewer(item: StoredMessage, viewerExtensionId?: string
 }
 
 export async function listStoredMessages(organizationId: string, viewerExtensionId?: string) {
-  const [recent, legacy] = await Promise.all([
-    list({ prefix: 'vocivo/messages/v2/', limit: 1000 }),
-    list({ prefix: 'vocivo/messages/', limit: 1000 }),
-  ]);
-  const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
+  const tenantKey = tenantStorageKey(organizationId);
+  const marker = `vocivo/migrations/messages-v3/${tenantKey}.marker`;
+  if (!await hasMigrationMarker(marker)) {
+    const legacyPaths = [...new Set([
+      ...await listAllStoredPaths('vocivo/messages/v2/'),
+      ...await listAllStoredPaths('vocivo/messages/', 10_000),
+    ].filter((pathname) => !pathname.startsWith('vocivo/messages/v3/')))];
+    const legacyObjects = await readObjects(legacyPaths);
+    const tenantEvents = legacyPaths.map((pathname) => {
+      try { const value = legacyObjects.get(pathname); return value ? decrypt(value) : null; } catch { return null; }
+    }).filter((item): item is StoredMessage => item !== null && (item.organizationId || 'primary') === organizationId);
+    if (tenantEvents.length) {
+      await putMany(overwriteEntries(tenantEvents.map((message) => ({
+        pathname: `vocivo/messages/v3/${tenantKey}/${newestFirstTimestamp(message.updatedAt || message.createdAt)}-${createHash('sha256').update(`${message.id}:${message.updatedAt}`).digest('hex').slice(0, 20)}.bin`,
+        value: encrypt({ ...message, organizationId }),
+      }))));
+    }
+    await saveMigrationMarker(marker);
+  }
+  const recent = await list({ prefix: `vocivo/messages/v3/${tenantKey}/`, limit: 1000 });
+  const blobs = recent.blobs;
   const objects = await readObjects(blobs.map((blob) => blob.pathname));
   const events = blobs.map((blob) => {
     try {

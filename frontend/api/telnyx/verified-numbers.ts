@@ -4,7 +4,7 @@ import { requireSession } from '../_lib/auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
 import { telnyx, TelnyxApiError } from '../_lib/telnyx.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
-import { assignNumberToOrganization, sessionCanAccessNumber, sessionOrganizationId } from '../_lib/tenancy.js';
+import { assignNumberToOrganization, removeNumberAssignment, sessionCanAccessNumber, sessionOrganizationId } from '../_lib/tenancy.js';
 import { invalidatePhoneNumberCache } from '../_lib/phone-number-access.js';
 
 const e164Pattern = /^\+[1-9]\d{6,14}$/;
@@ -45,6 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (req.method === 'DELETE') {
       await telnyx(`/verified_numbers/${encodeURIComponent(phoneNumber)}`, { method: 'DELETE' });
+      await removeNumberAssignment(phoneNumber);
       invalidatePhoneNumberCache('verified');
       return res.status(200).json({ success: true });
     }
@@ -57,7 +58,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         body: JSON.stringify({ phone_number: phoneNumber, verification_method: verificationMethod }),
       });
       const payload = await response.json();
-      await assignNumberToOrganization(phoneNumber, organizationId);
       console.info(`Verified number request accepted: method=${verificationMethod}, destination=***${phoneNumber.slice(-4)}`);
       return res.status(200).json({ pending: true, phone_number: phoneNumber, verification_method: verificationMethod, ...payload });
     }
@@ -69,6 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: 'POST',
         body: JSON.stringify({ verification_code: verificationCode }),
       });
+      await assignNumberToOrganization(phoneNumber, organizationId);
       invalidatePhoneNumberCache('verified');
       return res.status(200).json(await response.json());
     }

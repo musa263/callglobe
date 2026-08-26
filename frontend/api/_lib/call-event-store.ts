@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put, readObjects } from './object-store.js';
+import { list, put, putMany, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
+import { hasMigrationMarker, listAllStoredPaths, newestFirstTimestamp, overwriteEntries, saveMigrationMarker, tenantStorageKey } from './tenant-storage.js';
 
 export type StoredCallEvent = {
   id: string;
@@ -38,12 +39,32 @@ function decrypt(value: Buffer) {
 }
 
 export async function storeCallEvent(event: StoredCallEvent) {
-  const newestFirst = String(9_999_999_999_999 - Date.now()).padStart(13, '0');
-  await put(`vocivo/call-events/v2/${newestFirst}-${event.id}.bin`, encrypt(event), { access: 'public', contentType: 'application/octet-stream', addRandomSuffix: true });
+  const organizationId = event.organizationId || 'primary';
+  const newestFirst = newestFirstTimestamp(event.event_timestamp);
+  const eventKey = createHash('sha256').update(event.id).digest('hex').slice(0, 20);
+  await put(`vocivo/call-events/v3/${tenantStorageKey(organizationId)}/${newestFirst}-${eventKey}.bin`, encrypt({ ...event, organizationId }), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
 }
 
-export async function listCallEvents(limit = 100) {
-  const result = await list({ prefix: 'vocivo/call-events/v2/', limit: Math.min(Math.max(limit, 1), 250) });
+async function migrateCallEvents(organizationId: string) {
+  const tenantKey = tenantStorageKey(organizationId);
+  const marker = `vocivo/migrations/call-events-v3/${tenantKey}.marker`;
+  if (await hasMigrationMarker(marker)) return;
+  const paths = await listAllStoredPaths('vocivo/call-events/v2/');
+  const objects = await readObjects(paths);
+  const events = paths.map((pathname) => {
+    try { const value = objects.get(pathname); return value ? decrypt(value) : null; } catch { return null; }
+  }).filter((event): event is StoredCallEvent => event !== null && (event.organizationId || 'primary') === organizationId);
+  if (events.length) {
+    await putMany(overwriteEntries(events.map((event) => ({
+      pathname: `vocivo/call-events/v3/${tenantKey}/${newestFirstTimestamp(event.event_timestamp)}-${createHash('sha256').update(event.id).digest('hex').slice(0, 20)}.bin`,
+      value: encrypt({ ...event, organizationId }),
+    }))));
+  }
+  await saveMigrationMarker(marker);
+}
+
+async function readEvents(prefix: string, limit: number) {
+  const result = await list({ prefix, limit: Math.min(Math.max(limit, 1), 250) });
   const objects = await readObjects(result.blobs.map((blob) => blob.pathname));
   const events = result.blobs.map((blob) => {
     try {
@@ -52,4 +73,17 @@ export async function listCallEvents(limit = 100) {
     } catch { return null; }
   }).filter((event): event is StoredCallEvent => Boolean(event));
   return events.sort((a, b) => b.event_timestamp.localeCompare(a.event_timestamp)).slice(0, limit);
+}
+
+export async function listCallEvents(limit = 100, organizationId?: string) {
+  if (organizationId) {
+    await migrateCallEvents(organizationId);
+    return readEvents(`vocivo/call-events/v3/${tenantStorageKey(organizationId)}/`, limit);
+  }
+  const [current, legacy] = await Promise.all([
+    readEvents('vocivo/call-events/v3/', limit),
+    readEvents('vocivo/call-events/v2/', limit),
+  ]);
+  return [...new Map([...current, ...legacy].map((event) => [event.id, event])).values()]
+    .sort((a, b) => b.event_timestamp.localeCompare(a.event_timestamp)).slice(0, limit);
 }

@@ -157,6 +157,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         if (attempt > 8) {
           setError(routeError.message || 'Call status could not be confirmed.');
           stopRingback();
+          try { callRef.current?.hangup?.(); } catch { /* already closed */ }
           return;
         }
       }
