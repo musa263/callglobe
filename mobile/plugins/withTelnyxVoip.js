@@ -121,6 +121,14 @@ function withTelnyxAppDelegate(config) {
     TelnyxVoipPushHandler.shared.handleVoipPush(payload, type: type, completion: completion)
   }
 
+`;
+      const nextClass = source.indexOf('\n}\n\nclass ReactNativeDelegate');
+      if (nextClass === -1) throw new Error('Unable to locate the iOS AppDelegate class ending.');
+      source = `${source.slice(0, nextClass)}${methods}${source.slice(nextClass)}`;
+    }
+    if (!source.includes('didInvalidatePushTokenFor type: PKPushType')) {
+      const invalidationMethod = `
+
   public func pushRegistry(
     _ registry: PKPushRegistry,
     didInvalidatePushTokenFor type: PKPushType
@@ -131,7 +139,7 @@ function withTelnyxAppDelegate(config) {
 `;
       const nextClass = source.indexOf('\n}\n\nclass ReactNativeDelegate');
       if (nextClass === -1) throw new Error('Unable to locate the iOS AppDelegate class ending.');
-      source = `${source.slice(0, nextClass)}${methods}${source.slice(nextClass)}`;
+      source = `${source.slice(0, nextClass)}${invalidationMethod}${source.slice(nextClass)}`;
     }
     appConfig.modResults.contents = source;
     return appConfig;

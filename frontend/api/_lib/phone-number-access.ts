@@ -14,16 +14,38 @@ export type AccountPhoneNumber = {
   tags?: string[];
 };
 
+let ownedCache: { expiresAt: number; value: AccountPhoneNumber[] } | null = null;
+let ownedRequest: Promise<AccountPhoneNumber[]> | null = null;
+let verifiedCache: { expiresAt: number; value: Array<{ phone_number: string; verified_at?: string }> } | null = null;
+let verifiedRequest: Promise<Array<{ phone_number: string; verified_at?: string }>> | null = null;
+
+export function invalidatePhoneNumberCache(type: 'owned' | 'verified' | 'all' = 'all') {
+  if (type !== 'verified') ownedCache = null;
+  if (type !== 'owned') verifiedCache = null;
+}
+
 export async function listOwnedNumbers() {
-  const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
-  const payload = await response.json() as { data?: AccountPhoneNumber[] };
-  return payload.data ?? [];
+  if (ownedCache?.expiresAt && ownedCache.expiresAt > Date.now()) return ownedCache.value;
+  ownedRequest ||= (async () => {
+    const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
+    const payload = await response.json() as { data?: AccountPhoneNumber[] };
+    const value = payload.data ?? [];
+    ownedCache = { expiresAt: Date.now() + 15_000, value };
+    return value;
+  })().finally(() => { ownedRequest = null; });
+  return ownedRequest;
 }
 
 export async function listVerifiedNumbers() {
-  const response = await telnyx('/verified_numbers?page[size]=250');
-  const payload = await response.json() as { data?: Array<{ phone_number: string; verified_at?: string }> };
-  return payload.data ?? [];
+  if (verifiedCache?.expiresAt && verifiedCache.expiresAt > Date.now()) return verifiedCache.value;
+  verifiedRequest ||= (async () => {
+    const response = await telnyx('/verified_numbers?page[size]=250');
+    const payload = await response.json() as { data?: Array<{ phone_number: string; verified_at?: string }> };
+    const value = payload.data ?? [];
+    verifiedCache = { expiresAt: Date.now() + 15_000, value };
+    return value;
+  })().finally(() => { verifiedRequest = null; });
+  return verifiedRequest;
 }
 
 export async function assertCallerIdForOrganization(phoneNumber: string, organizationId: string) {

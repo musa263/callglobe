@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { put } from './object-store.js';
+import { put, updateObject } from './object-store.js';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
@@ -52,7 +52,12 @@ export async function saveVoiceRoute(route: ReservedVoiceRoute) {
 }
 
 export async function updateVoiceRoute(routeId: string, patch: Partial<ReservedVoiceRoute>) {
-  const current = await readVoiceRoute(routeId);
-  if (!current) return null;
-  return saveVoiceRoute({ ...current, ...patch, routeId: current.routeId });
+  let updated: ReservedVoiceRoute | null = null;
+  await updateObject(pathname(routeId), (value) => {
+    const current = decrypt(value);
+    if (new Date(current.expiresAt).getTime() <= Date.now()) return value;
+    updated = { ...current, ...patch, routeId: current.routeId };
+    return encrypt(updated);
+  });
+  return updated;
 }

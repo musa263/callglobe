@@ -96,20 +96,7 @@ export async function requireSession(req: VercelRequest) {
     if (await isExtensionSessionRevoked(payload.extensionId, payload.iat)) throw new Error('Unauthorized');
   }
   if (payload.sub.startsWith('vocivo-account:')) {
-    if (typeof payload.accountId !== 'string') throw new Error('Unauthorized');
-    const account = await activeTenantAdmin(payload.accountId);
-    if (!account) throw new Error('Unauthorized');
-    return {
-      ...payload,
-      email: account.email,
-      name: account.name,
-      role: account.role,
-      accountType: 'business',
-      extensionId: account.extensionId,
-      extension: account.extension,
-      organizationId: account.organizationId,
-      forcePasswordChange: account.forcePasswordChange,
-    } as VocivoSession;
+    if (typeof payload.accountId !== 'string' || typeof payload.organizationId !== 'string' || !['company_owner', 'company_admin'].includes(String(payload.role))) throw new Error('Unauthorized');
   }
   return payload as VocivoSession;
 }
@@ -121,7 +108,21 @@ export async function requireOwner(req: VercelRequest) {
 }
 
 export async function requireAdmin(req: VercelRequest) {
-  const session = await requireSession(req);
+  let session = await requireSession(req);
+  if (session.sub?.startsWith('vocivo-account:')) {
+    const account = session.accountId ? await activeTenantAdmin(session.accountId) : null;
+    if (!account) throw new Error('Unauthorized');
+    session = {
+      ...session,
+      email: account.email,
+      name: account.name,
+      role: account.role,
+      extensionId: account.extensionId,
+      extension: account.extension,
+      organizationId: account.organizationId,
+      forcePasswordChange: account.forcePasswordChange,
+    };
+  }
   const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
   const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['admin', 'company_owner', 'company_admin'].includes(session.role || ''));
   if (!superadmin && !companyAdmin) throw new Error('Forbidden');

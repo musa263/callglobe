@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put, readObject } from './object-store.js';
+import { list, put, readObject, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredUserProfile = {
@@ -46,6 +46,28 @@ export async function readUserProfile(id: string) {
   } catch {
     return null;
   }
+}
+
+export async function readUserProfiles(ids: string[]) {
+  if (!ids.length) return new Map<string, StoredUserProfile>();
+  const keys = new Map(ids.map((id) => [userKey(id), id]));
+  const result = await list({ prefix: 'vocivo/profiles/', limit: 1000 });
+  const latest = new Map<string, { pathname: string; uploadedAt: Date }>();
+  for (const blob of result.blobs) {
+    const keyPart = blob.pathname.split('/')[2];
+    const id = keyPart ? keys.get(keyPart) : undefined;
+    if (!id) continue;
+    const current = latest.get(id);
+    if (!current || blob.uploadedAt.getTime() > current.uploadedAt.getTime()) latest.set(id, blob);
+  }
+  const objects = await readObjects([...latest.values()].map((blob) => blob.pathname));
+  const profiles = new Map<string, StoredUserProfile>();
+  for (const [id, blob] of latest) {
+    const value = objects.get(blob.pathname);
+    if (!value) continue;
+    try { profiles.set(id, decrypt(value)); } catch { /* ignore corrupt legacy profiles */ }
+  }
+  return profiles;
 }
 
 export async function saveUserProfile(profile: StoredUserProfile) {

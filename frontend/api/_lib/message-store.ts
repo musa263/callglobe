@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put, readObject } from './object-store.js';
+import { list, put, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredMessage = {
@@ -63,12 +63,13 @@ export async function listStoredMessages(organizationId: string, viewerExtension
     list({ prefix: 'vocivo/messages/', limit: 1000 }),
   ]);
   const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
-  const events = (await Promise.all(blobs.map(async (blob) => {
+  const objects = await readObjects(blobs.map((blob) => blob.pathname));
+  const events = blobs.map((blob) => {
     try {
-      const value = await readObject(blob.pathname);
+      const value = objects.get(blob.pathname);
       return value ? decrypt(value) : null;
     } catch { return null; }
-  }))).filter((item): item is StoredMessage => Boolean(item));
+  }).filter((item): item is StoredMessage => Boolean(item));
   const latest = new Map<string, StoredMessage>();
   events.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).forEach((event) => {
     const previous = latest.get(event.id);

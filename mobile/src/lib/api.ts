@@ -2,19 +2,22 @@ import * as SecureStore from 'expo-secure-store';
 
 const baseUrl = (process.env.EXPO_PUBLIC_API_URL || 'https://vocivo.vercel.app').replace(/\/$/, '');
 const tokenKey = 'vocivo.session';
+let cachedToken: string | null | undefined;
+let tokenRequest: Promise<string | null> | null = null;
 
 export const isApiConfigured = Boolean(baseUrl);
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = await SecureStore.getItemAsync(tokenKey);
+  const token = await getSessionToken();
   const method = String(init.method || 'GET').toUpperCase();
   const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
-  const attempts = retryable ? 3 : 1;
+  const attempts = ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
+  const timeoutMs = path.startsWith('/api/voice/status') ? 5_000 : 10_000;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         ...init,
@@ -49,16 +52,35 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   throw lastError instanceof Error ? lastError : new Error('The Vocivo service is unavailable.');
 }
 
+async function getSessionToken() {
+  if (cachedToken !== undefined) return cachedToken;
+  tokenRequest ||= SecureStore.getItemAsync(tokenKey).then((token) => {
+    cachedToken = token;
+    return token;
+  }).finally(() => { tokenRequest = null; });
+  return tokenRequest;
+}
+
+async function saveSessionToken(token: string) {
+  cachedToken = token;
+  await SecureStore.setItemAsync(tokenKey, token, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+}
+
+async function clearSessionToken() {
+  cachedToken = null;
+  await SecureStore.deleteItemAsync(tokenKey);
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   audioSource: async (path: string) => {
-    const token = await SecureStore.getItemAsync(tokenKey);
+    const token = await getSessionToken();
     return { uri: `${baseUrl}${path}`, headers: token ? { Authorization: `Bearer ${token}` } : undefined };
   },
-  getSessionToken: () => SecureStore.getItemAsync(tokenKey),
-  saveSessionToken: (token: string) => SecureStore.setItemAsync(tokenKey, token, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY }),
-  clearSessionToken: () => SecureStore.deleteItemAsync(tokenKey),
+  getSessionToken,
+  saveSessionToken,
+  clearSessionToken,
 };

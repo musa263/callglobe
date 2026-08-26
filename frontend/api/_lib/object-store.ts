@@ -1,15 +1,18 @@
 import { createHash, randomBytes } from 'node:crypto';
 import postgres, { type Sql } from 'postgres';
 
-type PutOptions = {
+export type PutOptions = {
   access?: 'public' | 'private';
   contentType?: string;
   allowOverwrite?: boolean;
   addRandomSuffix?: boolean;
 };
 
+export type PutEntry = { pathname: string; value: unknown; options?: PutOptions };
+
 type ListOptions = { prefix?: string; limit?: number; cursor?: string };
 type StoredRow = { pathname: string; body: Buffer; content_type: string; access: string; uploaded_at: Date; etag: string };
+let databaseClient: Sql | null = null;
 
 function databaseUrl() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -18,20 +21,22 @@ function databaseUrl() {
 }
 
 function database() {
+  if (databaseClient) return databaseClient;
   const url = new URL(databaseUrl());
-  return postgres({
+  databaseClient = postgres({
     host: url.hostname,
     port: Number(url.port || 5432),
     database: decodeURIComponent(url.pathname.replace(/^\//, '')),
     username: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     ssl: url.searchParams.get('sslmode') === 'disable' ? false : 'require',
-    max: 1,
+    max: 4,
     prepare: false,
-    connect_timeout: 5,
-    idle_timeout: 1,
-    max_lifetime: 15,
+    connect_timeout: 3,
+    idle_timeout: 5,
+    max_lifetime: 60,
   });
+  return databaseClient;
 }
 
 function transientDatabaseError(error: unknown) {
@@ -41,7 +46,7 @@ function transientDatabaseError(error: unknown) {
 }
 
 async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) {
-  const delays = [0, 120, 400, 900, 1800];
+  const delays = [0, 100, 350];
   let lastError: unknown;
   for (const delay of delays) {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay + Math.floor(Math.random() * 180)));
@@ -57,8 +62,6 @@ async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) {
     } catch (error) {
       lastError = error;
       if (!transientDatabaseError(error)) throw error;
-    } finally {
-      await sql.end({ timeout: 1 }).catch(() => undefined);
     }
   }
   throw lastError;
@@ -138,10 +141,68 @@ export async function put(pathname: string, value: unknown, options: PutOptions 
   });
 }
 
+export async function putMany(entries: PutEntry[]) {
+  const prepared = await Promise.all(entries.map(async ({ pathname, value, options = {} }) => {
+    const body = await bodyBuffer(value);
+    return {
+      body,
+      storedPath: options.addRandomSuffix ? suffixedPath(pathname) : pathname,
+      contentType: options.contentType || 'application/octet-stream',
+      access: options.access || 'private',
+      etag: createHash('sha256').update(body).digest('hex'),
+      allowOverwrite: options.allowOverwrite === true,
+    };
+  }));
+  return withDatabaseRetry(async (sql) => {
+    const results = [];
+    for (const item of prepared) {
+      const rows = item.allowOverwrite
+        ? await sql<StoredRow[]>`
+            insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
+            values (${item.storedPath}, ${item.body}, ${item.contentType}, ${item.access}, now(), ${item.etag})
+            on conflict (pathname) do update set body = excluded.body, content_type = excluded.content_type,
+              access = excluded.access, uploaded_at = excluded.uploaded_at, etag = excluded.etag
+            returning pathname, content_type, access, uploaded_at, etag
+          `
+        : await sql<StoredRow[]>`
+            insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
+            values (${item.storedPath}, ${item.body}, ${item.contentType}, ${item.access}, now(), ${item.etag})
+            on conflict (pathname) do nothing
+            returning pathname, content_type, access, uploaded_at, etag
+          `;
+      const row = rows[0];
+      if (!row) throw new Error('Stored object already exists.');
+      results.push(blobMetadata({ ...row, size: item.body.length }));
+    }
+    return results;
+  });
+}
+
 export async function readObject(pathname: string) {
   return withDatabaseRetry(async (sql) => {
     const rows = await sql<Array<{ body: Buffer }>>`select body from vocivo_objects where pathname = ${pathname} limit 1`;
     return rows[0]?.body ? Buffer.from(rows[0].body) : null;
+  });
+}
+
+export async function readObjects(pathnames: string[]) {
+  if (!pathnames.length) return new Map<string, Buffer>();
+  return withDatabaseRetry(async (sql) => {
+    const rows = await sql<Array<{ pathname: string; body: Buffer }>>`
+      select pathname, body from vocivo_objects where pathname in ${sql(pathnames)}
+    `;
+    return new Map(rows.map((row) => [row.pathname, Buffer.from(row.body)]));
+  });
+}
+
+export async function updateObject(pathname: string, update: (current: Buffer) => Buffer | Promise<Buffer>) {
+  return withDatabaseRetry(async (sql) => {
+    const rows = await sql<Array<{ body: Buffer }>>`select body from vocivo_objects where pathname = ${pathname} limit 1`;
+    if (!rows[0]?.body) return null;
+    const body = await update(Buffer.from(rows[0].body));
+    const etag = createHash('sha256').update(body).digest('hex');
+    await sql`update vocivo_objects set body = ${body}, uploaded_at = now(), etag = ${etag} where pathname = ${pathname}`;
+    return body;
   });
 }
 

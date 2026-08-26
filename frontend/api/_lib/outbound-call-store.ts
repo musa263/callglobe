@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put } from './object-store.js';
+import { del, putMany } from './object-store.js';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
@@ -43,11 +43,11 @@ async function readPath(pathname: string) {
 export async function saveOutboundCallPair(pair: OutboundCallPair) {
   const body = encrypt(pair);
   const paths = [
-    put(path('client', pair.clientCallControlId), body, { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true }),
-    put(path('destination', pair.destinationCallControlId), body, { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true }),
+    { pathname: path('client', pair.clientCallControlId), value: body, options: { access: 'public' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
+    { pathname: path('destination', pair.destinationCallControlId), value: body, options: { access: 'public' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
   ];
-  if (pair.routeId) paths.push(put(path('route', pair.routeId), body, { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true }));
-  await Promise.all(paths);
+  if (pair.routeId) paths.push({ pathname: path('route', pair.routeId), value: body, options: { access: 'public' as const, contentType: 'application/octet-stream', allowOverwrite: true } });
+  await putMany(paths);
 }
 
 export function readOutboundCallPairByClient(id: string) { return readPath(path('client', id)); }

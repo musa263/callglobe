@@ -5,6 +5,7 @@ import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
 import { telnyx, TelnyxApiError } from '../_lib/telnyx.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { assignNumberToOrganization, sessionCanAccessNumber, sessionOrganizationId } from '../_lib/tenancy.js';
+import { invalidatePhoneNumberCache } from '../_lib/phone-number-access.js';
 
 const e164Pattern = /^\+[1-9]\d{6,14}$/;
 
@@ -44,6 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (req.method === 'DELETE') {
       await telnyx(`/verified_numbers/${encodeURIComponent(phoneNumber)}`, { method: 'DELETE' });
+      invalidatePhoneNumberCache('verified');
       return res.status(200).json({ success: true });
     }
 
@@ -67,6 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: 'POST',
         body: JSON.stringify({ verification_code: verificationCode }),
       });
+      invalidatePhoneNumberCache('verified');
       return res.status(200).json(await response.json());
     }
 

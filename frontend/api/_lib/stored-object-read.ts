@@ -11,6 +11,9 @@ const dependencies: StoredObjectReaderDependencies = {
 };
 
 export async function readStoredObject(pathname: string, reader: StoredObjectReaderDependencies = dependencies) {
+  // readObject already has bounded transient retries. Keep the outer retry only
+  // for injected readers used by adapters and tests.
+  if (reader === dependencies) return readObject(pathname);
   const retryDelays = [0, 150, 500];
   let lastError: unknown;
 

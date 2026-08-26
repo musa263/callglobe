@@ -78,6 +78,9 @@ export type SaasState = {
 };
 
 const pathname = 'vocivo/saas/state.bin';
+const cacheTtlMs = 15_000;
+let cachedStoredState: { expiresAt: number; value?: Partial<SaasState> } | null = null;
+let stateRequest: Promise<Partial<SaasState> | undefined> | null = null;
 const featureKeys = featureCatalog.map((feature) => feature.id);
 const allFeatures = (enabled = false) => Object.fromEntries(featureKeys.map((key) => [key, enabled])) as FeatureSet;
 const withFeatures = (...enabled: FeatureKey[]) => ({ ...allFeatures(false), ...Object.fromEntries(enabled.map((key) => [key, true])) });
@@ -167,8 +170,16 @@ function mergeState(stored: Partial<SaasState> | undefined, config?: PbxConfig):
 }
 
 export async function readSaasState(config?: PbxConfig) {
-  const value = await readStoredObject(pathname);
-  return mergeState(value ? decrypt(value) : undefined, config);
+  if (!cachedStoredState || cachedStoredState.expiresAt <= Date.now()) {
+    stateRequest ||= (async () => {
+      const value = await readStoredObject(pathname);
+      const stored = value ? decrypt(value) : undefined;
+      cachedStoredState = { expiresAt: Date.now() + cacheTtlMs, value: stored };
+      return stored;
+    })().finally(() => { stateRequest = null; });
+    await stateRequest;
+  }
+  return mergeState(cachedStoredState?.value, config);
 }
 
 export async function saveSaasState(input: Partial<SaasState>, config?: PbxConfig) {
@@ -183,6 +194,7 @@ export async function saveSaasState(input: Partial<SaasState>, config?: PbxConfi
     if (!organizationIds.has(account.organizationId)) throw new Error('Administrator organization was not found.');
   }
   await put(pathname, encrypt(next), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  cachedStoredState = { expiresAt: Date.now() + cacheTtlMs, value: next };
   return next;
 }
 

@@ -55,6 +55,12 @@ const previewHistory: CallLog[] = [
   { id: '3', destination_number: '+44 7700 900112', destination_country: 'United Kingdom', duration_seconds: 0, total_cost: 0, status: 'no_answer', started_at: new Date(Date.now() - 3 * 86400000).toISOString() },
 ];
 
+function initialProfile(baseProfile: Omit<Profile, 'balance'>): Profile {
+  if (!baseProfile.id) throw new Error('Account identity was not returned.');
+  if (baseProfile.admin_only) throw new Error('This administrator account uses the Vocivo web portal. Assign a calling extension before using the mobile app.');
+  return { ...baseProfile, balance: null, currency: baseProfile.currency || 'USD' };
+}
+
 async function readHistory(userId: string) {
   const scopedKey = historyKey(userId);
   const value = await AsyncStorage.getItem(scopedKey) ?? (userId === 'vocivo-owner' ? await SecureStore.getItemAsync(legacyHistoryKey) : null);
@@ -111,8 +117,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isPreview, setIsPreview] = useState(false);
 
   const loadAccount = useCallback(async (baseProfile?: Omit<Profile, 'balance'>) => {
-    if (!baseProfile?.id) throw new Error('Account identity was not returned.');
-    if (baseProfile.admin_only) throw new Error('This administrator account uses the Vocivo web portal. Assign a calling extension before using the mobile app.');
+    if (!baseProfile) throw new Error('Account identity was not returned.');
+    initialProfile(baseProfile);
     const fallbackProfile: UserProfileResponse = { profile: { id: baseProfile.id, fullName: baseProfile.full_name || '', email: baseProfile.email, jobTitle: baseProfile.job_title || '', department: baseProfile.department || '', mobile: baseProfile.mobile || '', location: baseProfile.location || '', bio: baseProfile.bio || '', photoUrl: baseProfile.photo_url } };
     const [account, numbers, verified, storedHistory, serverHistory, userProfile, directory] = await Promise.all([
       api.get<AccountResponse>('/api/telnyx/account').catch(() => ({ balance: null, currency: baseProfile.currency || 'USD', rates: [], can_call: false })),
@@ -142,8 +148,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         if (!await api.getSessionToken()) return;
         const session = await api.get<SessionResponse>('/api/auth/session');
-        await loadAccount(session.profile);
+        setProfile(initialProfile(session.profile));
         setAuthenticated(true);
+        void loadAccount(session.profile).catch(() => undefined);
       } catch {
         await api.clearSessionToken();
         setAuthenticated(false);
@@ -159,8 +166,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await api.post<LoginResponse>('/api/auth/login', { email: email.trim(), password });
     await api.saveSessionToken(result.token);
     try {
-      await loadAccount(result.profile);
+      setProfile(initialProfile(result.profile));
       setAuthenticated(true);
+      void loadAccount(result.profile).catch(() => undefined);
     } catch (error) {
       await api.clearSessionToken();
       setAuthenticated(false);
@@ -173,8 +181,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await api.post<LoginResponse>('/api/auth/enroll', { token });
     await api.saveSessionToken(result.token);
     try {
-      await loadAccount(result.profile);
+      setProfile(initialProfile(result.profile));
       setAuthenticated(true);
+      void loadAccount(result.profile).catch(() => undefined);
     } catch (error) {
       await api.clearSessionToken();
       setAuthenticated(false);

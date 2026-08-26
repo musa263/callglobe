@@ -64,7 +64,7 @@ export async function renderVocivoPrompt(text: string, voice: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(process.env.TTS_SERVICE_SECRET ? { Authorization: `Bearer ${process.env.TTS_SERVICE_SECRET}` } : {}) },
       body: JSON.stringify({ input: text.slice(0, 2000), voice: definition.sourceVoice, format: 'wav' }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(3500),
     });
     if (!response.ok) throw new Error(`TTS service returned ${response.status}`);
     const payload = await response.json() as { audio_url?: string };

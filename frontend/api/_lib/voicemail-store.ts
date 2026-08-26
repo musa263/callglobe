@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, get, list, put, readObject } from './object-store.js';
+import { del, get, list, put, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredVoicemail = {
@@ -63,12 +63,13 @@ export async function listVoicemails(organizationId: string) {
     list({ prefix: 'vocivo/voicemails/', limit: 1000 }),
   ]);
   const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
-  const events = (await Promise.all(blobs.map(async (blob) => {
+  const objects = await readObjects(blobs.map((blob) => blob.pathname));
+  const events = blobs.map((blob) => {
     try {
-      const value = await readObject(blob.pathname);
+      const value = objects.get(blob.pathname);
       return value ? decrypt(value) : null;
     } catch { return null; }
-  }))).filter((item): item is StoredVoicemail => Boolean(item));
+  }).filter((item): item is StoredVoicemail => Boolean(item));
   const latest = new Map<string, StoredVoicemail>();
   events.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).forEach((event) => latest.set(event.id, { ...latest.get(event.id), ...event }));
   return [...latest.values()].filter((item) => !item.deleted && (item.organizationId || 'primary') === organizationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);

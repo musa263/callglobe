@@ -54,6 +54,9 @@ export type PbxConfig = {
 export type OrganizationPbxSettings = Pick<PbxConfig, 'company' | 'departments' | 'outboundRules' | 'officeHours' | 'callHandling' | 'ai' | 'system'>;
 
 const pathname = 'vocivo/pbx/config.bin';
+const cacheTtlMs = 15_000;
+let cachedConfig: { expiresAt: number; value: PbxConfig } | null = null;
+let configRequest: Promise<PbxConfig> | null = null;
 
 const weekdays = Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, { enabled: !['Saturday', 'Sunday'].includes(day), start: '09:00', end: '17:00' }]));
 
@@ -224,8 +227,14 @@ function validateUserProfiles(config: PbxConfig) {
 }
 
 export async function readPbxConfig() {
-  const value = await readStoredObject(pathname);
-  return value ? mergeConfig(decrypt(value)) : defaultPbxConfig();
+  if (cachedConfig?.expiresAt && cachedConfig.expiresAt > Date.now()) return structuredClone(cachedConfig.value);
+  configRequest ||= (async () => {
+    const value = await readStoredObject(pathname);
+    const config = value ? mergeConfig(decrypt(value)) : defaultPbxConfig();
+    cachedConfig = { expiresAt: Date.now() + cacheTtlMs, value: config };
+    return config;
+  })().finally(() => { configRequest = null; });
+  return structuredClone(await configRequest);
 }
 
 export async function savePbxConfig(input: Partial<PbxConfig>) {
@@ -240,5 +249,6 @@ export async function savePbxConfig(input: Partial<PbxConfig>) {
   }
   validateUserProfiles(next);
   await put(pathname, encrypt(next), { access: 'public', contentType: 'application/octet-stream', allowOverwrite: true });
+  cachedConfig = { expiresAt: Date.now() + cacheTtlMs, value: structuredClone(next) };
   return next;
 }

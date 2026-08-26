@@ -38,12 +38,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const match = destination.match(internalSip);
       const organization = config.organizations.find((item) => item.id === organizationId);
       if (!match || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
-      const target = (await listExtensions(organizationId)).find((item) => item.sipUsername === match[1] && item.status === 'active');
-      if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
-      const source = await getExtension(session.extensionId);
+      const [directory, source, profile] = await Promise.all([
+        listExtensions(organizationId),
+        getExtension(session.extensionId),
+        readUserProfile(`vocivo-extension:${session.extensionId}`),
+      ]);
+      const target = directory.find((item) => item.sipUsername === match[1] && item.status === 'active');
+      if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
       if (source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
-      const profile = await readUserProfile(`vocivo-extension:${source.id}`);
       callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);
       callerExtension = source.extension;
       sourceExtensionId = source.id;
@@ -57,8 +60,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? req.body.callerId
         : profile?.outboundCallerId || config.company.defaultCallerId;
       if (!preferredCallerId) return res.status(409).json({ error: 'No caller ID is assigned to this account. Ask your administrator to assign a phone number or verified caller ID.' });
-      callerId = await assertCallerIdForSession(session, preferredCallerId);
-      const extension = session.extensionId ? await getExtension(session.extensionId) : undefined;
+      const [resolvedCallerId, extension] = await Promise.all([
+        assertCallerIdForSession(session, preferredCallerId),
+        session.extensionId ? getExtension(session.extensionId) : Promise.resolve(undefined),
+      ]);
+      callerId = resolvedCallerId;
       authorizeOutboundCall(pbxForOrganization(config, organizationId), {
         extension: extension?.extension,
         department: extension?.department,

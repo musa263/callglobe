@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put, readObject } from './object-store.js';
+import { list, put, readObjects } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredCallEvent = {
@@ -44,11 +44,12 @@ export async function storeCallEvent(event: StoredCallEvent) {
 
 export async function listCallEvents(limit = 100) {
   const result = await list({ prefix: 'vocivo/call-events/v2/', limit: Math.min(Math.max(limit, 1), 250) });
-  const events = (await Promise.all(result.blobs.map(async (blob) => {
+  const objects = await readObjects(result.blobs.map((blob) => blob.pathname));
+  const events = result.blobs.map((blob) => {
     try {
-      const value = await readObject(blob.pathname);
+      const value = objects.get(blob.pathname);
       return value ? decrypt(value) : null;
     } catch { return null; }
-  }))).filter((event): event is StoredCallEvent => Boolean(event));
+  }).filter((event): event is StoredCallEvent => Boolean(event));
   return events.sort((a, b) => b.event_timestamp.localeCompare(a.event_timestamp)).slice(0, limit);
 }

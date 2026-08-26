@@ -291,13 +291,17 @@ export default function App() {
     setLoading(true);
     (async () => {
       try {
-        const sessionData = await api('/api/auth/session');
-        const userData = await api('/api/auth/profile').catch(() => ({ profile: {} }));
+        const [sessionData, userData] = await Promise.all([
+          api('/api/auth/session'),
+          api('/api/auth/profile').catch(() => ({ profile: {} })),
+        ]);
         const details = userData.profile || {};
         const resolvedProfile = { ...sessionData.profile, full_name: details.fullName || sessionData.profile.full_name, photo_url: details.photoUrl, job_title: details.jobTitle, department: details.department, mobile: details.mobile, location: details.location, bio: details.bio };
+        if (!active) return;
+        setProfile(resolvedProfile);
+        setLoading(false);
         if (resolvedProfile.admin_only) {
-          if (!active) return;
-          setProfile(resolvedProfile); setBalance(0); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
+          setBalance(0); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
         }
         const [accountData, numberData, verifiedData] = await Promise.all([
@@ -308,7 +312,6 @@ export default function App() {
         if (!active) return;
         const owned = numberData.numbers || [];
         const verified = verifiedData.numbers || [];
-        setProfile(resolvedProfile);
         setBalance(Number(accountData.balance) || 0);
         setRates(buildDialingDirectory(accountData.rates || []));
         setNumbers(owned);

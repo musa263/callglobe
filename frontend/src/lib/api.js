@@ -12,12 +12,13 @@ export async function api(path, options = {}) {
   const session = getStoredSession();
   const method = String(fetchOptions.method || 'GET').toUpperCase();
   const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
-  const attempts = retryable ? 3 : 1;
+  const attempts = path.startsWith('/api/voice/status') ? 1 : ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
+  const timeoutMs = path.startsWith('/api/voice/status') ? 5000 : 10000;
   let lastError;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(path, {
         ...fetchOptions,

@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put, readObject } from './object-store.js';
+import { put, readObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type VideoRoom = {
@@ -29,10 +29,7 @@ export async function saveVideoRoom(room: VideoRoom) {
 
 export async function readVideoRoom(roomId: string) {
   try {
-    const result = await list({ prefix: path(roomId), limit: 1 });
-    const blob = result.blobs[0];
-    if (!blob) return null;
-    const value = await readObject(blob.pathname);
+    const value = await readObject(path(roomId));
     return value ? decrypt(value) : null;
   } catch {
     return null;

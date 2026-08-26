@@ -2,7 +2,7 @@ import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
 
 export type VoiceState = {
-  flow: 'conference_host' | 'conference_guest' | 'outbound_destination' | 'api_outbound' | 'ivr' | 'configured_ivr' | 'extension' | 'agent' | 'queue_wait' | 'queue_agent' | 'voicemail_prompt' | 'voicemail_recording' | 'unavailable_prompt';
+  flow: 'inbound_root' | 'conference_host' | 'conference_guest' | 'outbound_destination' | 'api_outbound' | 'ivr' | 'configured_ivr' | 'extension' | 'agent' | 'queue_wait' | 'queue_agent' | 'voicemail_prompt' | 'voicemail_recording' | 'unavailable_prompt';
   room?: string;
   conferenceId?: string;
   participants?: string[];

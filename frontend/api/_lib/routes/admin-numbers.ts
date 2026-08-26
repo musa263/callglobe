@@ -6,6 +6,7 @@ import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
 import { getExtension } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
+import { invalidatePhoneNumberCache } from '../phone-number-access.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 
@@ -92,6 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       const payload = await response.json() as { data?: Record<string, unknown> };
       await Promise.all(phoneNumbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, activeOrganizationId, { destinationType: 'main' })));
+      invalidatePhoneNumberCache('owned');
       return res.status(201).json({ order: payload.data });
     }
     if (req.method === 'DELETE') {
@@ -108,6 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'DELETE' });
       const payload = response.status === 204 ? {} : await response.json() as { data?: Record<string, unknown> };
       await removeNumberAssignment(phoneNumber);
+      invalidatePhoneNumberCache('owned');
       return res.status(200).json({ number: payload.data, released: true });
     }
     const id = text(req.body?.id, 80);
@@ -142,6 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (phoneNumber && organizationId) {
       await assignNumberToOrganization(phoneNumber, organizationId, { destinationType, destinationId: destinationId || undefined });
     }
+    invalidatePhoneNumberCache('owned');
     return res.status(200).json({ number: payload.data });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
