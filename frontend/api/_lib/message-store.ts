@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { list, put, readObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredMessage = {
@@ -65,9 +65,8 @@ export async function listStoredMessages(organizationId: string, viewerExtension
   const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
   const events = (await Promise.all(blobs.map(async (blob) => {
     try {
-      const response = await fetch(blob.url);
-      if (!response.ok) return null;
-      return decrypt(Buffer.from(await response.arrayBuffer()));
+      const value = await readObject(blob.pathname);
+      return value ? decrypt(value) : null;
     } catch { return null; }
   }))).filter((item): item is StoredMessage => Boolean(item));
   const latest = new Map<string, StoredMessage>();

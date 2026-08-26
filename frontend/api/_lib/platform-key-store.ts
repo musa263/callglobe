@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { put } from '@vercel/blob';
+import { put } from './object-store.js';
 import type { VercelRequest } from '@vercel/node';
-import { readFreshPublicBlob } from './blob-read.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
 export type PlatformScope = 'calls:read' | 'calls:write' | 'extensions:read' | 'numbers:read' | 'numbers:write' | 'events:read';
@@ -17,7 +17,7 @@ function decrypt(value: Buffer) { const decipher = createDecipheriv('aes-256-gcm
 
 export async function readPlatformKeys() {
   try {
-    const value = await readFreshPublicBlob(pathname);
+    const value = await readStoredObject(pathname);
     return value ? decrypt(value) : [] as PlatformKey[];
   } catch { return []; }
 }

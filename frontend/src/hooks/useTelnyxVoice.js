@@ -30,7 +30,6 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const endedIdRef = useRef(null);
   const routeIdRef = useRef(null);
   const routePollRef = useRef(0);
-  const ringbackRef = useRef(null);
   const callIdentityRef = useRef(new Map());
   const [ready, setReady] = useState(false);
   const [statusLabel, setStatusLabel] = useState('Connecting...');
@@ -44,23 +43,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const [routePhase, setRoutePhase] = useState(null);
   const [remoteIdentity, setRemoteIdentity] = useState({ name: 'Phone call', number: '', internal: false });
 
-  const stopRingback = useCallback(() => {
-    const audio = ringbackRef.current;
-    if (!audio) return;
-    audio.pause();
-    audio.currentTime = 0;
-  }, []);
-
-  const startRingback = useCallback(() => {
-    if (!ringbackRef.current) {
-      const audio = new Audio('/audio/ringback.wav');
-      audio.loop = true;
-      audio.volume = 0.42;
-      ringbackRef.current = audio;
-    }
-    ringbackRef.current.currentTime = 0;
-    ringbackRef.current.play().catch(() => undefined);
-  }, []);
+  // The parked Telnyx leg supplies ringback. A second browser loop can survive
+  // the bridge event and overlap the connected call audio.
+  const stopRingback = useCallback(() => undefined, []);
+  const startRingback = useCallback(() => undefined, []);
 
   const disconnect = useCallback(() => {
     try { callRef.current?.hangup?.(); } catch { /* already closed */ }

@@ -1,6 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import { useAudioPlayer } from 'expo-audio';
 import {
   createTelnyxVoipClient,
   createCredentialConfig,
@@ -16,7 +15,7 @@ import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import type { ActiveCall, CallerNumber, CallPhase, CallRate, MergedConference } from '../types';
 import { useAuth } from './AuthContext';
 
-const voipClient = createTelnyxVoipClient({ enableAppStateManagement: true, debug: __DEV__, useTrickleIce: true });
+const voipClient = createTelnyxVoipClient({ enableAppStateManagement: true, debug: __DEV__, useTrickleIce: false });
 
 type VoiceContextValue = {
   connection: TelnyxConnectionState;
@@ -103,24 +102,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const loggedCalls = useRef(new Set<string>());
   const callSubscriptions = useRef<Array<{ unsubscribe: () => void }>>([]);
   const routePollGenerationRef = useRef(0);
-  const ringbackPlayer = useAudioPlayer(require('../../assets/ringback.wav'));
   const loginConfigRef = useRef<{ sipUser: string; sipPassword: string; ringtone: string } | null>(null);
 
-  useEffect(() => {
-    ringbackPlayer.loop = true;
-    ringbackPlayer.volume = 0.42;
-    return () => ringbackPlayer.pause();
-  }, [ringbackPlayer]);
-
-  const startRingback = useCallback(() => {
-    ringbackPlayer.seekTo(0).catch(() => undefined);
-    ringbackPlayer.play();
-  }, [ringbackPlayer]);
-
-  const stopRingback = useCallback(() => {
-    ringbackPlayer.pause();
-    ringbackPlayer.seekTo(0).catch(() => undefined);
-  }, [ringbackPlayer]);
+  // Telnyx streams ringback into the parked call leg. Keeping Expo Audio out of
+  // an active call also leaves the iOS WebRTC/CallKit audio session authoritative.
+  const startRingback = useCallback(() => undefined, []);
+  const stopRingback = useCallback(() => undefined, []);
 
   const clearCallSubscriptions = useCallback(() => {
     callSubscriptions.current.forEach((subscription) => subscription.unsubscribe());
@@ -288,14 +275,26 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         await applyIncomingRingtone(ringtone);
         loginConfigRef.current = { sipUser: data.sip_user, sipPassword: data.sip_password, ringtone };
         const pushNotificationDeviceToken = await waitForVoipToken();
-        const login = (token?: string) => voipClient.login(createCredentialConfig(data.sip_user, data.sip_password, {
-          debug: __DEV__,
-          pushNotificationDeviceToken: token,
-          pushWhenActive: true,
-          enableMissedCallNotifications: true,
-          incomingCallRingtone: ringtone,
-          useTrickleIce: true,
-        }));
+        const login = async (token?: string) => {
+          let lastError: unknown;
+          for (let attempt = 0; attempt < 3 && !canceled; attempt += 1) {
+            try {
+              await voipClient.login(createCredentialConfig(data.sip_user, data.sip_password, {
+                debug: __DEV__,
+                pushNotificationDeviceToken: token,
+                pushWhenActive: true,
+                enableMissedCallNotifications: true,
+                incomingCallRingtone: ringtone,
+                useTrickleIce: false,
+              }));
+              return;
+            } catch (loginError) {
+              lastError = loginError;
+              if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+            }
+          }
+          throw lastError instanceof Error ? lastError : new Error('Unable to connect to calling service.');
+        };
         await login(pushNotificationDeviceToken);
         if (Platform.OS === 'ios') setPushRegistration(pushNotificationDeviceToken ? 'registered' : 'unavailable');
         if (Platform.OS === 'ios' && !pushNotificationDeviceToken) {
@@ -336,7 +335,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
     await voipClient.login(createCredentialConfig(data.sipUser, data.sipPassword, {
       debug: __DEV__, pushNotificationDeviceToken: token, pushWhenActive: true,
-      enableMissedCallNotifications: true, incomingCallRingtone: data.ringtone, useTrickleIce: true,
+      enableMissedCallNotifications: true, incomingCallRingtone: data.ringtone, useTrickleIce: false,
     }));
     setPushRegistration('registered');
   }, []);

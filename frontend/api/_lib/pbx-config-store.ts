@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 import { validOfficeTime, validTimeZone } from './office-hours.js';
 
@@ -224,10 +224,8 @@ function validateUserProfiles(config: PbxConfig) {
 }
 
 export async function readPbxConfig() {
-  try {
-    const value = await readFreshPublicBlob(pathname);
-    return value ? mergeConfig(decrypt(value)) : defaultPbxConfig();
-  } catch { return defaultPbxConfig(); }
+  const value = await readStoredObject(pathname);
+  return value ? mergeConfig(decrypt(value)) : defaultPbxConfig();
 }
 
 export async function savePbxConfig(input: Partial<PbxConfig>) {

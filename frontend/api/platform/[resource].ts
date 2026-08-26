@@ -8,8 +8,10 @@ import { assertCallerIdForOrganization } from '../_lib/phone-number-access.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { assignNumberToOrganization, numberOrganizationId } from '../_lib/tenancy.js';
 import { decodeVoiceState } from '../_lib/voice-control.js';
+import { get, storageHealth } from '../_lib/object-store.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
+const publicStoragePrefixes = ['vocivo/profile-photos/', 'vocivo/branding/'];
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 function organizationFromCarrierRecord(item: Record<string, any>) {
   return decodeVoiceState(item.client_state || item.payload?.client_state)?.organizationId;
@@ -29,10 +31,33 @@ function scopeFor(resource: string, method: string): PlatformScope | null {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const resource = Array.isArray(req.query.resource) ? req.query.resource[0] : req.query.resource || '';
   const method = req.method || '';
+  if (resource === 'storage') {
+    if (allowMobile(req, res)) return;
+    if (method !== 'GET') return methodNotAllowed(res, ['GET']);
+    try {
+      const pathname = typeof req.query.path === 'string' ? req.query.path : '';
+      if (!publicStoragePrefixes.some((prefix) => pathname.startsWith(prefix))) return res.status(404).end();
+      const object = await get(pathname);
+      if (!object?.stream) return res.status(404).end();
+      const body = Buffer.from(await new Response(object.stream).arrayBuffer());
+      res.setHeader('Content-Type', object.blob.contentType || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      if (req.query.download === '1') res.setHeader('Content-Disposition', `attachment; filename="${pathname.split('/').pop()?.replace(/[^A-Za-z0-9._-]/g, '') || 'download'}"`);
+      return res.status(200).send(body);
+    } catch (error) {
+      return res.status(500).json({ error: publicError(error) });
+    }
+  }
   if (resource === 'health') {
     if (allowMobile(req, res)) return;
     if (method !== 'GET') return methodNotAllowed(res, ['GET']);
-    return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', controlPlane: 'vocivo', mediaPlane: process.env.PBX_SERVICE_URL ? 'vocivo' : 'telnyx', pstnProvider: 'telnyx', time: new Date().toISOString() });
+    try {
+      const storage = await storageHealth();
+      return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', storage, controlPlane: 'vocivo', mediaPlane: process.env.PBX_SERVICE_URL ? 'vocivo' : 'telnyx', pstnProvider: 'telnyx', time: new Date().toISOString() });
+    } catch (error) {
+      console.error('Vocivo health check failed', error);
+      return res.status(503).json({ ok: false, service: 'vocivo-api', status: 'unavailable', time: new Date().toISOString() });
+    }
   }
   const scope = scopeFor(resource, method);
   if (!scope) return methodNotAllowed(res, ['GET', 'POST', 'PATCH']);

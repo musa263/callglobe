@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 import type { PbxConfig } from './pbx-config-store.js';
 
@@ -167,7 +167,7 @@ function mergeState(stored: Partial<SaasState> | undefined, config?: PbxConfig):
 }
 
 export async function readSaasState(config?: PbxConfig) {
-  const value = await readFreshPublicBlob(pathname);
+  const value = await readStoredObject(pathname);
   return mergeState(value ? decrypt(value) : undefined, config);
 }
 

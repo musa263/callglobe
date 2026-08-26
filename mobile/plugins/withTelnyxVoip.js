@@ -29,12 +29,18 @@ function patchTelnyxIosSdk(projectRoot) {
     callKit = callKit.replace(
       '        private func installCallKitProvider() -> CXProvider {',
       `        public func updateIncomingRingtone(_ resourceName: String?) {
+            let storedRingtone = UserDefaults.standard.string(forKey: "vocivo_incoming_ringtone")
+            if storedRingtone == resourceName {
+                if callKitProvider == nil { _ = installCallKitProvider() }
+                return
+            }
             if let resourceName, !resourceName.isEmpty {
                 UserDefaults.standard.set(resourceName, forKey: "vocivo_incoming_ringtone")
             } else {
                 UserDefaults.standard.removeObject(forKey: "vocivo_incoming_ringtone")
             }
             UserDefaults.standard.synchronize()
+            guard Array(activeCalls.values).isEmpty else { return }
             callKitProvider?.invalidate()
             callKitProvider = nil
             _ = installCallKitProvider()
@@ -113,6 +119,14 @@ function withTelnyxAppDelegate(config) {
     completion: @escaping () -> Void
   ) {
     TelnyxVoipPushHandler.shared.handleVoipPush(payload, type: type, completion: completion)
+  }
+
+  public func pushRegistry(
+    _ registry: PKPushRegistry,
+    didInvalidatePushTokenFor type: PKPushType
+  ) {
+    UserDefaults.standard.removeObject(forKey: "voip_push_token")
+    UserDefaults.standard.removeObject(forKey: "telnyx_voip_push_token")
   }
 `;
       const nextClass = source.indexOf('\n}\n\nclass ReactNativeDelegate');

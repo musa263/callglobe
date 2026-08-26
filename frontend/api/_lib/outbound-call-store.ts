@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { del, put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
 export type OutboundCallPair = {
@@ -33,7 +33,7 @@ function decrypt(value: Buffer) {
 }
 async function readPath(pathname: string) {
   try {
-    const value = await readFreshPublicBlob(pathname);
+    const value = await readStoredObject(pathname);
     return value ? decrypt(value) : null;
   } catch {
     return null;

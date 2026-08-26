@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { del, put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
 type ActiveCallRoute = { extensionId: string; parentCallControlId: string; agentCallControlId: string; updatedAt: string };
@@ -22,7 +22,7 @@ export async function saveActiveCallRoute(route: ActiveCallRoute) {
 
 export async function readActiveCallRoute(extensionId: string) {
   try {
-    const value = await readFreshPublicBlob(`vocivo/call-routes/${extensionId}.bin`);
+    const value = await readStoredObject(`vocivo/call-routes/${extensionId}.bin`);
     return value ? decrypt(value) : null;
   } catch { return null; }
 }

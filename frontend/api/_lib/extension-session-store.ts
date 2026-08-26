@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 
 const cache = new Map<string, { revokedAt: number; checkedAt: number }>();
 function idHash(id: string) { return createHash('sha256').update(id).digest('hex'); }
@@ -16,7 +16,7 @@ export async function isExtensionSessionRevoked(extensionId: string, issuedAtSec
   const cached = cache.get(extensionId);
   if (cached && Date.now() - cached.checkedAt < 15_000) return cached.revokedAt > issuedAtSeconds * 1000;
   try {
-    const value = await readFreshPublicBlob(pathname(extensionId));
+    const value = await readStoredObject(pathname(extensionId));
     const revokedAt = value ? Number(value.toString('utf8')) || 0 : 0;
     cache.set(extensionId, { revokedAt, checkedAt: Date.now() });
     return revokedAt > issuedAtSeconds * 1000;

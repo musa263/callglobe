@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
 export type ReservedVoiceRoute = {
@@ -39,7 +39,7 @@ function decrypt(value: Buffer) {
 
 export async function readVoiceRoute(routeId: string) {
   try {
-    const value = await readFreshPublicBlob(pathname(routeId));
+    const value = await readStoredObject(pathname(routeId));
     if (!value) return null;
     const route = decrypt(value);
     return new Date(route.expiresAt).getTime() > Date.now() ? route : null;

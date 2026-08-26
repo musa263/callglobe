@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { list, put, readObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredCallEvent = {
@@ -46,8 +46,8 @@ export async function listCallEvents(limit = 100) {
   const result = await list({ prefix: 'vocivo/call-events/v2/', limit: Math.min(Math.max(limit, 1), 250) });
   const events = (await Promise.all(result.blobs.map(async (blob) => {
     try {
-      const response = await fetch(blob.url);
-      return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+      const value = await readObject(blob.pathname);
+      return value ? decrypt(value) : null;
     } catch { return null; }
   }))).filter((event): event is StoredCallEvent => Boolean(event));
   return events.sort((a, b) => b.event_timestamp.localeCompare(a.event_timestamp)).slice(0, limit);

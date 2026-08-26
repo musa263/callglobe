@@ -10,18 +10,43 @@ export function clearSession() { localStorage.removeItem(SESSION_KEY); }
 export async function api(path, options = {}) {
   const { auth = true, body, headers, ...fetchOptions } = options;
   const session = getStoredSession();
-  const response = await fetch(path, {
-    ...fetchOptions,
-    headers: {
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(auth && session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
-      ...headers,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'The request could not be completed.');
-  return payload;
+  const method = String(fetchOptions.method || 'GET').toUpperCase();
+  const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
+  const attempts = retryable ? 3 : 1;
+  let lastError;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(path, {
+        ...fetchOptions,
+        signal: controller.signal,
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(auth && session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+          ...headers,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const payload = await response.json().catch(() => ({}));
+      const temporary = [429, 500, 502, 503, 504].includes(response.status);
+      if (!response.ok && retryable && temporary && attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        continue;
+      }
+      if (!response.ok) throw new Error(payload.error || 'The request could not be completed.');
+      return payload;
+    } catch (error) {
+      lastError = error;
+      if (!retryable || attempt === attempts - 1 || (error instanceof Error && !['AbortError', 'TypeError'].includes(error.name))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError || new Error('The request could not be completed.');
 }
 
 export async function apiAudio(path) {

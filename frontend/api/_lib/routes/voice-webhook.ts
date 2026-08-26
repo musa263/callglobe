@@ -64,6 +64,13 @@ function customHeader(payload: VoicePayload | undefined, name: string) {
   return (match?.value || match?.header_value || '').trim();
 }
 
+async function stopPlaybackBeforeBridge(callControlId: string, commandId: string) {
+  await callAction(callControlId, 'playback_stop', { stop: 'all', command_id: commandId }).catch(() => undefined);
+  // Telnyx accepts Call Control commands asynchronously. Give playback_stop a
+  // brief head start so looped ringback cannot enter the newly bridged media.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+}
+
 async function speakPrompt(callControlId: string, input: { payload: string; voice: string; [key: string]: unknown }) {
   const audioUrl = await renderVocivoPrompt(input.payload, input.voice);
   const { payload, voice, payload_type: _payloadType, ...shared } = input;
@@ -463,7 +470,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const requestedRouteId = customHeader(payload, 'X-Vocivo-Route-ID');
       const routeId = isVoiceRouteId(requestedRouteId) ? requestedRouteId : '';
       const signedReservation = verifyVoiceRouteToken(customHeader(payload, 'X-Vocivo-Route-Token'));
-      // Blob remains a migration fallback for app builds released before signed routes.
+      // Persistent state remains a migration fallback for app builds released before signed routes.
       const reservation = signedReservation?.routeId === routeId ? signedReservation : routeId ? await readVoiceRoute(routeId) : null;
       const effectiveCallerId = selectedCallerId || reservation?.callerId || (reservation?.flow === 'outbound' ? requiredEnv('TELNYX_SMS_FROM') : '');
       if (!reservation || reservation.destination !== destination || reservation.flow !== parkedFlow || (reservation.callerId || '') !== effectiveCallerId || (!e164.test(destination) && !internalSip.test(destination))) {
@@ -534,12 +541,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.answered' && (state?.flow === 'outbound_destination' || outboundPair)) {
       const parentCallControlId = state?.flow === 'outbound_destination' ? state.parentCallControlId : outboundPair?.clientCallControlId;
       if (parentCallControlId) {
-        await callAction(parentCallControlId, 'playback_stop', {
-          stop: 'all',
-          command_id: `${eventId}-stop-ringback`,
-        }).catch(() => undefined);
+        await stopPlaybackBeforeBridge(parentCallControlId, `${eventId}-stop-ringback`);
         try {
           await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
+          await callAction(parentCallControlId, 'playback_stop', {
+            stop: 'all',
+            command_id: `${eventId}-confirm-ringback-stopped`,
+          }).catch(() => undefined);
+          const pair = outboundPair || await readOutboundCallPairByDestination(callControlId);
+          const connectedAt = new Date().toISOString();
+          if (pair) await saveOutboundCallPair({ ...pair, phase: 'connected', connectedAt, updatedAt: connectedAt });
+          const connectedRouteId = pair?.routeId || (state?.flow === 'outbound_destination' ? state.routeId : undefined);
+          if (connectedRouteId) await updateVoiceRoute(connectedRouteId, { phase: 'connected', connectedAt });
         } catch (bridgeError) {
           const pair = outboundPair || await readOutboundCallPairByDestination(callControlId);
           const failedRouteId = pair?.routeId || (state?.flow === 'outbound_destination' ? state.routeId : undefined);
@@ -741,11 +754,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const conferencePayload = await conferenceResponse.json() as { data?: { id?: string } };
       const conferenceId = conferencePayload.data?.id;
       if (conferenceId) {
-        await Promise.all((state.participants ?? []).map((participant, index) => dialCall({
-          to: participant,
+        const participants = state.conferenceParticipants ?? (state.participants ?? []).map((destination) => ({ destination, displayName: destination, internal: false }));
+        await Promise.all(participants.map((participant, index) => dialCall({
+          to: participant.destination,
           from: state.callerId,
           state: { flow: 'conference_guest', room: state.room, conferenceId, callerId: state.callerId, organizationId: state.organizationId },
-          fromDisplayName: 'Vocivo Conference',
+          fromDisplayName: participant.internal && state.sourceName
+            ? callerDisplay(`${state.sourceName}${state.sourceExtension ? ` - Ext ${state.sourceExtension}` : ''}`)
+            : 'Vocivo Conference',
+          customHeaders: participant.internal ? [
+            { name: 'X-Vocivo-Call-Type', value: 'internal' },
+            ...(state.sourceName ? [{ name: 'X-Vocivo-Caller-Name', value: state.sourceName }] : []),
+            ...(state.sourceExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: state.sourceExtension }] : []),
+            ...(state.organizationId ? [{ name: 'X-Vocivo-Organization-ID', value: state.organizationId }] : []),
+          ] : undefined,
           commandId: `${eventId}-guest-${index}`,
         })));
       }
@@ -856,10 +878,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ received: true });
   } catch (error) {
-    console.error('Vocivo voice webhook failed', error);
     if (error instanceof TelnyxApiError && error.code === '90018') {
       return res.status(200).json({ received: true, ignored: 'call_ended' });
     }
+    console.error('Vocivo voice webhook failed', error);
     return res.status(500).json({ error: publicError(error) });
   }
 }

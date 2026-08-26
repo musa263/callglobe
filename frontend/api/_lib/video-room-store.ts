@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { list, put, readObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type VideoRoom = {
@@ -32,8 +32,8 @@ export async function readVideoRoom(roomId: string) {
     const result = await list({ prefix: path(roomId), limit: 1 });
     const blob = result.blobs[0];
     if (!blob) return null;
-    const response = await fetch(blob.url);
-    return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+    const value = await readObject(blob.pathname);
+    return value ? decrypt(value) : null;
   } catch {
     return null;
   }

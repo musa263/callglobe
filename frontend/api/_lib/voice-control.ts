@@ -6,6 +6,12 @@ export type VoiceState = {
   room?: string;
   conferenceId?: string;
   participants?: string[];
+  conferenceParticipants?: Array<{
+    destination: string;
+    displayName: string;
+    internal: boolean;
+    extension?: string;
+  }>;
   department?: string;
   parentCallControlId?: string;
   targetExtensionId?: string;

@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, get, list, put } from '@vercel/blob';
+import { del, get, list, put, readObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredVoicemail = {
@@ -65,8 +65,8 @@ export async function listVoicemails(organizationId: string) {
   const blobs = [...new Map([...recent.blobs, ...legacy.blobs].map((blob) => [blob.url, blob])).values()];
   const events = (await Promise.all(blobs.map(async (blob) => {
     try {
-      const response = await fetch(blob.url);
-      return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+      const value = await readObject(blob.pathname);
+      return value ? decrypt(value) : null;
     } catch { return null; }
   }))).filter((item): item is StoredVoicemail => Boolean(item));
   const latest = new Map<string, StoredVoicemail>();

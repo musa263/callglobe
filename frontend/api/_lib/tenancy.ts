@@ -21,9 +21,18 @@ export function sessionCanAccessNumber(session: VocivoSession, phoneNumber: stri
   return session.sub === 'vocivo-owner' || numberOrganizationId(phoneNumber, config) === sessionOrganizationId(session, config);
 }
 
+export function organizationForInboundNumber(phoneNumber: string, config: PbxConfig, serviceNumber = process.env.TELNYX_SMS_FROM) {
+  const assigned = numberOrganizationId(phoneNumber, config);
+  if (assigned) return assigned;
+  if (normalizeE164(phoneNumber) === normalizeE164(serviceNumber)) return config.activeOrganizationId || primaryOrganizationId(config);
+  return '';
+}
+
 export async function organizationForNumber(phoneNumber: string) {
   const config = await readPbxConfig();
-  return numberOrganizationId(phoneNumber, config);
+  // The shared Vocivo ingress number can route the primary workspace without
+  // becoming that customer's owned caller ID or appearing in its inventory.
+  return organizationForInboundNumber(phoneNumber, config);
 }
 
 export async function assignNumberToOrganization(phoneNumber: string, organizationId: string, patch: Omit<PbxConfig['numberAssignments'][string], 'organizationId'> = {}) {

@@ -23,7 +23,6 @@ export async function telnyx(path: string, init: RequestInit = {}) {
   });
   if (!response.ok) {
     const detail = await response.text();
-    console.error(`Telnyx request failed ${response.status}: ${detail}`);
     let message = 'Telnyx could not complete this request.';
     let code: string | undefined;
     try {
@@ -31,6 +30,7 @@ export async function telnyx(path: string, init: RequestInit = {}) {
       message = payload?.errors?.[0]?.detail || payload?.errors?.[0]?.title || message;
       code = payload?.errors?.[0]?.code ? String(payload.errors[0].code) : undefined;
     } catch { /* Telnyx returned a non-JSON error. */ }
+    if (code !== '90018') console.error(`Telnyx request failed ${response.status}: ${detail}`);
     throw new TelnyxApiError(response.status, message, code);
   }
   return response;

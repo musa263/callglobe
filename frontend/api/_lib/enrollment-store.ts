@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { put } from '@vercel/blob';
+import { put } from './object-store.js';
 
 function path(jti: string) {
   return `vocivo/enrollment-consumed/${createHash('sha256').update(jti).digest('hex')}.txt`;

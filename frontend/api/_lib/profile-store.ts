@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { list, put } from '@vercel/blob';
+import { list, put, readObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 
 export type StoredUserProfile = {
@@ -41,8 +41,8 @@ export async function readUserProfile(id: string) {
   const latest = result.blobs.sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())[0];
   if (!latest) return null;
   try {
-    const response = await fetch(latest.url);
-    return response.ok ? decrypt(Buffer.from(await response.arrayBuffer())) : null;
+    const value = await readObject(latest.pathname);
+    return value ? decrypt(value) : null;
   } catch {
     return null;
   }

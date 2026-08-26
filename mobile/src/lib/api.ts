@@ -7,27 +7,46 @@ export const isApiConfigured = Boolean(baseUrl);
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await SecureStore.getItemAsync(tokenKey);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-  try {
-    const response = await fetch(`${baseUrl}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(init.headers ?? {}),
-      },
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body?.error || 'The Vocivo service is unavailable.');
-    return body as T;
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('Vocivo could not reach the server. Check your connection and try again.');
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  const method = String(init.method || 'GET').toUpperCase();
+  const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
+  const attempts = retryable ? 3 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(init.headers ?? {}),
+        },
+      });
+      const body = await response.json().catch(() => ({}));
+      const temporary = [429, 500, 502, 503, 504].includes(response.status);
+      if (!response.ok && retryable && temporary && attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        continue;
+      }
+      if (!response.ok) throw new Error(body?.error || 'The Vocivo service is unavailable.');
+      return body as T;
+    } catch (error) {
+      lastError = error;
+      const transportError = error instanceof Error && ['AbortError', 'TypeError'].includes(error.name);
+      if (!retryable || attempt === attempts - 1 || !transportError) {
+        if (error instanceof Error && error.name === 'AbortError') throw new Error('Vocivo could not reach the server. Check your connection and try again.');
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+
+  throw lastError instanceof Error ? lastError : new Error('The Vocivo service is unavailable.');
 }
 
 export const api = {

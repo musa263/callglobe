@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put } from '@vercel/blob';
-import { readFreshPublicBlob } from './blob-read.js';
+import { del, put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
 export type QueueCall = {
@@ -34,7 +34,7 @@ export async function saveQueueCall(value: QueueCall) {
 
 export async function readQueueCall(queueName: string) {
   try {
-    const value = await readFreshPublicBlob(pathname(queueName));
+    const value = await readStoredObject(pathname(queueName));
     return value ? decrypt(value) : null;
   } catch { return null; }
 }
