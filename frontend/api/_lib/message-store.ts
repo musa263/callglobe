@@ -13,6 +13,13 @@ export type StoredMessage = {
   error?: string;
   updatedAt: string;
   organizationId?: string;
+  transport?: 'sms' | 'internal';
+  senderExtensionId?: string;
+  senderExtension?: string;
+  senderName?: string;
+  recipientExtensionId?: string;
+  recipientExtension?: string;
+  recipientName?: string;
 };
 
 function key() {
@@ -37,7 +44,20 @@ export async function storeMessageEvent(message: StoredMessage) {
   await put(`vocivo/messages/v2/${newestFirst}-${message.id}.bin`, encrypt(message), { access: 'public', contentType: 'application/octet-stream', addRandomSuffix: true });
 }
 
-export async function listStoredMessages(organizationId: string) {
+export function messageForViewer(item: StoredMessage, viewerExtensionId?: string) {
+  if (item.transport !== 'internal') return { ...item, transport: 'sms' as const };
+  if (!viewerExtensionId || ![item.senderExtensionId, item.recipientExtensionId].includes(viewerExtensionId)) return null;
+  const outbound = item.senderExtensionId === viewerExtensionId;
+  return {
+    ...item,
+    direction: outbound ? 'outbound' as const : 'inbound' as const,
+    to: `extension:${item.recipientExtension || ''}`,
+    from: `extension:${item.senderExtension || ''}`,
+    contactName: outbound ? item.recipientName : item.senderName,
+  };
+}
+
+export async function listStoredMessages(organizationId: string, viewerExtensionId?: string) {
   const [recent, legacy] = await Promise.all([
     list({ prefix: 'vocivo/messages/v2/', limit: 1000 }),
     list({ prefix: 'vocivo/messages/', limit: 1000 }),
@@ -57,5 +77,7 @@ export async function listStoredMessages(organizationId: string) {
   });
   return [...latest.values()]
     .filter((item) => (item.organizationId || 'primary') === organizationId)
+    .map((item) => messageForViewer(item, viewerExtensionId))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
 }

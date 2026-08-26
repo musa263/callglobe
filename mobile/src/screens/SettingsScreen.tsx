@@ -1,15 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { BellRing, Building2, Camera, Check, ChevronRight, Clock3, CreditCard, KeyRound, LogOut, Phone, Plus, Radio, Settings2, Signal, Trash2, UserRoundPen, Voicemail, WifiOff, X } from 'lucide-react-native';
+import { BellRing, Building2, Camera, Check, ChevronRight, Clock3, CreditCard, KeyRound, LogOut, Pause, Phone, Play, Plus, Radio, Settings2, Signal, Trash2, UserRoundPen, Voicemail, WifiOff, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 import * as ImagePicker from 'expo-image-picker';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness, type BusinessProfile } from '../context/BusinessContext';
 import { useVoice } from '../context/VoiceContext';
 import { api } from '../lib/api';
-import { applyIncomingRingtone, defaultRingtone, loadIncomingRingtone, ringtoneOptions, type RingtoneId } from '../lib/ringtone';
+import { applyIncomingRingtone, defaultRingtone, loadIncomingRingtone, ringtoneAssets, ringtoneOptions, type RingtoneId } from '../lib/ringtone';
 import { colors } from '../theme';
 
 function Row({ icon: Icon, title, subtitle, danger, onPress }: { icon: React.ElementType; title: string; subtitle?: string; danger?: boolean; onPress: () => void }) {
@@ -17,6 +18,11 @@ function Row({ icon: Icon, title, subtitle, danger, onPress }: { icon: React.Ele
 }
 
 const Label = ({ children }: { children: React.ReactNode }) => <Text style={styles.fieldLabel}>{children}</Text>;
+type VoiceOption = { id: string; name: string; gender: string; language: string; accent: string; provider: string };
+const fallbackVoices: VoiceOption[] = [
+  { id: 'AWS.Polly.Joanna-Neural', name: 'Joanna', gender: 'female', language: 'English', accent: 'American', provider: 'carrier' },
+  { id: 'AWS.Polly.Matthew-Neural', name: 'Matthew', gender: 'male', language: 'English', accent: 'American', provider: 'carrier' },
+];
 
 export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWallet }: { openBusinessNonce?: number; onBusinessConsumed?: () => void; onWallet: () => void }) {
   const insets = useSafeAreaInsets();
@@ -39,6 +45,13 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   const [network, setNetwork] = useState<NetInfoState | null>(null);
   const [profileDraft, setProfileDraft] = useState({ fullName: '', jobTitle: '', department: '', mobile: '', location: '', bio: '' });
   const [profilePhoto, setProfilePhoto] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
+  const [voices, setVoices] = useState<VoiceOption[]>(fallbackVoices);
+  const [previewingVoice, setPreviewingVoice] = useState('');
+  const [previewingRingtone, setPreviewingRingtone] = useState<RingtoneId | ''>('');
+  const voicePlayer = useAudioPlayer();
+  const voicePlayerStatus = useAudioPlayerStatus(voicePlayer);
+  const ringtonePlayer = useAudioPlayer();
+  const ringtonePlayerStatus = useAudioPlayerStatus(ringtonePlayer);
 
   useEffect(() => { if (showBusiness) setDraft(business); }, [business, showBusiness]);
   useEffect(() => {
@@ -50,6 +63,14 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
   const canManagePhoneSystem = isPreview || ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(profile?.role || '');
+  useEffect(() => {
+    if (!canManagePhoneSystem || isPreview) return;
+    api.get<{ voices: VoiceOption[]; carrierFallbacks: VoiceOption[] }>('/api/admin/voices')
+      .then((result) => setVoices([...(result.voices || []), ...(result.carrierFallbacks || [])]))
+      .catch(() => setVoices(fallbackVoices));
+  }, [canManagePhoneSystem, isPreview]);
+  useEffect(() => { if (voicePlayerStatus.didJustFinish) setPreviewingVoice(''); }, [voicePlayerStatus.didJustFinish]);
+  useEffect(() => { if (ringtonePlayerStatus.didJustFinish) setPreviewingRingtone(''); }, [ringtonePlayerStatus.didJustFinish]);
 
   const openProfile = () => {
     setProfileDraft({ fullName: profile?.full_name || '', jobTitle: profile?.job_title || '', department: profile?.department || '', mobile: profile?.mobile || '', location: profile?.location || '', bio: profile?.bio || '' });
@@ -106,9 +127,30 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
 
   const selectRingtone = async (next: RingtoneId) => {
     setSaving(true); setError('');
-    try { await applyIncomingRingtone(next); setRingtone(next); setShowRingtones(false); }
+    try {
+      await applyIncomingRingtone(next);
+      setRingtone(next);
+      ringtonePlayer.pause();
+      ringtonePlayer.replace(ringtoneAssets[next]);
+      ringtonePlayer.seekTo(0).catch(() => undefined);
+      ringtonePlayer.play();
+      setPreviewingRingtone(next);
+    }
     catch (ringtoneError) { setError(ringtoneError instanceof Error ? ringtoneError.message : 'Could not update the ringtone.'); }
     finally { setSaving(false); }
+  };
+
+  const previewVoice = async (voice: VoiceOption) => {
+    setError('');
+    try {
+      if (previewingVoice === voice.id && voicePlayerStatus.playing) {
+        voicePlayer.pause(); setPreviewingVoice(''); return;
+      }
+      voicePlayer.pause();
+      voicePlayer.replace(await api.audioSource(`/api/admin/voices?preview=1&voice=${encodeURIComponent(voice.id)}`));
+      voicePlayer.play();
+      setPreviewingVoice(voice.id);
+    } catch (previewError) { setError(previewError instanceof Error ? previewError.message : 'Voice preview is unavailable.'); }
   };
 
   const changeCallMode = async (enabled: boolean) => {
@@ -137,7 +179,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
         <Row icon={Radio} title="Travel data eSIM" subtitle={network?.isConnected ? `${network.type === 'cellular' ? 'Using cellular data' : 'Connected by Wi-Fi'} · carrier activation` : 'No internet connection · carrier coverage required'} onPress={() => setShowEsim(true)} />
         <Row icon={Settings2} title="iPhone permissions" subtitle="Contacts, microphone and notifications" onPress={() => Linking.openSettings()} />
       </View>
-      {['superadmin', 'company_owner', 'owner'].includes(profile?.role || '') && <><Text style={styles.sectionLabel}>SECURITY</Text>
+      {['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(profile?.role || '') && <><Text style={styles.sectionLabel}>SECURITY</Text>
       <View style={styles.group}><Row icon={KeyRound} title="Reset password" subtitle="Change your Vocivo sign-in password" onPress={() => { setError(''); setShowPassword(true); }} /></View></>}
       <View style={styles.group}><Row icon={LogOut} title={isPreview ? 'Exit preview' : 'Sign out'} danger onPress={signOut} /></View>
       <Text style={styles.version}>Vocivo 1.0.0 · Build {Constants.nativeBuildVersion || 'development'}</Text>
@@ -170,7 +212,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
         <View style={styles.divisions}>{draft.departments.map((department, index) => <View key={index} style={styles.divisionRow}><View style={styles.divisionKey}><Text style={styles.divisionKeyText}>{index + 1}</Text></View><TextInput value={department} onChangeText={(name) => setDraft((value) => ({ ...value, departments: value.departments.map((item, itemIndex) => itemIndex === index ? name : item) }))} style={styles.divisionInput} placeholder={`Division ${index + 1}`} placeholderTextColor={colors.textFaint} maxLength={40} />{draft.departments.length > 2 && <Pressable accessibilityLabel={`Remove ${department || `division ${index + 1}`}`} onPress={() => setDraft((value) => ({ ...value, departments: value.departments.filter((_, itemIndex) => itemIndex !== index) }))} style={styles.deleteDivision}><Trash2 size={17} color={colors.coral} /></Pressable>}</View>)}</View>
         {draft.departments.length < 5 && <Pressable onPress={() => setDraft((value) => ({ ...value, departments: [...value.departments, ''] }))} style={styles.addDivision}><Plus size={17} color={colors.mint} /><Text style={styles.addDivisionText}>Add division</Text><Text style={styles.divisionCount}>{draft.departments.length}/5</Text></Pressable>}
         <Label>MESSAGE WHILE WAITING</Label><TextInput value={draft.waitingMessage} onChangeText={(waitingMessage) => setDraft((value) => ({ ...value, waitingMessage }))} style={[styles.field, styles.message]} multiline maxLength={500} placeholder="Tell callers about your company while they wait." placeholderTextColor={colors.textFaint} />
-        <Label>VOICE</Label><View style={styles.choice}>{[{ label: 'Joanna', value: 'AWS.Polly.Joanna-Neural' }, { label: 'Matthew', value: 'AWS.Polly.Matthew-Neural' }].map((voice) => <Pressable key={voice.value} onPress={() => setDraft((value) => ({ ...value, voice: voice.value }))} style={[styles.choiceButton, draft.voice === voice.value && styles.choiceActive]}><Text style={[styles.choiceText, draft.voice === voice.value && styles.choiceTextActive]}>{voice.label}</Text></Pressable>)}</View>
+        <Label>VOICE</Label><View style={styles.voiceList}>{voices.map((voice) => <View key={voice.id} style={[styles.voiceRow, draft.voice === voice.id && styles.voiceRowActive]}><Pressable onPress={() => setDraft((value) => ({ ...value, voice: voice.id }))} style={styles.voiceSelect}><View style={[styles.radio, draft.voice === voice.id && styles.radioActive]}>{draft.voice === voice.id && <Check size={12} color={colors.ink} strokeWidth={3} />}</View><View style={styles.voiceCopy}><Text style={styles.voiceName}>{voice.name}</Text><Text style={styles.voiceMeta}>{voice.gender} · {voice.language} · {voice.accent}</Text></View></Pressable><Pressable accessibilityLabel={`Preview ${voice.name}`} onPress={() => previewVoice(voice)} style={styles.previewButton}>{previewingVoice === voice.id && voicePlayerStatus.playing ? <Pause size={16} color={colors.blue} /> : <Play size={16} color={colors.blue} fill={colors.blue} />}</Pressable></View>)}</View>
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Pressable disabled={saving} onPress={saveBusiness} style={[styles.save, saving && styles.disabled]}>{saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.saveText}>Save and apply to phone number</Text>}</Pressable>
         <Text style={styles.note}>When enabled, Vocivo answers the call, speaks this menu, then rings your team. Standard voice charges apply.</Text>
@@ -194,7 +236,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
       <View style={[styles.modalPage, styles.ringtonePage]}>
         <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>INCOMING CALLS</Text><Text style={styles.modalTitle}>Choose a ringtone</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowRingtones(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <Text style={styles.ringtoneIntro}>Vocivo uses this sound when iPhone CallKit presents an incoming call.</Text>
-        <View style={styles.ringtoneList}>{ringtoneOptions.map((option) => <Pressable disabled={saving} key={option.id} onPress={() => selectRingtone(option.id)} style={({ pressed }) => [styles.ringtoneRow, pressed && styles.pressed]}><View style={[styles.ringtoneIcon, ringtone === option.id && styles.ringtoneIconActive]}><BellRing size={19} color={ringtone === option.id ? colors.ink : colors.blue} /></View><View style={styles.ringtoneCopy}><Text style={styles.ringtoneTitle}>{option.label}</Text><Text style={styles.ringtoneDetail}>{option.description}</Text></View>{ringtone === option.id && <Check size={20} color={colors.mint} />}</Pressable>)}</View>
+        <View style={styles.ringtoneList}>{ringtoneOptions.map((option) => <Pressable disabled={saving} key={option.id} onPress={() => selectRingtone(option.id)} style={({ pressed }) => [styles.ringtoneRow, pressed && styles.pressed]}><View style={[styles.ringtoneIcon, ringtone === option.id && styles.ringtoneIconActive]}>{previewingRingtone === option.id && ringtonePlayerStatus.playing ? <Pause size={18} color={ringtone === option.id ? colors.ink : colors.blue} /> : <Play size={18} color={ringtone === option.id ? colors.ink : colors.blue} fill={ringtone === option.id ? colors.ink : colors.blue} />}</View><View style={styles.ringtoneCopy}><Text style={styles.ringtoneTitle}>{option.label}</Text><Text style={styles.ringtoneDetail}>{option.description}</Text></View>{ringtone === option.id && <Check size={20} color={colors.mint} />}</Pressable>)}</View>
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Text style={styles.note}>The iPhone Ring/Silent switch, Focus mode and system volume still control whether sound is audible.</Text>
       </View>
@@ -228,6 +270,7 @@ const styles = StyleSheet.create({
   profile: { minHeight: 86, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center', marginRight: 13 }, avatarImage: { width: 52, height: 52, borderRadius: 26, marginRight: 13, backgroundColor: colors.panel }, initials: { color: colors.ink, fontSize: 18, fontWeight: '900' }, profileCopy: { flex: 1 }, profileName: { color: colors.text, fontSize: 16, fontWeight: '800' }, profileEmail: { color: colors.textMuted, fontSize: 11, marginTop: 4 }, previewBadge: { height: 22, paddingHorizontal: 7, borderRadius: 5, backgroundColor: '#2A2414', justifyContent: 'center' }, previewBadgeText: { color: colors.amber, fontSize: 8, fontWeight: '900' },
   sectionLabel: { color: colors.textFaint, fontSize: 10, fontWeight: '800', marginTop: 25, marginBottom: 8 }, callMode: { height: 68, padding: 3, position: 'relative', flexDirection: 'row', borderRadius: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line }, callModeButton: { flex: 1, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 6 }, callModeActive: { backgroundColor: colors.mint }, callModeTitle: { color: colors.text, fontSize: 12, fontWeight: '900' }, callModeTitleActive: { color: colors.ink }, callModeHelp: { color: colors.textFaint, fontSize: 8, marginTop: 3 }, callModeHelpActive: { color: '#17354A' }, callModeBusy: { position: 'absolute', right: 7, top: 7 }, group: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, marginBottom: 18 }, row: { minHeight: 66, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, pressed: { opacity: 0.65 }, rowIcon: { width: 38, height: 38, borderRadius: 8, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, rowIconDanger: { backgroundColor: '#281616' }, rowCopy: { flex: 1 }, rowTitle: { color: colors.text, fontSize: 14, fontWeight: '700' }, rowSubtitle: { color: colors.textFaint, fontSize: 10, marginTop: 4 }, danger: { color: colors.coral }, version: { color: colors.textFaint, textAlign: 'center', fontSize: 10, marginTop: 10 },
   modalPage: { flex: 1, backgroundColor: colors.canvas }, modalContent: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 40 }, passwordPage: { paddingHorizontal: 20, paddingTop: 22 }, ringtonePage: { paddingHorizontal: 20, paddingTop: 22 }, modalHeader: { minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, modalTitle: { color: colors.text, fontSize: 23, fontWeight: '800', marginTop: 4 }, close: { width: 42, height: 42, borderRadius: 8, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center' }, photoEditor: { width: 106, height: 106, alignSelf: 'center', marginTop: 16 }, photoPreview: { width: 106, height: 106, borderRadius: 53, backgroundColor: colors.panel }, photoFallback: { width: 106, height: 106, borderRadius: 53, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.blue }, photoInitials: { color: colors.ink, fontSize: 30, fontWeight: '900' }, cameraBadge: { position: 'absolute', right: 0, bottom: 0, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.mint, borderWidth: 3, borderColor: colors.canvas }, photoHelp: { color: colors.textMuted, fontSize: 10, textAlign: 'center', marginTop: 10 }, enableRow: { minHeight: 84, marginTop: 10, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, enableCopy: { flex: 1, paddingRight: 14 }, fieldTitle: { color: colors.text, fontSize: 14, fontWeight: '800' }, fieldHelp: { color: colors.textMuted, fontSize: 10, lineHeight: 15, marginTop: 6 }, fieldLabel: { color: colors.textFaint, fontSize: 10, fontWeight: '900', marginTop: 20, marginBottom: 8 }, field: { minHeight: 48, paddingHorizontal: 12, borderRadius: 8, color: colors.text, fontSize: 14, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line }, readOnlyField: { justifyContent: 'center', opacity: 0.72 }, readOnlyText: { color: colors.textMuted, fontSize: 14 }, message: { height: 94, paddingTop: 12, textAlignVertical: 'top' }, divisions: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, divisionRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, divisionKey: { width: 32, height: 32, borderRadius: 7, backgroundColor: '#12334A', alignItems: 'center', justifyContent: 'center' }, divisionKeyText: { color: colors.mint, fontSize: 12, fontWeight: '900' }, divisionInput: { flex: 1, minHeight: 52, paddingHorizontal: 12, color: colors.text, fontSize: 14, fontWeight: '700' }, deleteDivision: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' }, addDivision: { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8 }, addDivisionText: { flex: 1, color: colors.mint, fontSize: 12, fontWeight: '800' }, divisionCount: { color: colors.textFaint, fontSize: 10, fontWeight: '800' }, choice: { height: 46, padding: 3, flexDirection: 'row', borderRadius: 8, backgroundColor: colors.panel }, choiceButton: { flex: 1, borderRadius: 6, alignItems: 'center', justifyContent: 'center' }, choiceActive: { backgroundColor: colors.panelRaised }, choiceText: { color: colors.textMuted, fontSize: 12, fontWeight: '800' }, choiceTextActive: { color: colors.mint }, error: { color: colors.coral, fontSize: 11, lineHeight: 16, marginTop: 14, textAlign: 'center' }, save: { height: 52, marginTop: 24, borderRadius: 8, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }, disabled: { opacity: 0.35 }, saveText: { color: colors.ink, fontSize: 14, fontWeight: '900' }, note: { color: colors.textFaint, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 10, paddingHorizontal: 12 }, ringtoneIntro: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 12, marginBottom: 18 }, ringtoneList: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, ringtoneRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, ringtoneIcon: { width: 40, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.panel }, ringtoneIconActive: { backgroundColor: colors.mint }, ringtoneCopy: { flex: 1, minWidth: 0, paddingHorizontal: 12 }, ringtoneTitle: { color: colors.text, fontSize: 14, fontWeight: '800' }, ringtoneDetail: { color: colors.textMuted, fontSize: 10, marginTop: 4 },
+  voiceList: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, voiceRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, voiceRowActive: { backgroundColor: '#0E2638' }, voiceSelect: { flex: 1, minWidth: 0, minHeight: 62, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center' }, radio: { width: 22, height: 22, borderRadius: 11, marginRight: 11, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.line }, radioActive: { backgroundColor: colors.mint, borderColor: colors.mint }, voiceCopy: { flex: 1, minWidth: 0 }, voiceName: { color: colors.text, fontSize: 13, fontWeight: '800' }, voiceMeta: { color: colors.textMuted, fontSize: 9, marginTop: 4, textTransform: 'capitalize' }, previewButton: { width: 46, height: 46, marginRight: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: colors.panel },
   connectivityHero: { minHeight: 94, marginTop: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 8, backgroundColor: colors.panel },
   esimSteps: { gap: 16, paddingVertical: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, esimStepNumber: { color: colors.mint, fontWeight: '900' },
 });

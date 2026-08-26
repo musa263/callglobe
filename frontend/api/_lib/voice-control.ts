@@ -14,6 +14,12 @@ export type VoiceState = {
   callerName?: string;
   organizationId?: string;
   routeId?: string;
+  sourceExtensionId?: string;
+  sourceExtension?: string;
+  sourceName?: string;
+  destinationExtensionId?: string;
+  destinationExtension?: string;
+  destinationName?: string;
   inboundNumber?: string;
   callerId?: string;
   handlingId?: string;

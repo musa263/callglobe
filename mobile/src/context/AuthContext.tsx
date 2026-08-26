@@ -27,6 +27,7 @@ type SessionResponse = { profile: Omit<Profile, 'balance'> };
 type AccountResponse = { balance: number | null; currency: string; rates: CallRate[]; can_call?: boolean };
 type NumbersResponse = { numbers: CallerNumber[] };
 type HistoryResponse = { calls: CallLog[] };
+type DirectoryResponse = { users: Array<{ id: string; extension: string; name: string; sipUsername: string }> };
 type UserProfileResponse = { profile: { id: string; fullName: string; email: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photoUrl?: string } };
 
 function mobileProfile(value: UserProfileResponse['profile']): Omit<Profile, 'balance' | 'currency'> {
@@ -81,6 +82,24 @@ function mergeHistory(local: CallLog[], server: CallLog[]) {
   return result.slice(0, 100);
 }
 
+function normalizeHistoryIdentity(call: CallLog, directory: DirectoryResponse['users']) {
+  const raw = String(call.destination_number || '').trim();
+  const sipUser = raw.match(/^sip:([^@]+)@/i)?.[1];
+  const colleague = sipUser
+    ? directory.find((user) => user.sipUsername === sipUser)
+    : call.destination_country === 'Internal'
+      ? directory.find((user) => user.extension === raw.replace(/\D/g, ''))
+      : undefined;
+  if (!sipUser && !call.internal && call.destination_country !== 'Internal') return call;
+  return {
+    ...call,
+    destination_number: colleague?.extension || (sipUser ? 'Internal extension' : raw),
+    destination_name: call.destination_name && !/^sip:/i.test(call.destination_name) ? call.destination_name : colleague?.name || 'Internal call',
+    destination_country: 'Internal',
+    internal: true,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setAuthenticated] = useState(false);
@@ -95,20 +114,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!baseProfile?.id) throw new Error('Account identity was not returned.');
     if (baseProfile.admin_only) throw new Error('This administrator account uses the Vocivo web portal. Assign a calling extension before using the mobile app.');
     const fallbackProfile: UserProfileResponse = { profile: { id: baseProfile.id, fullName: baseProfile.full_name || '', email: baseProfile.email, jobTitle: baseProfile.job_title || '', department: baseProfile.department || '', mobile: baseProfile.mobile || '', location: baseProfile.location || '', bio: baseProfile.bio || '', photoUrl: baseProfile.photo_url } };
-    const [account, numbers, verified, storedHistory, serverHistory, userProfile] = await Promise.all([
+    const [account, numbers, verified, storedHistory, serverHistory, userProfile, directory] = await Promise.all([
       api.get<AccountResponse>('/api/telnyx/account').catch(() => ({ balance: null, currency: baseProfile.currency || 'USD', rates: [], can_call: false })),
       api.get<NumbersResponse>('/api/telnyx/numbers').catch(() => ({ numbers: [] })),
       api.get<NumbersResponse>('/api/telnyx/verified-numbers').catch(() => ({ numbers: [] })),
       readHistory(baseProfile.id),
       api.get<HistoryResponse>('/api/voice/history').catch(() => ({ calls: [] })),
       api.get<UserProfileResponse>('/api/auth/profile').catch(() => fallbackProfile),
+      api.get<DirectoryResponse>('/api/voice/directory').catch(() => ({ users: [] })),
     ]);
     const details = mobileProfile(userProfile.profile);
     if (baseProfile) setProfile({ ...baseProfile, ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency });
     else setProfile((current) => current ? { ...current, ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency } : { ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency });
     if (account.rates?.length) setRates(normalizeRates(account.rates));
     setCallerNumbers([...(numbers.numbers ?? []), ...(verified.numbers ?? [])]);
-    const mergedHistory = mergeHistory(storedHistory, serverHistory.calls ?? []);
+    const mergedHistory = mergeHistory(
+      storedHistory.map((call) => normalizeHistoryIdentity(call, directory.users || [])),
+      (serverHistory.calls ?? []).map((call) => normalizeHistoryIdentity(call, directory.users || [])),
+    );
     historyRef.current = mergedHistory;
     setHistory(mergedHistory);
     await AsyncStorage.setItem(historyKey(baseProfile.id), JSON.stringify(mergedHistory));

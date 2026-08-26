@@ -76,7 +76,7 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
             <View style={styles.row}>
               {item.photoUrl ? <Image source={{ uri: item.photoUrl }} style={styles.avatarPhoto} /> : <View style={[styles.avatar, item.internal && styles.teamAvatar]}><Text style={styles.initial}>{item.name.charAt(0).toUpperCase()}</Text></View>}
               <View style={styles.details}><Text numberOfLines={1} style={styles.name}>{item.name}</Text><Text numberOfLines={1} style={styles.number}>{item.internal ? `Extension ${item.extension} · ${item.label || 'Company'}` : `${item.number}${item.label ? `  ·  ${item.label}` : ''}`}</Text></View>
-              {!item.internal && <Pressable accessibilityLabel={`Message ${item.name}`} onPress={() => onMessage(item)} style={styles.action}><MessageSquareText size={19} color={colors.blue} /></Pressable>}
+              <Pressable accessibilityLabel={`Message ${item.name}`} onPress={() => onMessage(item)} style={styles.action}><MessageSquareText size={19} color={colors.blue} /></Pressable>
               <Pressable accessibilityLabel={`Call ${item.name}`} onPress={() => onCall(item)} style={[styles.action, styles.callAction]}><Phone size={18} color={colors.mint} /></Pressable>
             </View>
           )}

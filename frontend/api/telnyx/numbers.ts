@@ -29,7 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const numbers = (payload.data ?? []).filter((number) => sessionCanAccessNumber(session, number.phone_number, config)).map((number) => ({
       id: number.id,
       phone_number: number.phone_number,
-      label: number.tags?.[0] || number.connection_name || number.phone_number,
+      label: config.numberAssignments[number.phone_number]?.label || number.connection_name || 'Vocivo number',
       country_code: number.country_iso_alpha2 || null,
       status: number.status || 'active',
       receives_calls: [connectionId, callControlApplicationId].includes(number.connection_id || ''),

@@ -4,11 +4,12 @@ import { AlertCircle, ArrowLeft, Check, ContactRound, Inbox, MessageSquareText, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMessaging } from '../context/MessagingContext';
 import { useBusiness } from '../context/BusinessContext';
+import { useAuth } from '../context/AuthContext';
 import type { NavigationTarget, SmsMessage } from '../types';
 import { colors } from '../theme';
 
 type Mailbox = 'inbox' | 'sent';
-type Thread = { peer: string; name?: string; messages: SmsMessage[]; latest: SmsMessage; inbound: boolean; outbound: boolean };
+type Thread = { peer: string; name?: string; messages: SmsMessage[]; latest: SmsMessage; inbound: boolean; outbound: boolean; transport: 'sms' | 'internal' };
 
 const compactNumber = (value: string) => value.replace(/[\s()-]/g, '');
 const peerFor = (message: SmsMessage) => compactNumber(message.direction === 'inbound' ? (message.from || message.to) : message.to);
@@ -18,6 +19,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
   const insets = useSafeAreaInsets();
   const { messages, loading, refreshMessages, sendMessage, suggestReplies } = useMessaging();
   const { profile: business } = useBusiness();
+  const { profile, callerNumbers } = useAuth();
   const [mailbox, setMailbox] = useState<Mailbox>('inbox');
   const [activePeer, setActivePeer] = useState('');
   const [recipient, setRecipient] = useState('');
@@ -28,12 +30,16 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
   const [error, setError] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggesting, setSuggesting] = useState(false);
+  const [transport, setTransport] = useState<'sms' | 'internal'>(profile?.account_type === 'business' ? 'internal' : 'sms');
+  const externalSmsReady = callerNumbers.some((number) => number.source === 'owned' && number.messaging_enabled);
 
   useEffect(() => {
     if (!target) return;
-    const number = compactNumber(target.number);
+    const nextTransport = target.internal ? 'internal' : 'sms';
+    const number = target.internal ? target.number.replace(/\D/g, '') : compactNumber(target.number);
+    setTransport(nextTransport);
     setRecipient(number);
-    setActivePeer(number);
+    setActivePeer(nextTransport === 'internal' ? `extension:${number}` : number);
     setContactName(target.name ?? '');
     setError('');
   }, [target]);
@@ -60,6 +66,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
         latest: sorted[0]!,
         inbound: sorted.some((item) => item.direction === 'inbound'),
         outbound: sorted.some((item) => item.direction === 'outbound'),
+        transport: sorted[0]?.transport || (peer.startsWith('extension:') ? 'internal' : 'sms'),
       };
     }).sort((a, b) => +new Date(b.latest.createdAt) - +new Date(a.latest.createdAt));
   }, [messages]);
@@ -78,8 +85,9 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
 
   const openThread = (thread: Thread) => {
     setActivePeer(thread.peer);
-    setRecipient(thread.peer);
+    setRecipient(thread.transport === 'internal' ? thread.peer.replace(/^extension:/, '') : thread.peer);
     setContactName(thread.name ?? '');
+    setTransport(thread.transport);
     setBody('');
     setError('');
   };
@@ -90,6 +98,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
     setContactName('');
     setBody('');
     setError('');
+    setTransport(profile?.account_type === 'business' ? 'internal' : 'sms');
   };
 
   const closeThread = () => {
@@ -101,16 +110,16 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
     Keyboard.dismiss();
   };
 
-  const canSend = /^\+[1-9]\d{6,14}$/.test(compactNumber(recipient)) && body.trim().length > 0 && !sending;
+  const canSend = (transport === 'internal' ? /^\d{2,5}$/.test(recipient.replace(/\D/g, '')) : externalSmsReady && /^\+[1-9]\d{6,14}$/.test(compactNumber(recipient))) && body.trim().length > 0 && !sending;
   const submit = async () => {
     if (!canSend) return;
     setSending(true);
     setError('');
     try {
       const normalized = compactNumber(recipient);
-      await sendMessage(normalized, body, contactName || undefined);
+      await sendMessage(normalized, body, contactName || undefined, transport);
       setRecipient(normalized);
-      setActivePeer(normalized);
+      setActivePeer(transport === 'internal' ? `extension:${normalized}` : normalized);
       setBody('');
       setSuggestions([]);
       Keyboard.dismiss();
@@ -151,9 +160,11 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
           <View style={styles.conversationIdentity}><Text numberOfLines={1} style={styles.conversationName}>{contactName || (activePeer === 'new' ? 'New message' : activePeer)}</Text>{!!contactName && <Text style={styles.conversationNumber}>{recipient}</Text>}</View>
           <Pressable accessibilityLabel="Choose from contacts" onPress={onContacts} style={styles.iconButton}><ContactRound size={20} color={colors.blue} /></Pressable>
         </View>
-        {(activePeer === 'new' || !recipient) && <View style={styles.recipientRow}><Text style={styles.to}>TO</Text><TextInput autoFocus value={recipient} onChangeText={(value) => { setRecipient(value); setContactName(''); }} keyboardType="phone-pad" placeholder="+966 50 123 4567" placeholderTextColor={colors.textFaint} style={styles.recipient} /></View>}
+        {activePeer === 'new' && profile?.account_type === 'business' && <View style={styles.transport}><Pressable onPress={() => { setTransport('internal'); setRecipient(''); setContactName(''); }} style={[styles.transportButton, transport === 'internal' && styles.transportActive]}><Text style={[styles.transportText, transport === 'internal' && styles.transportTextActive]}>Extension</Text></Pressable><Pressable onPress={() => { setTransport('sms'); setRecipient(''); setContactName(''); }} style={[styles.transportButton, transport === 'sms' && styles.transportActive]}><Text style={[styles.transportText, transport === 'sms' && styles.transportTextActive]}>External SMS</Text></Pressable></View>}
+        {(activePeer === 'new' || !recipient) && <View style={styles.recipientRow}><Text style={styles.to}>TO</Text><TextInput autoFocus value={recipient} onChangeText={(value) => { setRecipient(transport === 'internal' ? value.replace(/\D/g, '').slice(0, 5) : value); setContactName(''); }} keyboardType="phone-pad" placeholder={transport === 'internal' ? 'Company extension' : '+966 50 123 4567'} placeholderTextColor={colors.textFaint} style={styles.recipient} /></View>}
+        {transport === 'sms' && !externalSmsReady && <View style={styles.smsUnavailable}><AlertCircle size={15} color={colors.amber} /><Text style={styles.smsUnavailableText}>External SMS becomes available when an administrator assigns an SMS-enabled company number.</Text></View>}
         <View style={styles.history}>
-          {loading && !messages.length ? <ActivityIndicator color={colors.blue} style={styles.loader} /> : <FlatList data={conversation} inverted keyExtractor={(item) => item.id} keyboardShouldPersistTaps="handled" contentContainerStyle={conversation.length ? styles.messageList : styles.emptyList} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}><MessageSquareText size={30} color={colors.textFaint} /></View><Text style={styles.emptyTitle}>Start the conversation</Text><Text style={styles.emptyBody}>Messages use full international numbers beginning with +.</Text></View>} renderItem={({ item }) => <View style={[styles.message, item.direction === 'inbound' && styles.messageInbound]}><Text style={styles.messageText}>{item.text}</Text><View style={styles.messageMeta}><Text style={styles.messageTime}>{stamp(item.createdAt)}</Text>{item.status === 'failed' ? <AlertCircle size={12} color={colors.coral} /> : item.direction === 'outbound' ? <Check size={13} color={colors.mint} /> : null}</View>{item.error && <Text style={styles.messageError}>{item.error}</Text>}</View>} />}
+          {loading && !messages.length ? <ActivityIndicator color={colors.blue} style={styles.loader} /> : <FlatList data={conversation} inverted keyExtractor={(item) => item.id} keyboardShouldPersistTaps="handled" contentContainerStyle={conversation.length ? styles.messageList : styles.emptyList} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}><MessageSquareText size={30} color={colors.textFaint} /></View><Text style={styles.emptyTitle}>Start the conversation</Text><Text style={styles.emptyBody}>{transport === 'internal' ? 'Private extension messages stay inside your company.' : 'External SMS uses a full international number beginning with +.'}</Text></View>} renderItem={({ item }) => <View style={[styles.message, item.direction === 'inbound' && styles.messageInbound]}><Text style={styles.messageText}>{item.text}</Text><View style={styles.messageMeta}><Text style={styles.messageTime}>{stamp(item.createdAt)}</Text>{item.status === 'failed' ? <AlertCircle size={12} color={colors.coral} /> : item.direction === 'outbound' ? <Check size={13} color={colors.mint} /> : null}</View>{item.error && <Text style={styles.messageError}>{item.error}</Text>}</View>} />}
         </View>
         {!!error && <Text style={styles.error}>{error}</Text>}
         {!!suggestions.length && <View style={styles.suggestions}>{suggestions.map((suggestion, index) => <Pressable key={`${index}-${suggestion}`} onPress={() => { setBody(suggestion); setSuggestions([]); }} style={styles.suggestion}><Sparkles size={13} color={colors.blue} /><Text numberOfLines={3} style={styles.suggestionText}>{suggestion}</Text></Pressable>)}</View>}
@@ -174,7 +185,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
         <Pressable onPress={() => setMailbox('sent')} style={[styles.mailbox, mailbox === 'sent' && styles.mailboxActive]}><SendHorizontal size={17} color={mailbox === 'sent' ? colors.blue : colors.textMuted} /><Text style={[styles.mailboxText, mailbox === 'sent' && styles.mailboxTextActive]}>Sent</Text></Pressable>
       </View>
       <View style={styles.searchBox}><Search size={18} color={colors.textFaint} /><TextInput value={query} onChangeText={setQuery} placeholder="Search messages" placeholderTextColor={colors.textFaint} style={styles.searchInput} /></View>
-      {loading && !messages.length ? <ActivityIndicator color={colors.blue} style={styles.loader} /> : <FlatList data={visibleThreads} keyExtractor={(item) => item.peer} contentContainerStyle={visibleThreads.length ? styles.threadList : styles.emptyList} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}>{mailbox === 'inbox' ? <Inbox size={30} color={colors.textFaint} /> : <SendHorizontal size={30} color={colors.textFaint} />}</View><Text style={styles.emptyTitle}>{mailbox === 'inbox' ? 'Your inbox is clear' : 'No sent messages'}</Text><Text style={styles.emptyBody}>International SMS conversations will appear here.</Text></View>} renderItem={({ item }) => <Pressable onPress={() => openThread(item)} style={({ pressed }) => [styles.thread, pressed && styles.threadPressed]}><View style={styles.avatar}><Text style={styles.avatarText}>{(item.name || item.peer).replace('+', '').slice(0, 2).toUpperCase()}</Text></View><View style={styles.threadBody}><View style={styles.threadTop}><Text numberOfLines={1} style={styles.threadName}>{item.name || item.peer}</Text><Text style={styles.threadTime}>{stamp(item.latest.createdAt)}</Text></View><Text numberOfLines={1} style={styles.threadPreview}>{item.latest.direction === 'outbound' ? 'You: ' : ''}{item.latest.text}</Text></View></Pressable>} />}
+      {loading && !messages.length ? <ActivityIndicator color={colors.blue} style={styles.loader} /> : <FlatList data={visibleThreads} keyExtractor={(item) => item.peer} contentContainerStyle={visibleThreads.length ? styles.threadList : styles.emptyList} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}>{mailbox === 'inbox' ? <Inbox size={30} color={colors.textFaint} /> : <SendHorizontal size={30} color={colors.textFaint} />}</View><Text style={styles.emptyTitle}>{mailbox === 'inbox' ? 'Your inbox is clear' : 'No sent messages'}</Text><Text style={styles.emptyBody}>Company extension messages and enabled external SMS conversations appear here.</Text></View>} renderItem={({ item }) => <Pressable onPress={() => openThread(item)} style={({ pressed }) => [styles.thread, pressed && styles.threadPressed]}><View style={styles.avatar}><Text style={styles.avatarText}>{(item.name || item.peer).replace('+', '').slice(0, 2).toUpperCase()}</Text></View><View style={styles.threadBody}><View style={styles.threadTop}><Text numberOfLines={1} style={styles.threadName}>{item.name || item.peer.replace('extension:', 'Extension ')}</Text><Text style={styles.threadTime}>{stamp(item.latest.createdAt)}</Text></View><Text style={styles.threadChannel}>{item.transport === 'internal' ? 'COMPANY' : 'SMS'}</Text><Text numberOfLines={1} style={styles.threadPreview}>{item.latest.direction === 'outbound' ? 'You: ' : ''}{item.latest.text}</Text></View></Pressable>} />}
     </View>
   );
 }
@@ -201,12 +212,18 @@ const styles = StyleSheet.create({
   threadTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   threadName: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '800' },
   threadTime: { color: colors.textFaint, fontSize: 10 },
+  threadChannel: { color: colors.blue, fontSize: 8, fontWeight: '900', marginTop: 3 },
   threadPreview: { color: colors.textMuted, fontSize: 12, marginTop: 6 },
   conversationHeader: { minHeight: 58, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
   iconButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
   conversationIdentity: { flex: 1, alignItems: 'center' },
   conversationName: { maxWidth: '95%', color: colors.text, fontSize: 15, fontWeight: '800' },
   conversationNumber: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
+  transport: { height: 42, marginHorizontal: 20, marginTop: 8, padding: 3, flexDirection: 'row', borderRadius: 8, backgroundColor: colors.panel },
+  transportButton: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 6 },
+  transportActive: { backgroundColor: colors.panelRaised },
+  transportText: { color: colors.textMuted, fontSize: 11, fontWeight: '800' },
+  transportTextActive: { color: colors.blue },
   recipientRow: { minHeight: 52, marginHorizontal: 20, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderBottomColor: colors.line },
   to: { color: colors.textFaint, fontSize: 10, fontWeight: '900' },
   recipient: { flex: 1, color: colors.text, fontSize: 15, paddingVertical: 0 },
@@ -233,4 +250,6 @@ const styles = StyleSheet.create({
   send: { width: 44, height: 44, borderRadius: 8, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' },
   ai: { width: 44, height: 44, borderRadius: 8, backgroundColor: '#101C27', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#20364A' },
   sendDisabled: { opacity: 0.28 },
+  smsUnavailable: { minHeight: 44, marginHorizontal: 20, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#2B2718', borderWidth: 1, borderColor: '#665423', borderRadius: 8 },
+  smsUnavailableText: { flex: 1, color: colors.textMuted, fontSize: 10, lineHeight: 14 },
 });

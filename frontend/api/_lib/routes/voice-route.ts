@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { assertCallerIdForSession } from '../phone-number-access.js';
-import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { authorizeOutboundCall } from '../outbound-policy.js';
 import { getExtension, listExtensions } from '../pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
@@ -30,6 +30,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let callerId: string | undefined;
     let callerName: string | undefined;
     let callerExtension: string | undefined;
+    let sourceExtensionId: string | undefined;
+    let destinationName: string | undefined;
+    let destinationExtension: string | undefined;
+    let destinationExtensionId: string | undefined;
     if (requestedFlow === 'internal') {
       const match = destination.match(internalSip);
       const organization = config.organizations.find((item) => item.id === organizationId);
@@ -42,12 +46,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const profile = await readUserProfile(`vocivo-extension:${source.id}`);
       callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);
       callerExtension = source.extension;
+      sourceExtensionId = source.id;
+      destinationName = target.name;
+      destinationExtension = target.extension;
+      destinationExtensionId = target.id;
     } else {
       if (!e164.test(destination)) return res.status(400).json({ error: 'Use a complete international destination beginning with +.' });
       const profile = session.extensionId ? config.userProfiles[session.extensionId] : undefined;
       const preferredCallerId = typeof req.body?.callerId === 'string' && req.body.callerId.trim()
         ? req.body.callerId
-        : profile?.outboundCallerId || config.company.defaultCallerId || requiredEnv('TELNYX_SMS_FROM');
+        : profile?.outboundCallerId || config.company.defaultCallerId;
+      if (!preferredCallerId) return res.status(409).json({ error: 'No caller ID is assigned to this account. Ask your administrator to assign a phone number or verified caller ID.' });
       callerId = await assertCallerIdForSession(session, preferredCallerId);
       const extension = session.extensionId ? await getExtension(session.extensionId) : undefined;
       authorizeOutboundCall(pbxForOrganization(config, organizationId), {
@@ -65,6 +74,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerId,
       callerName,
       callerExtension,
+      sourceExtensionId,
+      destinationName,
+      destinationExtension,
+      destinationExtensionId,
       flow: requestedFlow,
       phase: 'dialing',
       createdAt: new Date(now).toISOString(),
@@ -78,6 +91,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerId: route.callerId,
       callerName: route.callerName,
       callerExtension: route.callerExtension,
+      sourceExtensionId: route.sourceExtensionId,
+      destinationName: route.destinationName,
+      destinationExtension: route.destinationExtension,
+      destinationExtensionId: route.destinationExtensionId,
       flow: route.flow,
     });
     return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId, callerName: route.callerName, callerExtension: route.callerExtension });

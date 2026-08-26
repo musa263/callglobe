@@ -35,3 +35,20 @@ test('keeps tenants separate and marks unanswered incoming calls missed', () => 
 test('does not expose internal agent legs as separate recent calls', () => {
   assert.deepEqual(callHistoryFromEvents([event({ direction: 'outgoing', flow: 'agent', to: 'sip:user@sip.telnyx.com' })], 'primary'), []);
 });
+
+test('shows the colleague name and extension to each participant in an internal call', () => {
+  const events = [
+    event({ flow: 'internal', sourceExtensionId: 'musa', sourceExtension: '2000', sourceName: 'Musa Usman', destinationExtensionId: 'othman', destinationExtension: '2001', destinationName: 'Othman Uthman' }),
+    event({ name: 'call.answered', flow: 'outbound_destination', sourceExtensionId: 'musa', sourceExtension: '2000', sourceName: 'Musa Usman', destinationExtensionId: 'othman', destinationExtension: '2001', destinationName: 'Othman Uthman' }),
+    event({ name: 'call.hangup', event_timestamp: '2026-08-25T10:01:00.000Z', flow: 'outbound_destination', sourceExtensionId: 'musa', sourceExtension: '2000', sourceName: 'Musa Usman', destinationExtensionId: 'othman', destinationExtension: '2001', destinationName: 'Othman Uthman' }),
+  ];
+  const caller = callHistoryFromEvents(events, 'primary', 100, { extensionId: 'musa' })[0];
+  const recipient = callHistoryFromEvents(events, 'primary', 100, { extensionId: 'othman' })[0];
+  assert.equal(caller.destination_name, 'Othman Uthman');
+  assert.equal(caller.destination_number, '2001');
+  assert.equal(caller.direction, 'outgoing');
+  assert.equal(recipient.destination_name, 'Musa Usman');
+  assert.equal(recipient.destination_number, '2000');
+  assert.equal(recipient.direction, 'incoming');
+  assert.equal(recipient.internal, true);
+});

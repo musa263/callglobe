@@ -32,7 +32,7 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
   const { profile: business, saveProfile } = useBusiness();
   const [switchingMode, setSwitchingMode] = useState(false);
   const firstName = profile?.full_name?.split(/\s+/)[0] || 'there';
-  const primaryNumber = callerNumbers.find((number) => number.source === 'owned')?.phone_number || callerNumbers[0]?.phone_number || 'No caller ID selected';
+  const primaryNumber = callerNumbers.find((number) => number.source === 'owned')?.phone_number || callerNumbers[0]?.phone_number || (business.enabled ? 'No company number assigned' : 'No caller ID assigned');
   const backgroundSource = business.backgroundImageUrl ? { uri: business.backgroundImageUrl } : heritageImage;
 
   const changeMode = async (enabled: boolean) => {
@@ -77,7 +77,7 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
     <View style={styles.recents}>
       {history.slice(0, 3).map((call) => <Pressable key={call.id} onPress={() => onRecentCall(call)} style={({ pressed }) => [styles.recentRow, pressed && styles.pressed]}>
         <View style={styles.recentIcon}><Clock3 size={17} color={call.status === 'completed' ? colors.blue : colors.coral} /></View>
-        <View style={styles.recentCopy}><Text numberOfLines={1} style={styles.recentName}>{call.destination_name || call.destination_number}</Text><Text numberOfLines={1} style={styles.recentMeta}>{call.destination_name ? call.destination_number : call.destination_country || 'Phone call'} · {relativeCallTime(call.started_at)}</Text></View>
+        <View style={styles.recentCopy}><Text numberOfLines={1} style={styles.recentName}>{call.destination_name || (/^sip:/i.test(call.destination_number) ? 'Internal call' : call.destination_number)}</Text><Text numberOfLines={1} style={styles.recentMeta}>{call.internal || call.destination_country === 'Internal' ? `Extension ${call.destination_number.replace(/\D/g, '') || 'call'}` : call.destination_name ? call.destination_number : call.destination_country || 'Phone call'} · {relativeCallTime(call.started_at)}</Text></View>
         <Phone size={17} color={colors.mint} />
       </Pressable>)}
       {!history.length && <View style={styles.noRecents}><Clock3 size={18} color={colors.textFaint} /><Text style={styles.noRecentsText}>Your latest calls will appear here.</Text></View>}

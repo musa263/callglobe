@@ -56,13 +56,13 @@ function AuthenticatedApp() {
   if (activeCall && !callMinimized) return <ActiveCallScreen onMinimize={() => setCallMinimized(true)} />;
   if (showVideo) return <VideoMeetingScreen onClose={() => setShowVideo(false)} />;
   if (showWallet) return <WalletScreen onBack={() => setShowWallet(false)} />;
-  const openDialer = (number: string, name?: string) => {
+  const openDialer = (number: string, name?: string, internal = false) => {
     setCallSurface('direct');
-    setDialTarget({ number, name, nonce: Date.now() });
+    setDialTarget({ number, name, internal, nonce: Date.now() });
     setTab('dial');
   };
-  const openMessages = (number: string, name?: string) => {
-    setMessageTarget({ number, name, nonce: Date.now() });
+  const openMessages = (number: string, name?: string, internal = false) => {
+    setMessageTarget({ number, name, internal, nonce: Date.now() });
     setTab('messages');
   };
   const changeTab = (next: AppTab) => {
@@ -89,11 +89,11 @@ function AuthenticatedApp() {
   return (
     <View style={styles.app}>
       <View style={styles.screen}>
-        {tab === 'dial' && callSurface === 'home' && <HomeScreen onDial={() => setCallSurface('direct')} onConference={() => setCallSurface('conference')} onBusiness={() => { setBusinessNonce(Date.now()); setTab('settings'); }} onWallet={() => setShowWallet(true)} onRecentCall={(call) => openDialer(call.destination_number, call.destination_name ?? undefined)} />}
+        {tab === 'dial' && callSurface === 'home' && <HomeScreen onDial={() => setCallSurface('direct')} onConference={() => setCallSurface('conference')} onBusiness={() => { setBusinessNonce(Date.now()); setTab('settings'); }} onWallet={() => setShowWallet(true)} onRecentCall={(call) => openDialer(call.destination_number, call.destination_name ?? undefined, Boolean(call.internal || call.destination_country === 'Internal'))} />}
         {tab === 'dial' && callSurface === 'direct' && <DialerScreen target={dialTarget} onWallet={() => setShowWallet(true)} onConference={() => setCallSurface('conference')} />}
         {tab === 'dial' && callSurface === 'conference' && <ConferenceScreen onDirect={() => setCallSurface('direct')} onWallet={() => setShowWallet(true)} />}
-        {tab === 'contacts' && <ContactsScreen onCall={callContact} onMessage={(contact) => openMessages(contact.number, contact.name)} onVideoMeeting={() => setShowVideo(true)} />}
-        {tab === 'recents' && <RecentsScreen onRedial={(call) => openDialer(call.destination_number, call.destination_name ?? call.destination_country ?? undefined)} />}
+        {tab === 'contacts' && <ContactsScreen onCall={callContact} onMessage={(contact) => openMessages(contact.number, contact.name, Boolean(contact.internal))} onVideoMeeting={() => setShowVideo(true)} />}
+        {tab === 'recents' && <RecentsScreen onRedial={(call) => openDialer(call.destination_number, call.destination_name ?? call.destination_country ?? undefined, Boolean(call.internal || call.destination_country === 'Internal'))} />}
         {tab === 'messages' && <MessagesScreen target={messageTarget} onContacts={() => setTab('contacts')} />}
         {tab === 'settings' && <SettingsScreen openBusinessNonce={businessNonce} onBusinessConsumed={() => setBusinessNonce(0)} onWallet={() => setShowWallet(true)} />}
       </View>

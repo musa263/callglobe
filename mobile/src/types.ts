@@ -14,6 +14,7 @@ export type ContactPhone = {
 export type NavigationTarget = {
   number: string;
   name?: string;
+  internal?: boolean;
   nonce: number;
 };
 
@@ -25,6 +26,7 @@ export type SmsMessage = {
   text: string;
   status: 'sending' | 'sent' | 'received' | 'failed';
   direction: 'inbound' | 'outbound';
+  transport?: 'sms' | 'internal';
   createdAt: string;
   error?: string;
 };
@@ -58,6 +60,8 @@ export type CallLog = {
   total_cost: number;
   status: string;
   started_at: string;
+  direction?: 'incoming' | 'outgoing';
+  internal?: boolean;
 };
 
 export type VoicemailMessage = {

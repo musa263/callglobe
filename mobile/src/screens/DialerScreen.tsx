@@ -38,7 +38,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
   const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
-  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : number.length >= 4 && profile?.can_call !== false;
+  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : Boolean(selectedCaller && number.length >= 4 && profile?.can_call !== false);
   const displayNumber = useMemo(() => number.replace(/(.{3})/g, '$1 ').trim(), [number]);
 
   useEffect(() => {
@@ -47,9 +47,14 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
 
   useEffect(() => {
     if (!target) return;
-    setDialMode('external');
+    setDialMode(target.internal && businessAccount ? 'extension' : 'external');
     setContactName(target.name);
     const normalized = target.number.replace(/[^0-9+]/g, '');
+    if (target.internal && businessAccount) {
+      setNumber(sanitize(normalized));
+      setCallError('');
+      return;
+    }
     const match = [...rates].sort((a, b) => b.dial_code.length - a.dial_code.length).find((rate) => normalized.startsWith(rate.dial_code));
     if (match) {
       setSelected(match);
@@ -58,7 +63,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
       setNumber(sanitize(normalized.replace(/^\+/, '')));
     }
     setCallError('');
-  }, [rates, target]);
+  }, [businessAccount, rates, target]);
 
   const call = async () => {
     if (!canCall) return;
@@ -133,7 +138,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         <Pressable accessibilityLabel="Start call" disabled={!canCall} onPress={call} style={({ pressed }) => [styles.callButton, !canCall && styles.callDisabled, pressed && canCall && styles.callPressed]}>
           <Phone size={29} color={colors.ink} fill={colors.ink} strokeWidth={1.5} />
         </Pressable>
-        <Text style={styles.callHint}>{internalCandidate ? (canCall ? 'Call extension' : 'Choose another extension') : !canCall && number.length >= 4 ? 'Calling unavailable' : 'Tap to call'}</Text>
+        <Text style={styles.callHint}>{internalCandidate ? (canCall ? 'Call extension' : 'Choose another extension') : !selectedCaller ? 'A caller ID must be assigned first' : !canCall && number.length >= 4 ? 'Calling unavailable' : 'Tap to call'}</Text>
       </View>
 
       <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={setSelected} onClose={() => setShowRates(false)} />

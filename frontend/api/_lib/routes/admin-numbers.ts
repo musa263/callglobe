@@ -67,12 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const ordersPayload = await ordersResponse.json() as { data?: Array<Record<string, any>> };
       const profilesPayload = await profilesResponse.json() as { data?: Array<Record<string, any>> };
       const visibleNumbers = (numbersPayload.data ?? []).filter((item) => config.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
-      const visibleMessagingProfiles = new Set(visibleNumbers.map((item) => item.messaging_profile_id).filter(Boolean));
       const orderPrefix = `Vocivo ${activeOrganizationId} `;
       return res.status(200).json({
         numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, connectionId: item.connection_id, connectionName: item.connection_name, messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
         orders: (ordersPayload.data ?? []).filter((item) => String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
-        messagingProfiles: (profilesPayload.data ?? []).filter((item) => visibleMessagingProfiles.has(item.id)).map((item) => ({ id: item.id, name: item.name || item.id, webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' })),
+        messagingProfiles: (profilesPayload.data ?? []).map((item) => ({ id: item.id, name: item.name || item.id, webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' })),
       });
     }
     if (req.method === 'POST') {

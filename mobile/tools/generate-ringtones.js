@@ -8,6 +8,9 @@ const patterns = {
   vocivo_classic: [{ start: 0, end: 1.1, notes: [660, 880] }, { start: 2.1, end: 3.2, notes: [660, 880] }, { start: 4.2, end: 5.3, notes: [660, 880] }],
   vocivo_chime: [{ start: 0, end: 1.5, notes: [523.25, 659.25, 783.99] }, { start: 2.6, end: 4.1, notes: [523.25, 659.25, 783.99] }, { start: 5.2, end: 6.7, notes: [523.25, 659.25, 783.99] }],
   vocivo_pulse: Array.from({ length: 10 }, (_, index) => ({ start: index * 0.62, end: index * 0.62 + 0.3, notes: index % 2 ? [740] : [587] })),
+  vocivo_wave: [{ start: 0, end: 1.4, notes: [440, 554.37] }, { start: 2.2, end: 3.6, notes: [493.88, 659.25] }, { start: 4.4, end: 5.8, notes: [440, 554.37] }],
+  vocivo_signal: Array.from({ length: 8 }, (_, index) => ({ start: index * 0.78, end: index * 0.78 + 0.42, notes: index % 2 ? [698.46, 880] : [523.25, 698.46] })),
+  vocivo_softbell: [{ start: 0, end: 1.8, notes: [392, 523.25, 659.25] }, { start: 2.7, end: 4.5, notes: [392, 523.25, 659.25] }, { start: 5.4, end: 7, notes: [392, 523.25, 659.25] }],
 };
 
 function writeWave(name, events) {

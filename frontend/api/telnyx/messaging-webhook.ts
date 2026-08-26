@@ -28,6 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       updatedAt: new Date().toISOString(),
       error: errors[0]?.detail || errors[0]?.title,
       organizationId,
+      transport: 'sms',
     });
   }
   console.info(`Telnyx messaging webhook received: type=${eventType}, id=${eventId}`);

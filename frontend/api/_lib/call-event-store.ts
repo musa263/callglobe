@@ -16,6 +16,13 @@ export type StoredCallEvent = {
   hangup_cause?: string;
   organizationId?: string;
   flow?: string;
+  routeId?: string;
+  sourceExtensionId?: string;
+  sourceExtension?: string;
+  sourceName?: string;
+  destinationExtensionId?: string;
+  destinationExtension?: string;
+  destinationName?: string;
 };
 
 function key() { return createHash('sha256').update(`${requiredEnv('AUTH_SECRET')}:call-events`).digest(); }

@@ -29,7 +29,7 @@ export async function listVerifiedNumbers() {
 export async function assertCallerIdForOrganization(phoneNumber: string, organizationId: string) {
   const normalized = normalizeE164(phoneNumber);
   const config = await readPbxConfig();
-  const assignedOrganization = config.numberAssignments[normalized]?.organizationId || config.organizations[0]?.id || 'primary';
+  const assignedOrganization = config.numberAssignments[normalized]?.organizationId;
   if (assignedOrganization !== organizationId) throw new Error('Caller ID is not assigned to this organization.');
   const [owned, verified] = await Promise.all([listOwnedNumbers(), listVerifiedNumbers()]);
   if (!owned.some((item) => normalizeE164(item.phone_number) === normalized) && !verified.some((item) => normalizeE164(item.phone_number) === normalized)) {

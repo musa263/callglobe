@@ -26,10 +26,15 @@ test('rejects tampered and expired authorizations', () => {
 test('keeps an internal employee name and extension inside the signed route', () => {
   const token = createVoiceRouteToken({
     routeId: 'vc_internal', organizationId: 'primary', destination: 'sip:employee@sip.telnyx.com',
-    callerName: 'Othman Uthman', callerExtension: '2001', flow: 'internal',
+    callerName: 'Othman Uthman', callerExtension: '2001', sourceExtensionId: 'source-id',
+    destinationName: 'Musa Usman', destinationExtension: '2000', destinationExtensionId: 'destination-id', flow: 'internal',
   });
   const authorization = verifyVoiceRouteToken(token);
   assert.equal(authorization?.callerName, 'Othman Uthman');
   assert.equal(authorization?.callerExtension, '2001');
+  assert.equal(authorization?.sourceExtensionId, 'source-id');
+  assert.equal(authorization?.destinationName, 'Musa Usman');
+  assert.equal(authorization?.destinationExtension, '2000');
+  assert.equal(authorization?.destinationExtensionId, 'destination-id');
   assert.equal(authorization?.flow, 'internal');
 });

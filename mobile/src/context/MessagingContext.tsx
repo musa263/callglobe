@@ -8,7 +8,7 @@ type MessagingContextValue = {
   messages: SmsMessage[];
   loading: boolean;
   refreshMessages: () => Promise<void>;
-  sendMessage: (to: string, text: string, contactName?: string) => Promise<void>;
+  sendMessage: (to: string, text: string, contactName?: string, transport?: 'sms' | 'internal') => Promise<void>;
   suggestReplies: (input: { draft: string; recipient: string; companyName?: string; tone?: string; context?: string[] }) => Promise<string[]>;
 };
 
@@ -52,19 +52,23 @@ export function MessagingProvider({ children }: { children: React.ReactNode }) {
     });
   }, [profile?.id]);
 
-  const sendMessage = useCallback(async (to: string, text: string, contactName?: string) => {
+  const sendMessage = useCallback(async (to: string, text: string, contactName?: string, transport: 'sms' | 'internal' = 'sms') => {
     const normalized = to.replace(/[\s()-]/g, '');
     const body = text.trim();
-    if (!e164.test(normalized)) throw new Error('Use a complete international number beginning with +.');
+    if (transport === 'sms' && !e164.test(normalized)) throw new Error('Use a complete international number beginning with +.');
+    if (transport === 'internal' && !/^\d{2,5}$/.test(normalized)) throw new Error('Use a valid company extension.');
     if (!body) throw new Error('Write a message before sending.');
     if (body.length > 1600) throw new Error('Messages can contain up to 1,600 characters.');
     const localId = `local-${Date.now()}`;
-    const draft: SmsMessage = { id: localId, to: normalized, contactName, text: body, status: 'sending', direction: 'outbound', createdAt: new Date().toISOString() };
+    const destination = transport === 'internal' ? `extension:${normalized}` : normalized;
+    const draft: SmsMessage = { id: localId, to: destination, contactName, text: body, status: 'sending', direction: 'outbound', transport, createdAt: new Date().toISOString() };
     persist((current) => [draft, ...current]);
     try {
       const sender = callerNumbers.find((number) => number.source === 'owned' && number.messaging_enabled);
-      if (!sender) throw new Error('No SMS-enabled number is assigned to this account. Ask an administrator to attach a messaging profile.');
-      const result = await api.post<{ id: string; status?: string; created_at?: string }>('/api/telnyx/messages', { to: normalized, text: body, from: sender.phone_number });
+      if (transport === 'sms' && !sender) throw new Error('External SMS needs an SMS-enabled number assigned by your administrator. You can still message company extensions.');
+      const result = await api.post<{ id: string; status?: string; created_at?: string }>('/api/telnyx/messages', transport === 'internal'
+        ? { to_extension: normalized, text: body }
+        : { to: normalized, text: body, from: sender?.phone_number });
       persist((current) => current.map((message) => message.id === localId ? { ...message, id: result.id || localId, status: 'sent', createdAt: result.created_at || message.createdAt } : message));
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Message could not be sent.';

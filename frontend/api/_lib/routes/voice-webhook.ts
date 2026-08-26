@@ -434,6 +434,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hangup_cause: payload?.hangup_cause,
       organizationId: eventOrganizationId,
       flow: state?.flow || parkedFlow,
+      routeId: state?.routeId || eventRoute?.routeId,
+      sourceExtensionId: state?.sourceExtensionId || eventRoute?.sourceExtensionId,
+      sourceExtension: state?.sourceExtension || eventRoute?.callerExtension,
+      sourceName: state?.sourceName || eventRoute?.callerName,
+      destinationExtensionId: state?.destinationExtensionId || eventRoute?.destinationExtensionId,
+      destinationExtension: state?.destinationExtension || eventRoute?.destinationExtension,
+      destinationName: state?.destinationName || eventRoute?.destinationName,
     }).catch((storeError) => console.warn('Vocivo could not store call event', publicError(storeError)));
 
     const routeInput = {
@@ -483,7 +490,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         destinationCall = await dialCall({
           to: destination,
           from: reservation.callerId,
-          state: { flow: 'outbound_destination', parentCallControlId: callControlId, organizationId: reservation.organizationId, routeId },
+          state: {
+            flow: 'outbound_destination', parentCallControlId: callControlId, organizationId: reservation.organizationId, routeId,
+            sourceExtensionId: reservation.sourceExtensionId, sourceExtension: reservation.callerExtension, sourceName: reservation.callerName,
+            destinationExtensionId: reservation.destinationExtensionId, destinationExtension: reservation.destinationExtension,
+            destinationName: reservation.destinationName,
+          },
           fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
             ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
             : payload.caller_id_name || 'Vocivo'),

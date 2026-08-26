@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { IOSConfig, withAndroidManifest, withAppDelegate, withDangerousMod, withMainActivity, withXcodeProject } = require('expo/config-plugins');
 
-const ringtoneNames = ['vocivo_classic', 'vocivo_chime', 'vocivo_pulse'];
+const ringtoneNames = ['vocivo_classic', 'vocivo_chime', 'vocivo_pulse', 'vocivo_wave', 'vocivo_signal', 'vocivo_softbell'];
 
 function insertOnce(source, marker, insertion) {
   return source.includes(insertion.trim()) ? source : source.replace(marker, `${marker}${insertion}`);
