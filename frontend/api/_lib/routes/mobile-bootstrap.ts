@@ -1,7 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
-import { callHistoryFromEvents } from '../call-history.js';
-import { listCallEvents } from '../call-event-store.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
 import { assignedNumbersForOrganization } from '../phone-number-access.js';
@@ -23,10 +21,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const organizationId = sessionOrganizationId(session, config);
     const organization = access.organization;
     const canUseDirectory = organization.accountType === 'business' && organization.internalCallingEnabled && access.features.internalCalling;
-    const [extensions, storedProfile, events] = await Promise.all([
+    const [extensions, storedProfile] = await Promise.all([
       canUseDirectory ? listExtensions(organizationId) : Promise.resolve([]),
       readUserProfile(session.sub || ''),
-      listCallEvents(250, organizationId).catch(() => []),
     ]);
     const profiles = canUseDirectory
       ? await readUserProfiles(extensions.map((item) => `vocivo-extension:${item.id}`))
@@ -61,18 +58,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         photo_url: storedProfile.photoUrl,
       } : {}),
     };
-    const calls = callHistoryFromEvents(events, organizationId, 100, {
-      extensionId: session.extensionId,
-      extension: session.extension,
-      directory: directory.map(({ id, extension, name, sipUsername }) => ({ id, extension, name, sipUsername })),
-    });
     res.setHeader('Cache-Control', 'private, no-store');
     return res.status(200).json({
       profile,
       account: { balance: null, can_call: access.features.internalCalling || access.features.outboundCalling, currency: access.subscription.currency, rates: mobileRates },
       numbers: assignedNumbers,
       directory,
-      calls,
+      calls: [],
       capabilities: access.features,
     });
   } catch (error) {

@@ -30,7 +30,9 @@ function database() {
     username: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     ssl: url.searchParams.get('sslmode') === 'disable' ? false : 'require',
-    max: 4,
+    // Serverless instances multiply this pool. One connection per instance keeps
+    // concurrent page loads inside the managed database connection budget.
+    max: 1,
     prepare: false,
     connect_timeout: 3,
     idle_timeout: 5,

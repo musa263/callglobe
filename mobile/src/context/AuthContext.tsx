@@ -25,7 +25,6 @@ type AuthContextValue = {
 type LoginResponse = { token: string; profile: Omit<Profile, 'balance'> };
 type SessionResponse = { profile: Omit<Profile, 'balance'> };
 type AccountResponse = { balance: number | null; currency: string; rates: CallRate[]; can_call?: boolean };
-type NumbersResponse = { numbers: CallerNumber[] };
 type HistoryResponse = { calls: CallLog[] };
 type DirectoryResponse = { users: Array<{ id: string; extension: string; name: string; sipUsername: string }> };
 type UserProfileResponse = { profile: { id: string; fullName: string; email: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photoUrl?: string } };
@@ -121,11 +120,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [callerNumbers, setCallerNumbers] = useState<CallerNumber[]>([]);
   const [history, setHistory] = useState<CallLog[]>([]);
   const historyRef = useRef<CallLog[]>([]);
+  const activeUserIdRef = useRef<string | null>(null);
   const [isPreview, setIsPreview] = useState(false);
+
+  const refreshServerHistory = useCallback(async (userId: string, directory: DirectoryResponse['users']) => {
+    const server = await api.get<HistoryResponse>('/api/voice/history');
+    if (activeUserIdRef.current !== userId) return;
+    const merged = mergeHistory(
+      historyRef.current.map((call) => normalizeHistoryIdentity(call, directory)),
+      (server.calls ?? []).map((call) => normalizeHistoryIdentity(call, directory)),
+    );
+    historyRef.current = merged;
+    setHistory(merged);
+    await AsyncStorage.setItem(historyKey(userId), JSON.stringify(merged));
+  }, []);
 
   const loadAccount = useCallback(async (baseProfile?: Omit<Profile, 'balance'>) => {
     if (!baseProfile) throw new Error('Account identity was not returned.');
-    initialProfile(baseProfile);
+    const basicProfile = initialProfile(baseProfile);
+    activeUserIdRef.current = baseProfile.id;
     try {
       const bootstrap = await api.get<BootstrapResponse>('/api/mobile/bootstrap');
       const mergedProfile = { ...baseProfile, ...bootstrap.profile };
@@ -140,33 +153,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       historyRef.current = mergedHistory;
       setHistory(mergedHistory);
       await AsyncStorage.setItem(historyKey(mergedProfile.id), JSON.stringify(mergedHistory));
+      setTimeout(() => refreshServerHistory(mergedProfile.id, bootstrap.directory || []).catch(() => undefined), 5_000);
       return;
     } catch {
-      // Preserve compatibility with an older deployment while web and mobile roll out together.
+      const storedHistory = await readHistory(baseProfile.id);
+      if (activeUserIdRef.current !== baseProfile.id) return;
+      setProfile({ ...basicProfile, can_call: true });
+      historyRef.current = storedHistory;
+      setHistory(storedHistory);
+      return;
     }
-    const fallbackProfile: UserProfileResponse = { profile: { id: baseProfile.id, fullName: baseProfile.full_name || '', email: baseProfile.email, jobTitle: baseProfile.job_title || '', department: baseProfile.department || '', mobile: baseProfile.mobile || '', location: baseProfile.location || '', bio: baseProfile.bio || '', photoUrl: baseProfile.photo_url } };
-    const [account, numbers, verified, storedHistory, serverHistory, userProfile, directory] = await Promise.all([
-      api.get<AccountResponse>('/api/telnyx/account').catch(() => ({ balance: null, currency: baseProfile.currency || 'USD', rates: [], can_call: false })),
-      api.get<NumbersResponse>('/api/telnyx/numbers').catch(() => ({ numbers: [] })),
-      api.get<NumbersResponse>('/api/telnyx/verified-numbers').catch(() => ({ numbers: [] })),
-      readHistory(baseProfile.id),
-      api.get<HistoryResponse>('/api/voice/history').catch(() => ({ calls: [] })),
-      api.get<UserProfileResponse>('/api/auth/profile').catch(() => fallbackProfile),
-      api.get<DirectoryResponse>('/api/voice/directory').catch(() => ({ users: [] })),
-    ]);
-    const details = mobileProfile(userProfile.profile);
-    if (baseProfile) setProfile({ ...baseProfile, ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency });
-    else setProfile((current) => current ? { ...current, ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency } : { ...details, balance: account.balance == null ? null : Number(account.balance), can_call: account.can_call !== false, currency: account.currency });
-    if (account.rates?.length) setRates(normalizeRates(account.rates));
-    setCallerNumbers([...(numbers.numbers ?? []), ...(verified.numbers ?? [])]);
-    const mergedHistory = mergeHistory(
-      storedHistory.map((call) => normalizeHistoryIdentity(call, directory.users || [])),
-      (serverHistory.calls ?? []).map((call) => normalizeHistoryIdentity(call, directory.users || [])),
-    );
-    historyRef.current = mergedHistory;
-    setHistory(mergedHistory);
-    await AsyncStorage.setItem(historyKey(baseProfile.id), JSON.stringify(mergedHistory));
-  }, []);
+  }, [refreshServerHistory]);
 
   useEffect(() => {
     const restore = async () => {
@@ -174,8 +171,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!await api.getSessionToken()) return;
         const session = await api.get<SessionResponse>('/api/auth/session');
         setProfile(initialProfile(session.profile));
+        await loadAccount(session.profile);
         setAuthenticated(true);
-        void loadAccount(session.profile).catch(() => undefined);
       } catch {
         await api.clearSessionToken();
         setAuthenticated(false);
@@ -188,32 +185,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccount]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const result = await api.post<LoginResponse>('/api/auth/login', { email: email.trim(), password });
-    await api.saveSessionToken(result.token);
+    setLoading(true);
     try {
+      const result = await api.post<LoginResponse>('/api/auth/login', { email: email.trim(), password });
+      await api.saveSessionToken(result.token);
       setProfile(initialProfile(result.profile));
+      await loadAccount(result.profile);
       setAuthenticated(true);
-      void loadAccount(result.profile).catch(() => undefined);
     } catch (error) {
       await api.clearSessionToken();
       setAuthenticated(false);
       setProfile(null);
       throw error;
+    } finally {
+      setLoading(false);
     }
   }, [loadAccount]);
 
   const enrollWithQr = useCallback(async (token: string) => {
-    const result = await api.post<LoginResponse>('/api/auth/enroll', { token });
-    await api.saveSessionToken(result.token);
+    setLoading(true);
     try {
+      const result = await api.post<LoginResponse>('/api/auth/enroll', { token });
+      await api.saveSessionToken(result.token);
       setProfile(initialProfile(result.profile));
+      await loadAccount(result.profile);
       setAuthenticated(true);
-      void loadAccount(result.profile).catch(() => undefined);
     } catch (error) {
       await api.clearSessionToken();
       setAuthenticated(false);
       setProfile(null);
       throw error;
+    } finally {
+      setLoading(false);
     }
   }, [loadAccount]);
 
@@ -221,6 +224,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsPreview(false);
     setAuthenticated(false);
     setProfile(null);
+    activeUserIdRef.current = null;
     setCallerNumbers([]);
     historyRef.current = [];
     setHistory([]);
@@ -249,7 +253,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isPreview || !isAuthenticated) return;
     const session = await api.get<SessionResponse>('/api/auth/session');
     await loadAccount(session.profile);
-  }, [isAuthenticated, isPreview, loadAccount]);
+    await refreshServerHistory(session.profile.id, []).catch(() => undefined);
+  }, [isAuthenticated, isPreview, loadAccount, refreshServerHistory]);
 
   const addHistory = useCallback(async (call: CallLog) => {
     if (isPreview) return;
