@@ -1,5 +1,5 @@
 import type { VocivoSession } from './auth.js';
-import { readPbxConfig } from './pbx-config-store.js';
+import { readPbxConfig, type PbxConfig } from './pbx-config-store.js';
 import { telnyx } from './telnyx.js';
 import { normalizeE164, sessionCanAccessNumber, sessionOrganizationId } from './tenancy.js';
 
@@ -27,6 +27,24 @@ export function invalidatePhoneNumberCache(type: 'owned' | 'verified' | 'all' = 
 export function callerIdBelongsToOrganization(phoneNumber: string, organizationId: string, assignments: Record<string, { organizationId: string }>) {
   const normalized = normalizeE164(phoneNumber);
   return Boolean(normalized && assignments[normalized]?.organizationId === organizationId);
+}
+
+export function assignedNumbersForOrganization(config: PbxConfig, organizationId: string) {
+  return Object.entries(config.numberAssignments)
+    .filter(([, assignment]) => assignment.organizationId === organizationId)
+    .map(([phoneNumber, assignment]) => {
+      const source = assignment.source || (assignment.destinationType ? 'owned' : 'verified');
+      return {
+        id: `assigned:${phoneNumber}`,
+        phone_number: phoneNumber,
+        label: assignment.label || (source === 'verified' ? 'Verified caller ID' : 'Vocivo number'),
+        country_code: null,
+        status: 'active',
+        receives_calls: source === 'owned' && Boolean(assignment.destinationType),
+        messaging_enabled: source === 'owned' && assignment.messagingEnabled === true,
+        source,
+      };
+    });
 }
 
 export async function listOwnedNumbers() {

@@ -2,14 +2,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { callHistoryFromEvents } from '../call-history.js';
 import { listCallEvents } from '../call-event-store.js';
-import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
-import { listOwnedNumbers, listVerifiedNumbers } from '../phone-number-access.js';
+import { assignedNumbersForOrganization } from '../phone-number-access.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { readUserProfile, readUserProfiles } from '../profile-store.js';
 import { mobileRates } from '../rates.js';
 import { accessForSession } from '../saas-access.js';
-import { normalizeE164, sessionCanAccessNumber, sessionOrganizationId } from '../tenancy.js';
+import { sessionOrganizationId } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -23,12 +23,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const organizationId = sessionOrganizationId(session, config);
     const organization = access.organization;
     const canUseDirectory = organization.accountType === 'business' && organization.internalCallingEnabled && access.features.internalCalling;
-    const [extensions, storedProfile, events, owned, verified] = await Promise.all([
+    const [extensions, storedProfile, events] = await Promise.all([
       canUseDirectory ? listExtensions(organizationId) : Promise.resolve([]),
       readUserProfile(session.sub || ''),
       listCallEvents(250, organizationId).catch(() => []),
-      listOwnedNumbers().catch(() => []),
-      listVerifiedNumbers().catch(() => []),
     ]);
     const profiles = canUseDirectory
       ? await readUserProfiles(extensions.map((item) => `vocivo-extension:${item.id}`))
@@ -37,30 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stored = profiles.get(`vocivo-extension:${id}`);
       return { id, extension, name: stored?.fullName || name, department: stored?.department || department, role, sipUsername, photoUrl: stored?.photoUrl, jobTitle: stored?.jobTitle };
     });
-    const assignedOwned = owned.filter((number) => sessionCanAccessNumber(session, number.phone_number, config)).map((number) => {
-      const normalized = normalizeE164(number.phone_number);
-      const assignment = config.numberAssignments[normalized];
-      return {
-        id: number.id,
-        phone_number: normalized,
-        label: assignment?.label || number.connection_name || 'Vocivo number',
-        country_code: number.country_iso_alpha2 || null,
-        status: number.status || 'active',
-        receives_calls: [requiredEnv('TELNYX_CONNECTION_ID'), requiredEnv('TELNYX_CALL_CONTROL_APP_ID')].includes(number.connection_id || ''),
-        messaging_enabled: Boolean(number.messaging_profile_id),
-        source: 'owned' as const,
-      };
-    });
-    const assignedVerified = verified.filter((number) => sessionCanAccessNumber(session, number.phone_number, config)).map((number) => ({
-      id: `verified-${number.phone_number}`,
-      phone_number: normalizeE164(number.phone_number),
-      label: config.numberAssignments[normalizeE164(number.phone_number)]?.label || 'Verified caller ID',
-      country_code: null,
-      status: 'active',
-      receives_calls: false,
-      messaging_enabled: false,
-      source: 'verified' as const,
-    }));
+    const assignedNumbers = assignedNumbersForOrganization(config, organizationId);
     const baseProfile = {
       id: session.sub || '',
       email: session.email || '',
@@ -95,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       profile,
       account: { balance: null, can_call: access.features.internalCalling || access.features.outboundCalling, currency: access.subscription.currency, rates: mobileRates },
-      numbers: [...assignedOwned, ...assignedVerified],
+      numbers: assignedNumbers,
       directory,
       calls,
       capabilities: access.features,

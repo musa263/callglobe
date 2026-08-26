@@ -274,20 +274,21 @@ export default function AdminConsole({ profile }) {
   async function load() {
     setBusy(true); setError('');
     try {
-      const [p, s, o, u] = await Promise.all([api('/api/admin/pbx'), api('/api/admin/saas'), api('/api/admin/overview'), api('/api/admin/extensions')]);
+      const safe = (promise, fallback) => promise.catch(() => fallback);
+      const p = await api('/api/admin/pbx');
+      const s = await api('/api/admin/saas');
+      const u = await safe(api('/api/admin/extensions'), { extensions: [] });
       const activeCustomer = s.organizations?.find((item) => item.id === p.config.activeOrganizationId) || s.organizations?.[0];
       const features = activeCustomer?.entitlements || {};
       const allowed = (feature) => isSuperadmin || Boolean(features[feature]);
-      const safe = (promise, fallback) => promise.catch(() => fallback);
-      const [t, n, v, k, b, e] = await Promise.all([
-        allowed('sipTrunks') ? safe(api('/api/admin/trunks'), null) : null,
-        allowed('phoneNumbers') ? safe(api('/api/admin/numbers'), { numbers: [], orders: [], messagingProfiles: [] }) : { numbers: [], orders: [], messagingProfiles: [] },
-        allowed('aiReceptionist') ? safe(api('/api/admin/voices'), null) : null,
-        allowed('developerApi') ? safe(api('/api/admin/api-keys'), { keys: [] }) : { keys: [] },
-        allowed('aiReceptionist') ? safe(api('/api/voice/settings'), null) : null,
-        allowed('analytics') ? safe(api('/api/admin/events'), { events: [] }) : { events: [] },
-      ]);
-      setConfig(p.config); setSaas(s); setOverview(o); setExtensions(u.extensions || []); setTrunks(t); setNumberData(n); setVoiceData(v); setPlatformKeys(k.keys || []); setEvents(e.events || []);
+      setConfig(p.config); setSaas(s); setExtensions(u.extensions || []); setBusy(false);
+      const o = await safe(api('/api/admin/overview'), null); setOverview(o);
+      const t = allowed('sipTrunks') ? await safe(api('/api/admin/trunks'), null) : null; setTrunks(t);
+      const n = allowed('phoneNumbers') ? await safe(api('/api/admin/numbers'), { numbers: [], orders: [], messagingProfiles: [] }) : { numbers: [], orders: [], messagingProfiles: [] }; setNumberData(n);
+      const v = allowed('aiReceptionist') ? await safe(api('/api/admin/voices'), null) : null; setVoiceData(v);
+      const k = allowed('developerApi') ? await safe(api('/api/admin/api-keys'), { keys: [] }) : { keys: [] }; setPlatformKeys(k.keys || []);
+      const b = allowed('aiReceptionist') ? await safe(api('/api/voice/settings'), null) : null;
+      const e = allowed('analytics') ? await safe(api('/api/admin/events'), { events: [] }) : { events: [] }; setEvents(e.events || []);
       if (b?.config) setBusiness(b.config);
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }

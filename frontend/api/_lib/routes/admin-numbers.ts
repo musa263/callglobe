@@ -92,7 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }),
       });
       const payload = await response.json() as { data?: Record<string, unknown> };
-      await Promise.all(phoneNumbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, activeOrganizationId, { destinationType: 'main' })));
+      await Promise.all(phoneNumbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, activeOrganizationId, { source: 'owned', destinationType: 'main' })));
       invalidatePhoneNumberCache('owned');
       return res.status(201).json({ order: payload.data });
     }
@@ -143,7 +143,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const payload = await response.json() as { data?: Record<string, unknown> };
     const phoneNumber = text((payload.data as { phone_number?: unknown } | undefined)?.phone_number, 24);
     if (phoneNumber && organizationId) {
-      await assignNumberToOrganization(phoneNumber, organizationId, { destinationType, destinationId: destinationId || undefined });
+      await assignNumberToOrganization(phoneNumber, organizationId, {
+        source: 'owned',
+        destinationType,
+        destinationId: destinationId || undefined,
+        messagingEnabled: req.body?.messagingProfileId !== undefined
+          ? Boolean(text(req.body.messagingProfileId, 80))
+          : config.numberAssignments[phoneNumber]?.messagingEnabled,
+      });
     }
     invalidatePhoneNumberCache('owned');
     return res.status(200).json({ number: payload.data });

@@ -69,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: 'POST',
         body: JSON.stringify({ verification_code: verificationCode }),
       });
-      await assignNumberToOrganization(phoneNumber, organizationId);
+      await assignNumberToOrganization(phoneNumber, organizationId, { source: 'verified' });
       invalidatePhoneNumberCache('verified');
       return res.status(200).json(await response.json());
     }

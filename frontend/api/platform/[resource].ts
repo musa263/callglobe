@@ -118,7 +118,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!numbers.length) return res.status(400).json({ error: 'At least one valid phone number is required.' });
       const response = await telnyx('/number_orders', { method: 'POST', body: JSON.stringify({ phone_numbers: numbers.map((phone_number: string) => ({ phone_number })), connection_id: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'), customer_reference: text(req.body?.customerReference, 100) || `Vocivo API ${apiKey.id}` }) });
       const payload = await response.json();
-      await Promise.all(numbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, apiKey.organizationId)));
+      await Promise.all(numbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, apiKey.organizationId, { source: 'owned', destinationType: 'main' })));
       return res.status(201).json(payload);
     }
     if (resource === 'events') {

@@ -291,29 +291,28 @@ export default function App() {
     setLoading(true);
     (async () => {
       try {
-        const [sessionData, userData] = await Promise.all([
-          api('/api/auth/session'),
-          api('/api/auth/profile').catch(() => ({ profile: {} })),
-        ]);
-        const details = userData.profile || {};
-        const resolvedProfile = { ...sessionData.profile, full_name: details.fullName || sessionData.profile.full_name, photo_url: details.photoUrl, job_title: details.jobTitle, department: details.department, mobile: details.mobile, location: details.location, bio: details.bio };
+        const sessionData = await api('/api/auth/session');
+        let resolvedProfile = sessionData.profile;
         if (!active) return;
         setProfile(resolvedProfile);
-        setLoading(false);
         if (resolvedProfile.admin_only) {
           setBalance(0); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
         }
-        const [accountData, numberData, verifiedData] = await Promise.all([
-          api('/api/telnyx/account').catch(() => ({ balance: null, rates: [] })),
-          api('/api/telnyx/numbers').catch(() => ({ numbers: [] })),
-          api('/api/telnyx/verified-numbers').catch(() => ({ numbers: [] })),
-        ]);
+        let bootstrap;
+        try {
+          bootstrap = await api('/api/mobile/bootstrap');
+        } catch (loadError) {
+          if (active) setNotice(loadError.message || 'Some account details could not be refreshed.');
+          return;
+        }
         if (!active) return;
-        const owned = numberData.numbers || [];
-        const verified = verifiedData.numbers || [];
-        setBalance(Number(accountData.balance) || 0);
-        setRates(buildDialingDirectory(accountData.rates || []));
+        resolvedProfile = { ...resolvedProfile, ...bootstrap.profile };
+        const owned = (bootstrap.numbers || []).filter((number) => number.source === 'owned');
+        const verified = (bootstrap.numbers || []).filter((number) => number.source === 'verified');
+        setProfile(resolvedProfile);
+        setBalance(Number(bootstrap.account?.balance) || 0);
+        setRates(buildDialingDirectory(bootstrap.account?.rates || []));
         setNumbers(owned);
         setVerifiedNumbers(verified);
         setSelectedNumber(owned[0] || verified[0] || null);
