@@ -4,8 +4,9 @@ import password from '../_lib/routes/auth-password.js';
 import session from '../_lib/routes/auth-session.js';
 import enroll from '../_lib/routes/auth-enroll.js';
 import profile from '../_lib/routes/auth-profile.js';
+import bootstrap from '../_lib/routes/mobile-bootstrap.js';
 
-const routes = { login, password, session, enroll, profile } as const;
+const routes = { login, password, session, enroll, profile, bootstrap } as const;
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const action = Array.isArray(req.query.action) ? req.query.action[0] : req.query.action;

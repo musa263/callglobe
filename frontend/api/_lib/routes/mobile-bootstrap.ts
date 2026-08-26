@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (session.sub === 'vocivo-owner') return res.status(403).json({ error: 'Platform administrators use the Vocivo web portal.' });
     const config = await readPbxConfig();
     const access = await accessForSession(session, config);
-    if (access.superadmin) return res.status(403).json({ error: 'Platform administrators use the Vocivo web portal.' });
+    if (access.superadmin === true) return res.status(403).json({ error: 'Platform administrators use the Vocivo web portal.' });
     const organizationId = sessionOrganizationId(session, config);
     const organization = access.organization;
     const canUseDirectory = organization.accountType === 'business' && organization.internalCallingEnabled && access.features.internalCalling;
