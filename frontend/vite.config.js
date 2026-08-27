@@ -8,6 +8,7 @@ export default defineConfig({
     manifest: false,
     workbox: {
       navigateFallback: '/index.html',
+      navigateFallbackDenylist: [/^\/landing(?:\.html)?$/, /^\/enroll(?:\.html)?$/, /^\/video(?:\.html)?$/],
       globPatterns: ['**/*.{js,css,html,png,svg,wav,json}'],
     },
   })],
