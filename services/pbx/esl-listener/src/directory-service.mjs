@@ -10,7 +10,7 @@ function xml(value) {
 }
 
 function notFoundXml() {
-  return '<?xml version="1.0" encoding="UTF-8"?><document type="freeswitch/xml"><section name="result"><result status="not found"/></section></document>';
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<document type="freeswitch/xml"><section name="result"><result status="not found"/></section></document>';
 }
 
 function userXml(user) {
@@ -25,7 +25,9 @@ export function renderDirectoryXml(users) {
     domains.get(user.domain).push(user);
   }
   const domainXml = [...domains.entries()].map(([domain, members]) => `<domain name="${xml(domain)}"><params><param name="dial-string" value="{presence_id=\${dialed_user}@\${dialed_domain},domain_name=\${dialed_domain}}\${sofia_contact(\${dialed_user}@\${dialed_domain})}"/></params><groups><group name="default"><users>${members.map(userXml).join('')}</users></group></groups></domain>`).join('');
-  return `<?xml version="1.0" encoding="UTF-8"?><document type="freeswitch/xml"><section name="directory">${domainXml}</section></document>`;
+  // FreeSWITCH drops the complete line containing an XML declaration while
+  // preprocessing xml_curl responses, so the document must start on a new line.
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<document type="freeswitch/xml"><section name="directory">${domainXml}</section></document>`;
 }
 
 function queryValue(params, names) {

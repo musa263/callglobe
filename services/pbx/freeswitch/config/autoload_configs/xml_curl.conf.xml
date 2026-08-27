@@ -2,7 +2,7 @@
   <bindings>
     <binding name="vocivo-directory">
       <param name="gateway-url" value="http://127.0.0.1:8088/directory" bindings="directory"/>
-      <param name="method" value="post"/>
+      <param name="method" value="POST"/>
       <param name="timeout" value="3"/>
       <param name="response-max-bytes" value="1048576"/>
     </binding>

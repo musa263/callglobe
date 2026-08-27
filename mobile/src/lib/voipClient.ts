@@ -6,6 +6,7 @@ import RNVoipPushNotification from 'react-native-voip-push-notification';
 import { registerGlobals } from 'react-native-webrtc';
 import { Invitation, Inviter, Registerer, RegistererState, SessionState, UserAgent, Web, type Session } from 'sip.js';
 import { api } from './api';
+import { ProxyAwareSipTransport, registerAndWait } from './sipTransport';
 
 registerGlobals();
 
@@ -296,6 +297,7 @@ export class VocivoVoipClient {
       displayName: config.displayName || config.extension || config.username,
       authorizationUsername: config.username,
       authorizationPassword: config.password,
+      transportConstructor: ProxyAwareSipTransport,
       transportOptions: { server: config.websocketUrl, connectionTimeout: 12, keepAliveInterval: 25, traceSip: false },
       reconnectionAttempts: 20,
       reconnectionDelay: 3,
@@ -310,8 +312,17 @@ export class VocivoVoipClient {
     });
     this.#userAgent = userAgent;
     this.#registerer = registerer;
-    await userAgent.start();
-    await registerer.register();
+    try {
+      await userAgent.start();
+      await registerAndWait(registerer);
+    } catch (error) {
+      await registerer.unregister().catch(() => undefined);
+      await userAgent.stop().catch(() => undefined);
+      if (this.#userAgent === userAgent) this.#userAgent = undefined;
+      if (this.#registerer === registerer) this.#registerer = undefined;
+      this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
+      throw error;
+    }
   }
 
   async logout() {

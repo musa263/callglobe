@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Invitation, Inviter, Registerer, RegistererState, SessionState, UserAgent, Web } from 'sip.js';
 import { api } from '../lib/api';
+import { ProxyAwareSipTransport, registerAndWait } from '../lib/sipTransport';
 
 const mediaOptions = { constraints: { audio: true, video: false } };
 
@@ -276,6 +277,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         displayName: identity.name || configuration.extension || 'Vocivo user',
         authorizationUsername: configuration.sip_user,
         authorizationPassword: configuration.sip_password,
+        transportConstructor: ProxyAwareSipTransport,
         transportOptions: { server: configuration.websocket_url, connectionTimeout: 12, keepAliveInterval: 25, traceSip: false },
         reconnectionAttempts: 20,
         reconnectionDelay: 3,
@@ -315,7 +317,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
       registererRef.current = registerer;
       await userAgent.start();
       if (cancelled) return;
-      await registerer.register();
+      await registerAndWait(registerer);
     }).catch((connectionError) => {
       if (cancelled) return;
       setReady(false);

@@ -14,8 +14,11 @@ test('directory XML groups tenant extensions by SIP domain and escapes values', 
   assert.match(result, /outbound_caller_id_number" value="\+18447161777"/);
   assert.match(result, /vocivo_organization_name" value="Global Heritage"/);
   assert.match(result, /vocivo_caller_photo" value="https:\/\/example.com\/mousa.jpg"/);
+  assert.match(result, /^<\?xml version="1\.0" encoding="UTF-8"\?>\n<document/);
 });
 
 test('empty directory uses the FreeSWITCH not-found response', () => {
-  assert.match(renderDirectoryXml([]), /result status="not found"/);
+  const result = renderDirectoryXml([]);
+  assert.match(result, /result status="not found"/);
+  assert.match(result, /^<\?xml version="1\.0" encoding="UTF-8"\?>\n<document/);
 });

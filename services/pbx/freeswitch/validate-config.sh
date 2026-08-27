@@ -35,4 +35,9 @@ find "$root/config" -type f -name '*.xml' | while IFS= read -r source; do
   xmllint --noout "$target"
 done
 
+if ! grep -q '<param name="method" value="POST"/>' "$root/config/autoload_configs/xml_curl.conf.xml"; then
+  echo "FreeSWITCH XML-curl must use uppercase POST for Node HTTP compatibility." >&2
+  exit 1
+fi
+
 echo "FreeSWITCH XML templates are well formed."

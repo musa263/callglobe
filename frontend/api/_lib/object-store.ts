@@ -45,10 +45,21 @@ function database() {
   return databaseClient;
 }
 
-function transientDatabaseError(error: unknown) {
+export function transientDatabaseError(error: unknown) {
   const value = error as { code?: string; message?: string };
-  return ['53300', '57P03', '08000', '08003', '08006', 'ECONNRESET', 'ETIMEDOUT'].includes(value?.code || '')
-    || /too many connections|connection terminated|connection timeout|connection refused/i.test(value?.message || '');
+  return [
+    '53300',
+    '57P03',
+    '08000',
+    '08003',
+    '08006',
+    'CONNECT_TIMEOUT',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'ENETUNREACH',
+    'ETIMEDOUT',
+  ].includes(value?.code || '')
+    || /too many connections|connection (?:terminated|timed? out|refused)|connect_timeout/i.test(value?.message || '');
 }
 
 async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) {
