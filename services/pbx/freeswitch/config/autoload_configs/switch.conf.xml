@@ -1,0 +1,13 @@
+<configuration name="switch.conf" description="Vocivo Core">
+  <settings>
+    <param name="colorize-console" value="false"/>
+    <param name="max-sessions" value="@@PBX_MAX_SESSIONS@@"/>
+    <param name="sessions-per-second" value="@@PBX_SESSIONS_PER_SECOND@@"/>
+    <param name="rtp-start-port" value="@@PBX_RTP_START@@"/>
+    <param name="rtp-end-port" value="@@PBX_RTP_END@@"/>
+    <param name="loglevel" value="info"/>
+    <param name="debug-level" value="0"/>
+    <param name="dump-cores" value="no"/>
+    <param name="disable-system-api-commands" value="true"/>
+  </settings>
+</configuration>

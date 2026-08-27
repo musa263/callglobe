@@ -46,8 +46,8 @@ export type PbxConfig = {
   };
   system: { recordingEnabled: boolean; retentionDays: number; emergencyCallingEnabled: boolean };
   platform: {
-    controlPlane: 'vocivo'; mediaPlane: 'telnyx' | 'vocivo'; pstnProvider: 'telnyx';
-    sipDomain: string; ttsProvider: 'vocivo' | 'telnyx'; carrierFallbackEnabled: boolean;
+    controlPlane: 'vocivo'; mediaPlane: 'telnyx' | 'vocivo'; pbxEngine: 'telnyx' | 'asterisk' | 'freeswitch'; pstnProvider: 'telnyx' | 'go_telecom' | 'custom';
+    sipDomain: string; websocketUrl?: string; ttsProvider: 'vocivo' | 'telnyx'; carrierFallbackEnabled: boolean;
   };
   updatedAt: string;
 };
@@ -77,7 +77,7 @@ export function defaultPbxConfig(): PbxConfig {
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
     ai: { enabled: false, assistantId: '', name: 'Global Heritage Receptionist', greeting: 'Welcome to Global Heritage. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '102', transferEnabled: true, summariesEnabled: true },
     system: { recordingEnabled: false, retentionDays: 30, emergencyCallingEnabled: false },
-    platform: { controlPlane: 'vocivo', mediaPlane: 'telnyx', pstnProvider: 'telnyx', sipDomain: 'sip.telnyx.com', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
+    platform: { controlPlane: 'vocivo', mediaPlane: 'vocivo', pbxEngine: 'freeswitch', pstnProvider: 'telnyx', sipDomain: 'sip.68.183.244.215.nip.io', websocketUrl: 'wss://sip-wss.68.183.244.215.nip.io', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
     updatedAt: new Date().toISOString(),
   };
 }
@@ -154,6 +154,7 @@ function validateOrganizations(config: PbxConfig) {
     if (organization.accountType === 'individual' && organization.internalCallingEnabled) throw new Error('Individual accounts cannot enable company extension calling.');
     if (!Number.isInteger(organization.extensionStart) || !Number.isInteger(organization.extensionEnd) || organization.extensionStart < 10 || organization.extensionEnd > 99999 || organization.extensionEnd < organization.extensionStart) throw new Error('Extension ranges must contain 2 to 5 digit numbers in ascending order.');
     if (organization.extensionEnd - organization.extensionStart + 1 > 10000) throw new Error('An organization extension range cannot exceed 10,000 slots.');
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(organization.slug)) throw new Error('Organization slugs may contain lowercase letters, numbers, and single hyphens.');
   }
   if (!ids.has(config.activeOrganizationId)) throw new Error('The active organization is invalid.');
   for (const assignment of Object.values(config.numberAssignments)) {

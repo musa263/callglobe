@@ -17,6 +17,7 @@ mobile/android/
 .env*.local
 frontend/.env.local
 frontend/.env
+services/pbx/secrets/
 
 # OS files
 .DS_Store

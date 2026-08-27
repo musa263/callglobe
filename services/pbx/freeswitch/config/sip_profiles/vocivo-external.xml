@@ -1,0 +1,38 @@
+<profile name="vocivo-external">
+  <aliases/>
+  <gateways>
+    <gateway name="@@PSTN_GATEWAY_NAME@@">
+      <param name="username" value="@@PSTN_SIP_USERNAME@@"/>
+      <param name="password" value="@@PSTN_SIP_PASSWORD@@"/>
+      <param name="proxy" value="@@PSTN_SIP_PROXY@@:@@PSTN_SIP_PORT@@"/>
+      <param name="register" value="@@PSTN_REGISTER@@"/>
+      <param name="retry-seconds" value="30"/>
+      <param name="expire-seconds" value="600"/>
+      <param name="caller-id-in-from" value="true"/>
+      <param name="extension" value="@@PSTN_OUTBOUND_CALLER_ID@@"/>
+      <param name="ping" value="@@PSTN_PING_INTERVAL@@"/>
+    </gateway>
+  </gateways>
+  <domains/>
+  <settings>
+    <param name="user-agent-string" value="Vocivo SIP Edge"/>
+    <param name="debug" value="0"/>
+    <param name="sip-trace" value="no"/>
+    <param name="context" value="public"/>
+    <param name="dialplan" value="XML"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="ext-rtp-ip" value="@@PBX_PUBLIC_IP@@"/>
+    <param name="ext-sip-ip" value="@@PBX_PUBLIC_IP@@"/>
+    <param name="sip-port" value="5060"/>
+    <param name="auth-calls" value="false"/>
+    <param name="inbound-codec-prefs" value="PCMU,PCMA,G722"/>
+    <param name="outbound-codec-prefs" value="PCMU,PCMA,G722"/>
+    <param name="inbound-late-negotiation" value="true"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rtp-hold-timeout-sec" value="1800"/>
+    <param name="NDLB-force-rport" value="safe"/>
+    <param name="aggressive-nat-detection" value="true"/>
+    <param name="enable-100rel" value="true"/>
+  </settings>
+</profile>

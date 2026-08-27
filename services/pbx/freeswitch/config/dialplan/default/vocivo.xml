@@ -1,0 +1,68 @@
+<include>
+  <context name="vocivo-internal">
+    <extension name="emergency-calling-disabled">
+      <condition field="destination_number" expression="^(911|112|999)$">
+        <action application="respond" data="503 Emergency calling is not configured"/>
+      </condition>
+    </extension>
+
+    <extension name="voicemail-access">
+      <condition field="destination_number" expression="^\*97$">
+        <action application="answer"/>
+        <action application="sleep" data="500"/>
+        <action application="voicemail" data="check default ${vocivo_sip_domain} ${caller_id_number}"/>
+      </condition>
+    </extension>
+
+    <extension name="conference-room">
+      <condition field="destination_number" expression="^\*3([0-9]{2,5})$">
+        <action application="answer"/>
+        <action application="conference" data="vocivo-$1@default"/>
+      </condition>
+    </extension>
+
+    <extension name="internal-extension">
+      <condition field="destination_number" expression="^([0-9]{2,5})$">
+        <action application="set" data="vocivo_call_id=${uuid}"/>
+        <action application="set" data="domain_name=${vocivo_sip_domain}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="ringback=${us-ring}"/>
+        <action application="set" data="transfer_ringback=${us-ring}"/>
+        <action application="export" data="nolocal:vocivo_call_type=internal"/>
+        <action application="export" data="nolocal:vocivo_call_id=${vocivo_call_id}"/>
+        <action application="export" data="nolocal:vocivo_organization_id=${vocivo_organization_id}"/>
+        <action application="export" data="nolocal:vocivo_organization_name=${vocivo_organization_name}"/>
+        <action application="export" data="nolocal:vocivo_push_target_extension=$1"/>
+        <action application="export" data="nolocal:vocivo_caller_extension=${caller_id_number}"/>
+        <action application="export" data="nolocal:vocivo_caller_name=${caller_id_name}"/>
+        <action application="export" data="nolocal:vocivo_caller_photo=${vocivo_caller_photo}"/>
+        <action application="export" data="nolocal:sip_h_X-Vocivo-Call-UUID=${vocivo_call_id}"/>
+        <action application="export" data="nolocal:sip_h_X-Vocivo-Call-Type=internal"/>
+        <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Extension=${caller_id_number}"/>
+        <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Name=${caller_id_name}"/>
+        <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Photo=${vocivo_caller_photo}"/>
+        <action application="bridge" data="user/$1&#64;${vocivo_sip_domain}"/>
+        <action application="voicemail" data="default ${vocivo_sip_domain} $1"/>
+      </condition>
+    </extension>
+
+    <extension name="international-pstn">
+      <condition field="destination_number" expression="^(\+[1-9][0-9]{6,14})$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="set" data="effective_caller_id_number=${outbound_caller_id_number}"/>
+        <action application="set" data="effective_caller_id_name=${caller_id_name}"/>
+        <action application="set" data="ringback=${us-ring}"/>
+        <action application="export" data="nolocal:vocivo_call_type=external"/>
+        <action application="bridge" data="sofia/gateway/@@PSTN_GATEWAY_NAME@@/$1"/>
+      </condition>
+    </extension>
+
+    <extension name="invalid-destination">
+      <condition field="destination_number" expression="^.+$">
+        <action application="respond" data="404 Destination not found"/>
+      </condition>
+    </extension>
+  </context>
+</include>

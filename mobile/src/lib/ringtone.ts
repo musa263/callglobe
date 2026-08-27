@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NativeModules, Platform } from 'react-native';
-import { VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
+import { VoicePnBridge } from './voipClient';
 
 export const ringtoneOptions = [
   { id: 'vocivo_classic', label: 'Vocivo Classic', description: 'Clear two-note office ring' },
@@ -32,11 +31,6 @@ export async function loadIncomingRingtone(): Promise<RingtoneId> {
 
 export async function applyIncomingRingtone(ringtone: RingtoneId): Promise<void> {
   await AsyncStorage.setItem(storageKey, ringtone);
-  if (Platform.OS === 'ios') {
-    const applied = await NativeModules.VoicePnBridge?.setIncomingCallRingtone?.(ringtone);
-    if (applied === false) throw new Error('The iPhone ringtone could not be updated.');
-    return;
-  }
   const applied = await VoicePnBridge.setIncomingCallRingtone(ringtone);
   if (!applied) throw new Error('The ringtone could not be updated.');
 }

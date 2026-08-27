@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
 import { readPbxConfig } from './pbx-config-store.js';
@@ -9,6 +10,7 @@ import {
   saveExtensionCredential,
   saveExtensionDirectory,
 } from './extension-store.js';
+import { organizationSipDomain, voiceProvider } from './voice-provider.js';
 
 const extensionTag = 'vocivo_extension';
 const credentialPrefix = 'VOCEXT';
@@ -28,6 +30,7 @@ export type ExtensionUser = {
   department: string;
   role: 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual';
   sipUsername: string;
+  sipProvider?: 'telnyx' | 'freeswitch';
   status: 'active' | 'expired';
   createdAt?: string;
 };
@@ -136,6 +139,27 @@ export async function createExtension(input: Partial<ExtensionUser>) {
   const allocated = await extensionForCreate(input);
   const value = validateExtensionInput({ ...input, organizationId: allocated.organizationId, role: allocated.accountType === 'individual' ? 'individual' : input.role }, allocated.extension);
   if (allocated.existing.some((item) => item.extension === value.extension)) throw new Error(`Extension ${value.extension} already exists.`);
+  const config = await readPbxConfig();
+  if (voiceProvider(config) === 'freeswitch') {
+    const sipDomain = organizationSipDomain(config, value.organizationId);
+    const extension: ExtensionUser = {
+      ...value,
+      id: `vocivo_${randomUUID()}`,
+      sipUsername: value.extension,
+      sipProvider: 'freeswitch',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+    const sipPassword = randomBytes(32).toString('base64url');
+    await Promise.all([
+      replaceStoredExtension(extension),
+      saveExtensionCredential({ extension, sipUsername: extension.sipUsername, sipPassword, provider: 'freeswitch', sipDomain }),
+    ]);
+    return {
+      extension,
+      oneTimeCredentials: { sipUsername: extension.sipUsername, sipPassword, server: sipDomain, transport: 'WSS or TLS' },
+    };
+  }
   const response = await telnyx('/telephony_credentials', {
     method: 'POST',
     body: JSON.stringify({ connection_id: requiredEnv('TELNYX_CONNECTION_ID'), name: encodeName(value), tag: extensionTag }),
@@ -145,9 +169,10 @@ export async function createExtension(input: Partial<ExtensionUser>) {
   if (!data) throw new Error('Telnyx did not create the extension.');
   const extension = parseCredential(data);
   if (!extension) throw new Error('Telnyx returned invalid extension data.');
+  extension.sipProvider = 'telnyx';
   await Promise.all([
     replaceStoredExtension(extension),
-    saveExtensionCredential({ extension, sipUsername: data.sip_username || '', sipPassword: data.sip_password || '' }),
+    saveExtensionCredential({ extension, sipUsername: data.sip_username || '', sipPassword: data.sip_password || '', provider: 'telnyx', sipDomain: 'sip.telnyx.com' }),
   ]);
   return {
     extension,
@@ -159,7 +184,7 @@ async function requireManagedCredentialResource(id: string) {
   const cached = credentialCache.get(id);
   if (cached && cached.expiresAt > Date.now()) return { parsed: cached.parsed, data: cached.data };
   const stored = await readExtensionCredential(id);
-  if (stored?.sipUsername && stored.sipPassword) {
+  if (stored?.sipUsername && stored.sipPassword && stored.provider !== 'freeswitch') {
     const data: CredentialResource = {
       id,
       name: encodeName(stored.extension),
@@ -194,13 +219,29 @@ export async function getExtension(id: string) {
 }
 
 export async function getExtensionCredentials(id: string) {
+  const config = await readPbxConfig();
+  const stored = await readExtensionCredential(id);
+  if (voiceProvider(config) === 'freeswitch') {
+    const extension = stored?.extension || await getExtension(id);
+    const sipDomain = organizationSipDomain(config, extension.organizationId);
+    if (stored?.provider === 'freeswitch' && stored.sipUsername && stored.sipPassword) {
+      return { extension: { ...extension, sipProvider: 'freeswitch' as const }, sipUsername: stored.sipUsername, sipPassword: stored.sipPassword, sipDomain, provider: 'freeswitch' as const };
+    }
+    const migrated = { ...extension, sipUsername: extension.extension, sipProvider: 'freeswitch' as const };
+    const sipPassword = randomBytes(32).toString('base64url');
+    await Promise.all([
+      replaceStoredExtension(migrated),
+      saveExtensionCredential({ extension: migrated, sipUsername: migrated.sipUsername, sipPassword, provider: 'freeswitch', sipDomain }),
+    ]);
+    return { extension: migrated, sipUsername: migrated.sipUsername, sipPassword, sipDomain, provider: 'freeswitch' as const };
+  }
   const { parsed: extension, data } = await requireManagedCredentialResource(id);
   if (!data?.sip_username || !data.sip_password) throw new Error('Telnyx did not return extension credentials.');
-  return { extension, sipUsername: data.sip_username, sipPassword: data.sip_password };
+  return { extension: { ...extension, sipProvider: 'telnyx' as const }, sipUsername: data.sip_username, sipPassword: data.sip_password, sipDomain: 'sip.telnyx.com', provider: 'telnyx' as const };
 }
 
 export async function updateExtension(id: string, input: Partial<ExtensionUser>) {
-  const existing = await requireManagedCredential(id);
+  const existing = await getExtension(id);
   const value = validateExtensionInput({ ...existing, ...input }, clean(input.extension, 5) || existing.extension);
   const config = await readPbxConfig();
   const organization = config.organizations.find((item) => item.id === value.organizationId && item.status === 'active');
@@ -210,6 +251,19 @@ export async function updateExtension(id: string, input: Partial<ExtensionUser>)
   if (extensionChanged && (numeric < organization.extensionStart || numeric > organization.extensionEnd)) throw new Error(`Extension must be between ${organization.extensionStart} and ${organization.extensionEnd}.`);
   const duplicate = (await listExtensions(value.organizationId)).find((item) => item.extension === value.extension && item.id !== id);
   if (duplicate) throw new Error(`Extension ${value.extension} already exists.`);
+  const stored = await readExtensionCredential(id);
+  if (stored?.provider === 'freeswitch' || voiceProvider(config) === 'freeswitch') {
+    const extension: ExtensionUser = { ...value, id, sipUsername: value.extension, sipProvider: 'freeswitch', status: existing.status, createdAt: existing.createdAt };
+    const sipPassword = stored?.provider === 'freeswitch' ? stored.sipPassword : randomBytes(32).toString('base64url');
+    const sipDomain = organizationSipDomain(config, extension.organizationId);
+    credentialCache.delete(id);
+    await Promise.all([
+      replaceStoredExtension(extension),
+      saveExtensionCredential({ extension, sipUsername: extension.sipUsername, sipPassword, provider: 'freeswitch', sipDomain }),
+      revokeExtensionSessions(id),
+    ]);
+    return extension;
+  }
   const response = await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name: encodeName(value), tag: extensionTag }) });
   const payload = await response.json() as { data?: CredentialResource };
   const mergedData: CredentialResource | undefined = payload.data ? { ...dataFor(existing, id), ...payload.data, tag: extensionTag, resource_id: connectionResource() } : undefined;
@@ -244,9 +298,10 @@ function dataFor(extension: ExtensionUser, id: string): CredentialResource {
 }
 
 export async function deleteExtension(id: string) {
-  await requireManagedCredential(id);
+  const stored = await readExtensionCredential(id);
+  if (!stored) await requireManagedCredential(id);
   await revokeExtensionSessions(id);
-  await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (stored?.provider !== 'freeswitch') await telnyx(`/telephony_credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
   credentialCache.delete(id);
   await Promise.all([replaceStoredExtension(null, id), deleteExtensionCredential(id)]);
 }

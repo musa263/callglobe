@@ -1,5 +1,69 @@
+name: vocivo-pbx
+
 services:
+  freeswitch:
+    build:
+      context: ./freeswitch
+      args:
+        FREESWITCH_VERSION: ${FREESWITCH_VERSION:-v1.11.1}
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      PBX_ENGINE: freeswitch
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+    cap_add:
+      - SYS_NICE
+    volumes:
+      - freeswitch-db:/usr/local/freeswitch/var/lib/freeswitch/db
+      - freeswitch-recordings:/var/lib/vocivo/recordings
+      - freeswitch-logs:/usr/local/freeswitch/var/log/freeswitch
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/freeswitch/bin/fs_cli -H 127.0.0.1 -P 8021 -p \"$$ESL_PASSWORD\" -x status >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  esl-listener:
+    build: ./esl-listener
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      ESL_HOST: 127.0.0.1
+      ESL_PORT: 8021
+      HEALTH_PORT: 8088
+    volumes:
+      - ./secrets:/run/secrets:ro
+    depends_on:
+      freeswitch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.mjs"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      freeswitch:
+        condition: service_healthy
+
+  # Rollback only. This service is not started by default.
   asterisk:
+    profiles: ["legacy-asterisk"]
     build: ./asterisk
     restart: unless-stopped
     network_mode: host
@@ -9,12 +73,12 @@ services:
       - ./asterisk/config/voicemail_users.conf:/etc/asterisk/voicemail_users.conf:ro
       - asterisk-data:/var/lib/asterisk
       - asterisk-logs:/var/log/asterisk
-    healthcheck:
-      test: ["CMD", "asterisk", "-rx", "core show uptime"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
 
 volumes:
+  freeswitch-db:
+  freeswitch-recordings:
+  freeswitch-logs:
+  caddy-data:
+  caddy-config:
   asterisk-data:
   asterisk-logs:

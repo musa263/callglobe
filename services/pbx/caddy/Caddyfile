@@ -1,0 +1,19 @@
+{
+	email {$TLS_CONTACT_EMAIL}
+}
+
+{$PBX_WSS_DOMAIN} {
+	reverse_proxy 127.0.0.1:5066
+	log {
+		output file /data/access-sip-wss.log
+		format json
+	}
+}
+
+{$PBX_VERTO_DOMAIN} {
+	reverse_proxy 127.0.0.1:8081
+	log {
+		output file /data/access-verto.log
+		format json
+	}
+}

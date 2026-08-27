@@ -1,24 +1,61 @@
-# Vocivo PBX Media Plane
+# Vocivo FreeSWITCH Media Plane
 
-This package moves private extension routing, voicemail, queues, IVR, hold audio, and SIP registration onto a dedicated Vocivo Asterisk service. Vercel remains the control plane. Telnyx remains the PSTN carrier, DID supplier, emergency/STIR-SHAKEN boundary, and fallback media route.
+This package is the dedicated Vocivo PBX foundation for DigitalOcean. FreeSWITCH owns SIP registration, internal extensions, RTP, voicemail, conferences and carrier bridging. Vercel remains the SaaS control plane. Telnyx or GO Telecom remains the regulated PSTN/DID/SMS carrier until those services are replaced by another licensed carrier.
 
-## Infrastructure
+## Components
 
-- One Linux host with a static public IP and DNS name.
-- UDP/TCP 5060, optional TLS 5061, and UDP 10000-20000 open only as required.
-- At least 2 vCPU / 4 GB RAM for an initial small organization.
-- TLS certificate and SIP firewall/fail2ban before public launch.
-- Private monitoring, backups, and an encrypted secret store.
+- FreeSWITCH 1.11.1, built from the official SignalWire source tag.
+- `mod_sofia` for carrier SIP, extension registration and SIP over WebSocket.
+- `mod_verto` for optional browser WebRTC signaling.
+- `mod_event_socket` on loopback only.
+- Node.js ESL listener for authoritative call events and mobile push fan-out.
+- Caddy for public WSS endpoints and automatic TLS.
+- Asterisk is retained only under the `legacy-asterisk` Compose profile.
 
-## Start
+## Public Network Surface
+
+| Purpose | Public endpoint |
+| --- | --- |
+| Carrier SIP | `sip:PBX_PUBLIC_IP:5060` over UDP/TCP |
+| SIP over WSS | `wss://PBX_WSS_DOMAIN` |
+| Verto | `wss://PBX_VERTO_DOMAIN` |
+| RTP/SRTP | UDP `20000-29999` |
+
+ESL `8021`, health `8088`, Sofia WS `5066` and Verto WS `8081` bind to loopback. Never open them in the DigitalOcean firewall.
+
+## DigitalOcean Deployment
+
+1. For a private pilot, create an Ubuntu 24.04 Basic Droplet with 1 vCPU and 1 GB RAM plus swap; keep `PBX_MAX_SESSIONS=50` and `PBX_SESSIONS_PER_SECOND=10`. Commercial production requires dedicated CPU nodes sized from measured concurrent-call and transcoding load. Attach a Reserved IP.
+2. Add DNS A records for `PBX_SIP_DOMAIN`, `PBX_WSS_DOMAIN` and `PBX_VERTO_DOMAIN` to the Reserved IP.
+3. Set `CARRIER_CIDRS` to the carrier's published signaling networks, then copy and run `digitalocean/bootstrap-host.sh` as root. Without this value, SIP port `5060` stays blocked.
+4. Copy `.env.example` to `.env`, replace every placeholder, and use different high-entropy values for SIP, ESL and webhook secrets.
+5. Put the APNs `.p8` key and Firebase service-account JSON in the ignored `services/pbx/secrets` directory. Set `PBX_HOST` locally and run `digitalocean/deploy.sh`.
+6. Point the carrier trunk to the Reserved IP on port `5060` only after inbound and outbound tests pass.
+
+The source build is intentionally pinned. Build the image in CI and store it in a private registry before adding a second node; do not compile independently on every production restart.
+
+## Verification
 
 ```bash
-cp .env.example .env
-docker compose config
-docker compose up -d --build
-docker compose exec asterisk asterisk -rx "pjsip show registrations"
+docker compose ps
+docker compose exec freeswitch /usr/local/freeswitch/bin/fs_cli -x status
+docker compose exec freeswitch /usr/local/freeswitch/bin/fs_cli -x "sofia status"
+docker compose exec freeswitch /usr/local/freeswitch/bin/fs_cli -x "sofia status gateway telnyx"
+curl --fail http://127.0.0.1:8088/healthz
+docker compose logs --since=10m freeswitch esl-listener
 ```
 
-The checked-in extension files contain no credentials. The Vocivo provisioning worker must generate `pjsip_extensions.conf` and `voicemail_users.conf` from tenant records, atomically replace them, validate with `asterisk -rx "dialplan reload"`, and roll back on failure.
+Register two clients as the bootstrap extension to confirm parallel forking. Then test internal audio in both directions, DTMF, hold/resume, answer/hangup synchronization, voicemail, conference media, NAT traversal and calls through each configured carrier.
 
-Do not switch `platform.mediaPlane` to `vocivo` until registration, NAT traversal, TLS/SRTP, inbound DID routing, emergency calling, failover, and load tests pass on the dedicated host.
+## Current Pilot Status
+
+The Vercel production control plane now returns `provider = "freeswitch"`, and both web and mobile clients use SIP over WSS. Dynamic tenant users are served through signed XML Curl snapshots. The current public endpoints are:
+
+- Reserved SIP IP: `68.183.244.215`
+- SIP domain: `sip.68.183.244.215.nip.io`
+- SIP over WSS: `wss://sip-wss.68.183.244.215.nip.io`
+- Verto over WSS: `wss://verto.68.183.244.215.nip.io`
+
+PSTN is deliberately disabled until a real Telnyx or GO Telecom trunk and carrier signaling CIDRs are configured. APNs and FCM are also disabled until their production credentials are mounted. Before commercial launch, add a second node, backups, observability, carrier failover, and measured load tests.
+
+The checked-in bootstrap extension is for a private smoke test. Its password must never be reused in production.

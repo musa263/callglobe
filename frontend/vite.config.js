@@ -40,7 +40,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
-          if (id.includes('@telnyx/webrtc')) return 'telnyx';
           return 'vendor';
         },
       },

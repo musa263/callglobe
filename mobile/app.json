@@ -52,7 +52,7 @@
           "contactsPermission": "Vocivo uses your contacts so you can quickly call or message people you choose."
         }
       ],
-      "./plugins/withTelnyxVoip",
+      "./plugins/withVocivoVoip",
       [
         "expo-splash-screen",
         {

@@ -8,7 +8,7 @@ import {
 import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { api, clearSession, getStoredSession, storeSession } from './lib/api';
 import { buildDialingDirectory } from './lib/countries';
-import { useTelnyxVoice } from './hooks/useTelnyxVoice';
+import { useVoice } from './hooks/useVoice';
 import AdminConsole from './admin/AdminConsole';
 
 const KEYS = [
@@ -341,7 +341,7 @@ export default function App() {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const voiceIdentity = useMemo(() => ({ name: profile?.full_name || 'Vocivo', extension: profile?.extension }), [profile?.extension, profile?.full_name]);
-  const voice = useTelnyxVoice(session?.token, !preview && Boolean(session) && Boolean(profile) && profile?.admin_only !== true, voiceIdentity);
+  const voice = useVoice(session?.token, !preview && Boolean(session) && Boolean(profile) && profile?.admin_only !== true, voiceIdentity);
 
   useEffect(() => {
     if (!session) return;

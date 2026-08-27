@@ -1,0 +1,38 @@
+<profile name="vocivo-internal">
+  <aliases/>
+  <gateways/>
+  <domains>
+    <domain name="all" alias="true" parse="true"/>
+  </domains>
+  <settings>
+    <param name="user-agent-string" value="Vocivo FreeSWITCH"/>
+    <param name="debug" value="0"/>
+    <param name="sip-trace" value="no"/>
+    <param name="context" value="vocivo-internal"/>
+    <param name="dialplan" value="XML"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="ext-rtp-ip" value="@@PBX_PUBLIC_IP@@"/>
+    <param name="ext-sip-ip" value="@@PBX_PUBLIC_IP@@"/>
+    <param name="sip-port" value="5062"/>
+    <param name="ws-binding" value="127.0.0.1:5066"/>
+    <param name="auth-calls" value="true"/>
+    <param name="auth-all-packets" value="false"/>
+    <param name="accept-blind-reg" value="false"/>
+    <param name="multiple-registrations" value="contact"/>
+    <param name="challenge-realm" value="auto_from"/>
+    <param name="inbound-codec-prefs" value="opus,G722,PCMU,PCMA"/>
+    <param name="outbound-codec-prefs" value="opus,G722,PCMU,PCMA"/>
+    <param name="inbound-late-negotiation" value="true"/>
+    <param name="inbound-zrtp-passthru" value="true"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rtp-hold-timeout-sec" value="1800"/>
+    <param name="dtmf-duration" value="2000"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="disable-transcoding" value="false"/>
+    <param name="NDLB-force-rport" value="safe"/>
+    <param name="aggressive-nat-detection" value="true"/>
+    <param name="enable-100rel" value="true"/>
+    <param name="enable-timer" value="true"/>
+  </settings>
+</profile>

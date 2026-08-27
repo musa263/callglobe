@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@telnyx/video": "^1.0.2",
-    "@telnyx/webrtc": "^2.27.10",
     "@vercel/functions": "^3.9.5",
     "bcryptjs": "^3.0.2",
     "jose": "^6.1.2",
@@ -26,7 +25,8 @@
     "postgres": "^3.4.9",
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "sip.js": "^0.21.2"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
