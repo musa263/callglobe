@@ -19,7 +19,7 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     rollupOptions: {
-      input: { main: 'index.html', video: 'video.html', enroll: 'enroll.html' },
+      input: { main: 'index.html', landing: 'landing.html', video: 'video.html', enroll: 'enroll.html' },
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return;

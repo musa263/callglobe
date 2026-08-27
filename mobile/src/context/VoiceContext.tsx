@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import {
   createCredentialConfig,
   TelnyxCallState,
@@ -279,6 +279,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
     let canceled = false;
     let tokenTimer: ReturnType<typeof setInterval> | undefined;
+    let activeRegistrationTimer: ReturnType<typeof setTimeout> | undefined;
+    let appStateSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
     const connect = async () => {
       try {
         const launchedFromPush = await TelnyxVoipClient.isLaunchedFromPushNotification();
@@ -292,6 +294,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         await applyIncomingRingtone(ringtone);
         loginConfigRef.current = { sipUser: data.sip_user, sipPassword: data.sip_password, ringtone };
         const pushNotificationDeviceToken = Platform.OS === 'ios' ? (await VoicePnBridge.getVoipToken())?.trim() || undefined : undefined;
+        let registeredToken = pushNotificationDeviceToken;
+        let registrationBusy = false;
         const login = async (token?: string) => {
           let lastError: unknown;
           for (let attempt = 0; attempt < 3 && !canceled; attempt += 1) {
@@ -312,20 +316,39 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           }
           throw lastError instanceof Error ? lastError : new Error('Unable to connect to calling service.');
         };
+        const registerLatestDevice = async () => {
+          if (Platform.OS !== 'ios' || canceled || registrationBusy) return;
+          const token = (await VoicePnBridge.getVoipToken())?.trim();
+          if (!token || token === registeredToken) return;
+          registrationBusy = true;
+          setPushRegistration('registering');
+          try {
+            await login(token);
+            registeredToken = token;
+            if (!canceled) setPushRegistration('registered');
+          } catch {
+            if (!canceled) setPushRegistration('unavailable');
+          } finally {
+            registrationBusy = false;
+          }
+        };
         await login(pushNotificationDeviceToken);
         if (Platform.OS === 'ios') setPushRegistration(pushNotificationDeviceToken ? 'registered' : 'registering');
         if (Platform.OS === 'ios' && !pushNotificationDeviceToken) {
           tokenTimer = setInterval(() => {
-            VoicePnBridge.getVoipToken().then(async (token) => {
-              const value = token?.trim();
-              if (!value || canceled) return;
-              if (tokenTimer) clearInterval(tokenTimer);
+            registerLatestDevice().then(() => {
+              if (!registeredToken || !tokenTimer) return;
+              clearInterval(tokenTimer);
               tokenTimer = undefined;
-              setPushRegistration('registering');
-              await login(value);
-              if (!canceled) setPushRegistration('registered');
             }).catch(() => undefined);
           }, 2000);
+        }
+        if (Platform.OS === 'ios') {
+          appStateSubscription = AppState.addEventListener('change', (state) => {
+            if (state !== 'active' || canceled) return;
+            if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
+            activeRegistrationTimer = setTimeout(() => registerLatestDevice().catch(() => undefined), 750);
+          });
         }
       } catch (voiceError) {
         if (Platform.OS === 'ios') setPushRegistration('unavailable');
@@ -333,7 +356,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }
     };
     connect();
-    return () => { canceled = true; if (tokenTimer) clearInterval(tokenTimer); };
+    return () => {
+      canceled = true;
+      if (tokenTimer) clearInterval(tokenTimer);
+      if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
+      appStateSubscription?.remove();
+    };
   }, [isAuthenticated, isPreview, loading]);
 
   const refreshIncomingCalls = useCallback(async () => {

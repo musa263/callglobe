@@ -126,6 +126,10 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
     const appUrl = requiredEnv('VITE_APP_URL').replace(/\/+$/, '');
     await callAction(callControlId, 'playback_start', { audio_url: `${appUrl}/audio/ringback.wav`, loop: 'infinity', command_id: `${eventId}-ringback` }).catch(() => undefined);
   }
+  const businessName = organizationId
+    ? (await readBusinessVoiceConfig(organizationId)).companyName
+    : 'Vocivo';
+  const remoteIdentity = callerName || callerNumber;
   await dialCall({
     to: destination,
     state: {
@@ -136,7 +140,7 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
       forwardUnavailable: options.forwardUnavailable, forwardingDepth: options.forwardingDepth,
     },
     from: options.dialFrom || (callerNumber && e164.test(callerNumber) ? callerNumber : undefined),
-    fromDisplayName: `${department} call`,
+    fromDisplayName: callerDisplay(remoteIdentity ? `${businessName} - ${remoteIdentity}` : `${businessName} call`),
     linkTo: callControlId,
     commandId: `${eventId}-agent`,
     timeoutSeconds,
@@ -518,6 +522,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }).catch((error) => console.warn('Vocivo could not start carrier ringback', publicError(error)));
       let destinationCall;
       try {
+        const businessName = reservation.flow === 'internal'
+          ? (await readBusinessVoiceConfig(reservation.organizationId)).companyName
+          : '';
         destinationCall = await dialCall({
           to: destination,
           from: reservation.callerId,
@@ -529,7 +536,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             destinationName: reservation.destinationName,
           },
           fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
-            ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
+            ? `${businessName ? `${businessName} - ` : ''}${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
             : payload.caller_id_name || 'Vocivo'),
           customHeaders: reservation.flow === 'internal' ? [
             { name: 'X-Vocivo-Call-Type', value: 'internal' },
