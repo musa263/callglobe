@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
-import { telnyx } from '../telnyx.js';
+import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { telnyx, telnyxPstnConnectionPath } from '../telnyx.js';
 import { deleteTrunkPolicy, normalizeTrunkPolicy, readTrunkPolicies, saveTrunkPolicy, type TrunkPolicy } from '../trunk-policy-store.js';
 import { requireFeature } from '../saas-access.js';
 
@@ -30,11 +30,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     await requireFeature(access.session, 'sipTrunks');
     if (req.method === 'GET') {
-      const [connectionResponse, uacResponse, policies] = await Promise.all([telnyx(`/credential_connections/${requiredEnv('TELNYX_CONNECTION_ID')}`), telnyx('/uac_connections?page[size]=100'), readTrunkPolicies()]);
+      const [connectionResponse, uacResponse, policies] = await Promise.all([telnyx(telnyxPstnConnectionPath()), telnyx('/uac_connections?page[size]=100'), readTrunkPolicies()]);
       const connection = (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {};
       const uac = (await uacResponse.json() as { data?: UacConnection[] }).data ?? [];
       return res.status(200).json({
-        vocivoTrunk: { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.user_name, registrationStatus: connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: 'WSS / TLS' },
+        vocivoTrunk: { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.record_type === 'ip_connection' ? '68.183.244.215' : connection.user_name, registrationStatus: connection.record_type === 'ip_connection' ? 'IP authenticated' : connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: connection.transport_protocol || 'UDP' },
         externalTrunks: uac.filter((item) => access.superadmin || policies[item.id]?.organizationId === access.organizationId).map((item) => safeUac(item, policies[item.id])),
       });
     }

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { TelnyxApiError, telnyx } from './telnyx.js';
+import { TelnyxApiError, telnyx, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.TELNYX_API_KEY;
 const originalTimeout = process.env.TELNYX_REQUEST_TIMEOUT_MS;
+const originalPstnConnectionId = process.env.TELNYX_PSTN_CONNECTION_ID;
+const originalCallControlAppId = process.env.TELNYX_CALL_CONTROL_APP_ID;
+const originalConnectionId = process.env.TELNYX_CONNECTION_ID;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -12,6 +15,20 @@ afterEach(() => {
   else process.env.TELNYX_API_KEY = originalApiKey;
   if (originalTimeout === undefined) delete process.env.TELNYX_REQUEST_TIMEOUT_MS;
   else process.env.TELNYX_REQUEST_TIMEOUT_MS = originalTimeout;
+  if (originalPstnConnectionId === undefined) delete process.env.TELNYX_PSTN_CONNECTION_ID;
+  else process.env.TELNYX_PSTN_CONNECTION_ID = originalPstnConnectionId;
+  if (originalCallControlAppId === undefined) delete process.env.TELNYX_CALL_CONTROL_APP_ID;
+  else process.env.TELNYX_CALL_CONTROL_APP_ID = originalCallControlAppId;
+  if (originalConnectionId === undefined) delete process.env.TELNYX_CONNECTION_ID;
+  else process.env.TELNYX_CONNECTION_ID = originalConnectionId;
+});
+
+test('uses the dedicated PSTN connection when configured', () => {
+  process.env.TELNYX_PSTN_CONNECTION_ID = 'ip-connection';
+  process.env.TELNYX_CALL_CONTROL_APP_ID = 'legacy-call-control';
+  process.env.TELNYX_CONNECTION_ID = 'legacy-credential';
+  assert.equal(telnyxPstnConnectionId(), 'ip-connection');
+  assert.equal(telnyxPstnConnectionPath(), '/ip_connections/ip-connection');
 });
 
 test('retries one transient Telnyx GET failure', async () => {

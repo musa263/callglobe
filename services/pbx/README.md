@@ -56,6 +56,6 @@ The Vercel production control plane now returns `provider = "freeswitch"`, and b
 - SIP over WSS: `wss://sip-wss.68.183.244.215.nip.io`
 - Verto over WSS: `wss://verto.68.183.244.215.nip.io`
 
-PSTN is deliberately disabled until a real Telnyx or GO Telecom trunk and carrier signaling CIDRs are configured. APNs and FCM are also disabled until their production credentials are mounted. Before commercial launch, add a second node, backups, observability, carrier failover, and measured load tests.
+The pilot Telnyx IP-authenticated trunk is attached to the reserved SIP IP. On DigitalOcean, `PBX_CARRIER_BIND_IP` must be the Droplet anchor IPv4 and the default route must use the anchor gateway; otherwise outbound SIP originates from the Droplet IP and carrier authentication fails. APNs and FCM remain disabled until their production credentials are mounted. Before commercial launch, add a second node, backups, observability, carrier failover, and measured load tests.
 
 The checked-in bootstrap extension is for a private smoke test. Its password must never be reused in production.

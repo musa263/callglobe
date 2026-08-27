@@ -30,6 +30,7 @@ render() {
   mkdir -p "$(dirname "$target")"
   sed \
     -e "s|@@PBX_PUBLIC_IP@@|$PBX_PUBLIC_IP|g" \
+    -e "s|@@PBX_CARRIER_BIND_IP@@|$PBX_CARRIER_BIND_IP|g" \
     -e "s|@@PBX_SIP_DOMAIN@@|$PBX_SIP_DOMAIN|g" \
     -e "s|@@PBX_DEFAULT_EXTENSION@@|$PBX_DEFAULT_EXTENSION|g" \
     -e "s|@@PBX_DEFAULT_EXTENSION_NAME@@|$PBX_DEFAULT_EXTENSION_NAME|g" \
@@ -50,7 +51,7 @@ render() {
     "$source" > "$target"
 }
 
-for variable in PBX_PUBLIC_IP PBX_SIP_DOMAIN PBX_DEFAULT_EXTENSION \
+for variable in PBX_PUBLIC_IP PBX_CARRIER_BIND_IP PBX_SIP_DOMAIN PBX_DEFAULT_EXTENSION \
   PBX_DEFAULT_EXTENSION_PASSWORD ESL_PASSWORD PSTN_GATEWAY_NAME \
   PSTN_SIP_PROXY PSTN_SIP_PORT PSTN_SIP_USERNAME PSTN_SIP_PASSWORD \
   PSTN_OUTBOUND_CALLER_ID; do
@@ -74,6 +75,9 @@ esac
 
 case "$PBX_PUBLIC_IP" in
   *[!0-9a-fA-F.:]*) echo "PBX_PUBLIC_IP must be an IPv4 or IPv6 address." >&2; exit 1 ;;
+esac
+case "$PBX_CARRIER_BIND_IP" in
+  *[!0-9a-fA-F.:]*) echo "PBX_CARRIER_BIND_IP must be an IPv4 or IPv6 address." >&2; exit 1 ;;
 esac
 case "$PBX_DEFAULT_EXTENSION" in
   *[!0-9]*|'') echo "PBX_DEFAULT_EXTENSION must contain digits only." >&2; exit 1 ;;

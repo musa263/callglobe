@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
-import { telnyx } from '../telnyx.js';
+import { telnyx, telnyxPstnConnectionId } from '../telnyx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
 import { getExtension } from '../pbx.js';
@@ -87,7 +87,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: 'POST',
         body: JSON.stringify({
           phone_numbers: phoneNumbers.map((phone_number: string) => ({ phone_number })),
-          connection_id: access.superadmin ? text(req.body?.connectionId, 80) || requiredEnv('TELNYX_CALL_CONTROL_APP_ID') : requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
+          connection_id: access.superadmin ? text(req.body?.connectionId, 80) || telnyxPstnConnectionId() : telnyxPstnConnectionId(),
           customer_reference: access.superadmin ? text(req.body?.customerReference, 100) || `Vocivo ${activeOrganizationId} ${new Date().toISOString()}` : `Vocivo ${activeOrganizationId} ${new Date().toISOString()}`,
         }),
       });
@@ -120,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const ownedNumber = text(owned.data?.phone_number, 24);
     if (!ownedNumber || config.numberAssignments[ownedNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
     const body: Record<string, unknown> = {};
-    if (req.body?.assignToVocivo === true) body.connection_id = requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
+    if (req.body?.assignToVocivo === true) body.connection_id = telnyxPstnConnectionId();
     else if (req.body?.connectionId !== undefined) body.connection_id = text(req.body.connectionId, 80) || null;
     if (req.body?.messagingProfileId !== undefined) body.messaging_profile_id = text(req.body.messagingProfileId, 80) || null;
     if (Array.isArray(req.body?.tags)) body.tags = req.body.tags.map((item: unknown) => text(item, 50)).filter(Boolean).slice(0, 20);

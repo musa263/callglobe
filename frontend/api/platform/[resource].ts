@@ -3,7 +3,7 @@ import { authenticatePlatformKey, type PlatformScope } from '../_lib/platform-ke
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../_lib/http.js';
 import { findExtension, listExtensions } from '../_lib/pbx.js';
 import { callAction, dialCall } from '../_lib/voice-control.js';
-import { telnyx } from '../_lib/telnyx.js';
+import { telnyx, telnyxPstnConnectionId } from '../_lib/telnyx.js';
 import { assertCallerIdForOrganization } from '../_lib/phone-number-access.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { assignNumberToOrganization, numberOrganizationId } from '../_lib/tenancy.js';
@@ -55,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const deep = req.query.deep === '1';
       const storage = deep ? await storageHealth() : { provider: 'postgres', status: 'unchecked' };
       res.setHeader('Cache-Control', deep ? 'no-store' : 'public, s-maxage=5, stale-while-revalidate=30');
-      return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', storage, controlPlane: 'vocivo', mediaPlane: process.env.PBX_SERVICE_URL ? 'vocivo' : 'telnyx', pstnProvider: 'telnyx', time: new Date().toISOString() });
+      return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', storage, controlPlane: 'vocivo', mediaPlane: process.env.VOCIVO_PBX_ENGINE || (process.env.PBX_SERVICE_URL ? 'vocivo' : 'telnyx'), pstnProvider: 'telnyx', time: new Date().toISOString() });
     } catch (error) {
       console.error('Vocivo health check failed', error);
       return res.status(503).json({ ok: false, service: 'vocivo-api', status: 'unavailable', time: new Date().toISOString() });
@@ -118,7 +118,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.body?.confirmPurchase !== true) return res.status(400).json({ error: 'Explicit purchase confirmation is required.' });
       const numbers = Array.isArray(req.body?.phoneNumbers) ? req.body.phoneNumbers.map((item: unknown) => text(item, 24)).filter((item: string) => e164.test(item)).slice(0, 10) : [];
       if (!numbers.length) return res.status(400).json({ error: 'At least one valid phone number is required.' });
-      const response = await telnyx('/number_orders', { method: 'POST', body: JSON.stringify({ phone_numbers: numbers.map((phone_number: string) => ({ phone_number })), connection_id: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'), customer_reference: text(req.body?.customerReference, 100) || `Vocivo API ${apiKey.id}` }) });
+      const response = await telnyx('/number_orders', { method: 'POST', body: JSON.stringify({ phone_numbers: numbers.map((phone_number: string) => ({ phone_number })), connection_id: telnyxPstnConnectionId(), customer_reference: text(req.body?.customerReference, 100) || `Vocivo API ${apiKey.id}` }) });
       const payload = await response.json();
       await Promise.all(numbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, apiKey.organizationId, { source: 'owned', destinationType: 'main' })));
       return res.status(201).json(payload);

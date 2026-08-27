@@ -17,6 +17,7 @@
 
 - SIP FQDN: `sip.68.183.244.215.nip.io`
 - Signaling IP: `68.183.244.215`
+- DigitalOcean anchor bind IP: `10.47.0.7` (private to the Droplet)
 - Signaling: UDP/TCP `5060`, opened only to the carrier's published CIDRs
 - Media: SRTP/RTP on UDP 20000-29999
 - Authentication: IP allowlist and mutual credentials; TLS certificates where supported
@@ -24,7 +25,7 @@
 - DTMF: RFC 2833 / RFC 4733
 - Number format: E.164
 
-The carrier SIP gateway remains disabled and port `5060` remains blocked until the chosen carrier provides its signaling CIDRs and trunk credentials.
+The Telnyx IP-authenticated trunk uses the reserved signaling IP for inbound and outbound traffic. The carrier-facing Sofia profile binds to the Droplet anchor address so DigitalOcean translates egress to the reserved IP.
 
 ## Recommended split
 

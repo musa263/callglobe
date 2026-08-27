@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../_lib/auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../_lib/http.js';
-import { telnyx } from '../_lib/telnyx.js';
+import { telnyx, telnyxPstnConnectionId } from '../_lib/telnyx.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { sessionCanAccessNumber } from '../_lib/tenancy.js';
 
@@ -23,6 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = await requireSession(req);
     const connectionId = requiredEnv('TELNYX_CONNECTION_ID');
     const callControlApplicationId = requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
+    const pstnConnectionId = telnyxPstnConnectionId();
     const config = await readPbxConfig();
     const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
     const payload = await response.json() as { data?: TelnyxNumber[] };
@@ -32,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       label: config.numberAssignments[number.phone_number]?.label || number.connection_name || 'Vocivo number',
       country_code: number.country_iso_alpha2 || null,
       status: number.status || 'active',
-      receives_calls: [connectionId, callControlApplicationId].includes(number.connection_id || ''),
+      receives_calls: [connectionId, callControlApplicationId, pstnConnectionId].includes(number.connection_id || ''),
       messaging_enabled: Boolean(number.messaging_profile_id),
       source: 'owned',
     }));

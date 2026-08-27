@@ -1,5 +1,16 @@
 import { requiredEnv } from './http.js';
 
+export function telnyxPstnConnectionId() {
+  return process.env.TELNYX_PSTN_CONNECTION_ID || requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
+}
+
+export function telnyxPstnConnectionPath() {
+  const dedicatedConnectionId = process.env.TELNYX_PSTN_CONNECTION_ID;
+  return dedicatedConnectionId
+    ? `/ip_connections/${encodeURIComponent(dedicatedConnectionId)}`
+    : `/credential_connections/${encodeURIComponent(requiredEnv('TELNYX_CONNECTION_ID'))}`;
+}
+
 export class TelnyxApiError extends Error {
   status: number;
   code?: string;

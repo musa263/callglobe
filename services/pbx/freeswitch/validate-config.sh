@@ -9,6 +9,7 @@ find "$root/config" -type f -name '*.xml' | while IFS= read -r source; do
   target="$temporary/$(basename "$source")"
   sed \
     -e 's|@@PBX_PUBLIC_IP@@|203.0.113.10|g' \
+    -e 's|@@PBX_CARRIER_BIND_IP@@|10.0.0.2|g' \
     -e 's|@@PBX_SIP_DOMAIN@@|sip.example.com|g' \
     -e 's|@@PBX_DEFAULT_EXTENSION@@|2000|g' \
     -e 's|@@PBX_DEFAULT_EXTENSION_NAME@@|Vocivo Administrator|g' \
