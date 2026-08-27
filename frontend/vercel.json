@@ -7,6 +7,13 @@
   },
   "rewrites": [
     { "source": "/admin", "destination": "/" },
+    { "source": "/landing", "destination": "/landing.html" },
+    { "source": "/platform", "destination": "/platform.html" },
+    { "source": "/business", "destination": "/business.html" },
+    { "source": "/why-vocivo", "destination": "/why-vocivo.html" },
+    { "source": "/pricing", "destination": "/pricing.html" },
+    { "source": "/security", "destination": "/security.html" },
+    { "source": "/contact", "destination": "/contact.html" },
     { "source": "/api/mobile/bootstrap", "destination": "/api/auth/bootstrap" },
     { "source": "/api/storage", "destination": "/api/platform/storage" },
     { "source": "/api/health", "destination": "/api/platform/health" }

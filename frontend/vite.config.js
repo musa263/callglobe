@@ -9,7 +9,11 @@ export default defineConfig({
     manifest: false,
     workbox: {
       navigateFallback: '/index.html',
-      navigateFallbackDenylist: [/^\/landing(?:\.html)?$/, /^\/enroll(?:\.html)?$/, /^\/video(?:\.html)?$/],
+      navigateFallbackDenylist: [
+        /^\/(?:landing|platform|business|why-vocivo|pricing|security|contact)(?:\.html)?$/,
+        /^\/enroll(?:\.html)?$/,
+        /^\/video(?:\.html)?$/,
+      ],
       globPatterns: ['**/*.{js,css,html,png,svg,wav,json}'],
     },
   })],
@@ -21,7 +25,18 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     rollupOptions: {
-      input: { main: 'index.html', landing: 'landing.html', video: 'video.html', enroll: 'enroll.html' },
+      input: {
+        main: 'index.html',
+        landing: 'landing.html',
+        platform: 'platform.html',
+        business: 'business.html',
+        whyVocivo: 'why-vocivo.html',
+        pricing: 'pricing.html',
+        security: 'security.html',
+        contact: 'contact.html',
+        video: 'video.html',
+        enroll: 'enroll.html',
+      },
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
