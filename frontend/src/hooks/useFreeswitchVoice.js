@@ -5,6 +5,16 @@ import { installTransportSafety, ProxyAwareSipTransport, registerAndWait } from 
 
 const mediaOptions = { constraints: { audio: true, video: false } };
 const outgoingAnswerTimeoutMs = 35_000;
+const ringbackUrl = '/audio/ringback.wav?v=20260828-2';
+const silentAudioUrl = 'data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAACAgICAgICAgICAgICAgA==';
+
+function logVoiceError(operation, error, context = {}) {
+  console.error(`[VocivoVoice] ${operation}`, {
+    ...context,
+    message: error?.message || String(error),
+    stack: error?.stack,
+  });
+}
 
 function header(session, name) {
   try { return session?.request?.getHeader?.(name) || ''; } catch { return ''; }
@@ -72,23 +82,55 @@ function waitForEstablished(session, timeoutMs = 10_000) {
   });
 }
 
-function attachRemoteAudio(leg) {
-  const stream = leg.session?.sessionDescriptionHandler?.remoteMediaStream;
-  if (!stream) return;
-  stream.getAudioTracks?.().forEach((track) => { track.enabled = true; });
-  if (!leg.audio) {
-    const audio = document.createElement('audio');
-    audio.autoplay = true;
-    audio.playsInline = true;
-    audio.dataset.vocivoCall = leg.id;
-    audio.style.display = 'none';
-    document.body.appendChild(audio);
-    leg.audio = audio;
+function ensureAudioElement(leg) {
+  if (leg.audio) return leg.audio;
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.dataset.vocivoCall = leg.id;
+  audio.style.display = 'none';
+  document.body.appendChild(audio);
+  leg.audio = audio;
+  return audio;
+}
+
+async function authorizeAudioPlayback(leg) {
+  const audio = ensureAudioElement(leg);
+  if (!audio.srcObject && !audio.currentSrc && !audio.src) {
+    audio.src = silentAudioUrl;
+    audio.volume = 0;
   }
-  leg.audio.muted = false;
-  leg.audio.volume = 1;
-  if (leg.audio.srcObject !== stream) leg.audio.srcObject = stream;
-  leg.audio.play().catch(() => undefined);
+  await audio.play();
+  if (!audio.srcObject) {
+    audio.pause();
+    audio.currentTime = 0;
+  }
+  return audio;
+}
+
+function attachRemoteAudio(leg, onPlaybackState = () => undefined) {
+  const stream = leg.session?.sessionDescriptionHandler?.remoteMediaStream;
+  if (!stream) return Promise.resolve(false);
+  stream.getAudioTracks?.().forEach((track) => { track.enabled = true; });
+  const audio = ensureAudioElement(leg);
+  audio.pause();
+  audio.loop = false;
+  audio.removeAttribute('src');
+  audio.muted = false;
+  audio.volume = 1;
+  if (audio.srcObject !== stream) audio.srcObject = stream;
+  return audio.play()
+    .then(() => {
+      leg.audioPlaybackBlocked = false;
+      onPlaybackState(false);
+      return true;
+    })
+    .catch((error) => {
+      leg.audioPlaybackBlocked = true;
+      onPlaybackState(true);
+      logVoiceError('Remote audio playback was blocked.', error, { callId: leg.id });
+      return false;
+    });
 }
 
 function removeRemoteAudio(leg) {
@@ -110,6 +152,7 @@ function clearLegRuntime(leg) {
   leg.mediaConnectTimer = null;
   leg.remoteTrackTimer = null;
   leg.mediaRecoveryPending = false;
+  leg.audioPlaybackBlocked = false;
   if (leg.stateListener) leg.session.stateChange.removeListener(leg.stateListener);
   leg.stateListener = null;
   for (const dispose of leg.mediaDisposers || []) dispose();
@@ -136,7 +179,7 @@ async function restartLegIce(leg) {
   return leg.iceRestartPromise;
 }
 
-function bindLegMediaSafety(leg, recover) {
+function bindLegMediaSafety(leg, recover, onPlaybackState) {
   const peerConnection = leg.session?.sessionDescriptionHandler?.peerConnection;
   if (!peerConnection?.addEventListener || leg.mediaDisposers?.length) return;
   leg.mediaDisposers ||= [];
@@ -161,7 +204,7 @@ function bindLegMediaSafety(leg, recover) {
       if (leg.mediaConnectTimer) clearTimeout(leg.mediaConnectTimer);
       leg.mediaRecoveryTimer = null;
       leg.mediaConnectTimer = null;
-      attachRemoteAudio(leg);
+      void attachRemoteAudio(leg, onPlaybackState);
       return;
     }
     if (state === 'failed') {
@@ -183,7 +226,7 @@ function bindLegMediaSafety(leg, recover) {
     }
   };
   const trackAdded = () => {
-    attachRemoteAudio(leg);
+    void attachRemoteAudio(leg, onPlaybackState);
     const tracks = leg.session?.sessionDescriptionHandler?.remoteMediaStream?.getAudioTracks?.() || [];
     if (tracks.length && leg.remoteTrackTimer) clearTimeout(leg.remoteTrackTimer);
     if (tracks.length) leg.remoteTrackTimer = null;
@@ -233,36 +276,49 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
   const [muted, setMuted] = useState(false);
   const [dialedNumber, setDialedNumber] = useState('');
   const [endedCall, setEndedCall] = useState(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
 
   const stopRingback = useCallback(() => {
     const tone = ringbackRef.current;
     ringbackRef.current = null;
-    if (tone) { tone.pause(); tone.currentTime = 0; }
+    if (tone) { tone.pause(); tone.currentTime = 0; tone.loop = false; }
   }, []);
-  const startRingback = useCallback(() => {
+  const startRingback = useCallback((leg) => {
     stopRingback();
-    const tone = new Audio('/audio/ringback.wav');
+    const tone = ensureAudioElement(leg);
+    tone.srcObject = null;
+    tone.src = ringbackUrl;
     tone.loop = true;
-    tone.volume = 0.58;
+    tone.muted = false;
+    tone.volume = 0.42;
     ringbackRef.current = tone;
-    tone.play().catch(() => undefined);
+    tone.play().then(() => setAudioBlocked(false)).catch((error) => {
+      setAudioBlocked(true);
+      logVoiceError('Outgoing ringback playback was blocked.', error, { callId: leg.id });
+    });
   }, [stopRingback]);
   const stopIncomingRingtone = useCallback(() => {
     const tone = incomingToneRef.current;
     incomingToneRef.current = null;
-    if (tone) { tone.pause(); tone.currentTime = 0; }
+    if (tone) { tone.pause(); tone.currentTime = 0; tone.loop = false; }
     incomingNotificationRef.current?.close?.();
     incomingNotificationRef.current = null;
     navigator.vibrate?.(0);
   }, []);
   const startIncomingRingtone = useCallback((leg) => {
     stopIncomingRingtone();
-    const tone = new Audio('/audio/ringback.wav');
+    const tone = ensureAudioElement(leg);
+    tone.srcObject = null;
+    tone.src = ringbackUrl;
     tone.loop = true;
-    tone.volume = 0.72;
+    tone.muted = false;
+    tone.volume = 0.52;
     incomingToneRef.current = tone;
-    tone.play().catch(() => undefined);
+    tone.play().then(() => setAudioBlocked(false)).catch((error) => {
+      setAudioBlocked(true);
+      logVoiceError('Incoming ringtone playback was blocked.', error, { callId: leg.id });
+    });
     navigator.vibrate?.([450, 250, 450, 650]);
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       const notification = new Notification(leg.identity.name || 'Incoming Vocivo call', {
@@ -277,7 +333,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
   }, [stopIncomingRingtone]);
 
   const enableBrowserAlerts = useCallback(async () => {
-    const probe = new Audio('/audio/ringback.wav');
+    const probe = new Audio(ringbackUrl);
     probe.volume = 0.01;
     await probe.play().catch(() => undefined);
     probe.pause();
@@ -298,6 +354,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     setConference(null);
     setState(null);
     setMuted(false);
+    setAudioBlocked(false);
     setRemoteIdentity({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
   }, []);
 
@@ -397,6 +454,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         identity: identityFor(session, fallback),
         held: false,
         audio: null,
+        audioPlaybackBlocked: false,
         noAnswerTimer: null,
         mediaRecoveryTimer: null,
         mediaConnectTimer: null,
@@ -412,11 +470,13 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         if (nextState === SessionState.Established) {
           if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
           leg.noAnswerTimer = null;
-          attachRemoteAudio(leg);
-          bindLegMediaSafety(leg, () => mediaRecoveryRef.current('media'));
           if (activeRef.current?.id === leg.id) {
             stopRingback();
             stopIncomingRingtone();
+          }
+          void attachRemoteAudio(leg, setAudioBlocked);
+          bindLegMediaSafety(leg, () => mediaRecoveryRef.current('media'), setAudioBlocked);
+          if (activeRef.current?.id === leg.id) {
             setState(leg.held ? 'held' : 'active');
             setCall(publicCall(leg, nextState));
             setRemoteIdentity(leg.identity);
@@ -585,7 +645,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     setCall(publicCall(leg));
     setRemoteIdentity(leg.identity);
     setState('ringing');
-    startRingback();
+    startRingback(leg);
     try {
       await inviter.invite();
       return leg;
@@ -624,6 +684,13 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
       heldRef.current = current;
       setHeldCall({ id: current.id, identity: current.identity, state: 'held' });
     }
+    try {
+      await authorizeAudioPlayback(incoming);
+      setAudioBlocked(false);
+    } catch (audioError) {
+      setAudioBlocked(true);
+      logVoiceError('Incoming call audio authorization failed.', audioError, { callId: incoming.id });
+    }
     stopIncomingRingtone();
     activeRef.current = incoming;
     incomingRef.current = null;
@@ -633,6 +700,16 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     setState('answering');
     await incoming.session.accept({ sessionDescriptionHandlerOptions: mediaOptions });
   }, [setHeld, stopIncomingRingtone]);
+
+  const resumeAudio = useCallback(async () => {
+    const leg = activeRef.current;
+    if (!leg) throw new Error('There is no active call audio to resume.');
+    await authorizeAudioPlayback(leg);
+    const attached = await attachRemoteAudio(leg, setAudioBlocked);
+    if (!attached) throw new Error('The remote audio track is not available yet.');
+    setAudioBlocked(false);
+    return true;
+  }, []);
 
   const decline = useCallback(async () => {
     const incoming = incomingRef.current;
@@ -821,9 +898,9 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
   const connected = state === 'active' || state === 'held';
   const active = Boolean(activeRef.current) && !incomingCall && ['ringing', 'answering', 'active', 'held'].includes(state);
   return {
-    ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state, muted, dialedNumber, endedCall,
+    ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state, muted, dialedNumber, endedCall, audioBlocked,
     connected, active, notificationPermission, enableBrowserAlerts,
     startCall, startInternalCall, startSecondCall, startSecondInternalCall, swapCalls, mergeCalls, removeConferenceParticipant,
-    transferCall, sendDtmf, answer, decline, hangup, toggleMute, toggleHold, disconnect,
+    transferCall, sendDtmf, answer, decline, hangup, toggleMute, toggleHold, resumeAudio, disconnect,
   };
 }

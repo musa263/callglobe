@@ -176,7 +176,7 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.mergeCalls)} title="Merge calls"><Merge /><span>Merge</span></button>
           <button className="control" disabled={!voice.connected || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.conference} onClick={() => openTool('participants')} title="Conference participants"><UserMinus /><span>Participants</span></button>
-          <button className="control" disabled title="Browser audio"><Volume2 /><span>Audio</span></button>
+          <button className={voice.audioBlocked ? 'control attention' : 'control'} disabled={!voice.connected || busy} onClick={() => action(voice.resumeAudio)} title={voice.audioBlocked ? 'Resume browser audio' : 'Refresh browser audio'}><Volume2 /><span>{voice.audioBlocked ? 'Resume audio' : 'Audio'}</span></button>
         </div>
         {voice.heldCall && !voice.conference && <div className="held-call-strip"><span>{voice.heldCall.identity?.name || voice.heldCall.identity?.number} on hold</span><button onClick={() => action(voice.swapCalls)}>Swap</button></div>}
         {tool && <div className="web-call-tool">

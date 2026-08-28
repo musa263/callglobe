@@ -374,6 +374,15 @@ export class Call {
     this.isMuted$.next(next);
   }
 
+  enableMediaTracks() {
+    const handler = this.session.sessionDescriptionHandler as unknown as {
+      localMediaStream?: MediaStream;
+      remoteMediaStream?: MediaStream;
+    } | undefined;
+    handler?.localMediaStream?.getAudioTracks().forEach((track) => { track.enabled = !this.currentIsMuted; });
+    handler?.remoteMediaStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
+  }
+
   async dtmf(digit: string) {
     const handler = this.session.sessionDescriptionHandler as unknown as { sendDtmf?: (tones: string, options?: unknown) => boolean } | undefined;
     if (!handler?.sendDtmf?.(digit, { duration: 160, interToneGap: 70 })) throw new Error('The keypad tone could not be sent.');
@@ -524,12 +533,11 @@ export class Call {
       InCallManager.stopRingback();
       InCallManager.stopRingtone();
       if (Platform.OS === 'android') InCallManager.start({ media: 'audio' });
-      const handler = this.session.sessionDescriptionHandler as unknown as { localMediaStream?: MediaStream; remoteMediaStream?: MediaStream } | undefined;
-      handler?.localMediaStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
-      handler?.remoteMediaStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
+      this.enableMediaTracks();
       this.#bindPeerConnectionSafety();
       if (Platform.OS === 'android') RNCallKeep.setCurrentCallActive(this.callId);
       if (!this.isIncoming && Platform.OS === 'ios') RNCallKeep.reportConnectedOutgoingCallWithUUID(this.callId);
+      void this.#client.ensureActiveCallAudio(this.callId);
       this.#durationTimer ||= setInterval(() => this.duration$.next(Math.max(0, Math.floor((Date.now() - (this.#connectedAt || Date.now())) / 1000))), 1000);
       return;
     }
@@ -565,6 +573,8 @@ export class VocivoVoipClient {
   #backgroundWake: BackgroundWakeCoordinator<IncomingPushPayload>;
   #networkMigration: NetworkMigrationCoordinator;
   #signalingRecovery?: Promise<void>;
+  #nativeAudioSessionActive = Platform.OS !== 'ios';
+  #audioActivationWaiters = new Set<() => void>();
 
   constructor() {
     this.#callKeepReady = RNCallKeep.setup({
@@ -641,14 +651,19 @@ export class VocivoVoipClient {
     });
     callKeepListener('didActivateAudioSession', () => {
       try {
+        this.#nativeAudioSessionActive = true;
         RTCAudioSession.audioSessionDidActivate();
         if (Platform.OS === 'android') InCallManager.start({ media: 'audio' });
+        this.currentCalls.forEach((call) => call.enableMediaTracks());
+        this.#audioActivationWaiters.forEach((resolve) => resolve());
+        this.#audioActivationWaiters.clear();
       } catch (error) {
         logTelephonyError('activate-native-audio-session', error);
       }
     });
     callKeepListener('didDeactivateAudioSession', () => {
       try {
+        this.#nativeAudioSessionActive = false;
         RTCAudioSession.audioSessionDidDeactivate();
         if (!this.currentCalls.some((call) => call.currentState === TelnyxCallState.ACTIVE)) InCallManager.stop();
       } catch (error) {
@@ -773,6 +788,42 @@ export class VocivoVoipClient {
     if (!calls.length) return false;
     const results = await Promise.allSettled(calls.map((call) => call.restartIce()));
     return results.some((result) => result.status === 'fulfilled' && result.value);
+  }
+
+  async waitForNativeAudioSession(timeoutMs = 1_500) {
+    if (Platform.OS !== 'ios' || this.#nativeAudioSessionActive) return true;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.#audioActivationWaiters.delete(activated);
+        resolve(this.#nativeAudioSessionActive);
+      };
+      const activated = () => finish();
+      const timer = setTimeout(finish, timeoutMs);
+      this.#audioActivationWaiters.add(activated);
+    });
+  }
+
+  async ensureActiveCallAudio(callId: string) {
+    const call = this.getCall(callId);
+    if (!call || call.terminationRequested || call.session.state !== SessionState.Established) return false;
+    await this.#callKeepReady;
+    if (Platform.OS === 'ios') {
+      const activated = await this.waitForNativeAudioSession();
+      if (!activated) {
+        logTelephonyError('native-audio-session-timeout', new Error('CallKit did not activate the iOS audio session in time.'), { callId });
+        return false;
+      }
+      RTCAudioSession.audioSessionDidActivate();
+    } else {
+      InCallManager.start({ media: 'audio' });
+    }
+    InCallManager.setMicrophoneMute(call.currentIsMuted);
+    call.enableMediaTracks();
+    return true;
   }
 
   async recoverCallMedia(callId: string) {
@@ -1018,6 +1069,9 @@ export class VocivoVoipClient {
     this.calls$.next([]);
     this.activeCall$.next(null);
     this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
+    this.#nativeAudioSessionActive = Platform.OS !== 'ios';
+    this.#audioActivationWaiters.forEach((resolve) => resolve());
+    this.#audioActivationWaiters.clear();
     if (Platform.OS === 'android') RNCallKeep.setAvailable(false);
     InCallManager.stop();
     this.#disposePlatformListeners();

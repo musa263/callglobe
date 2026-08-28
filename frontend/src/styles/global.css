@@ -265,6 +265,7 @@ audio { display: none; }
 .control svg { width:19px; }
 .control span { font-size:10px; font-weight:700; }
 .control.active { color:var(--green); border-color:#b9d9c9; background:var(--mint); }
+.control.attention { color:#0e67b3; border-color:#75b7ec; background:#e9f5ff; }
 .hangup-button { width:100%; height:52px; margin-top:15px; display:flex; align-items:center; justify-content:center; gap:9px; border:0; border-radius:6px; color:white; background:var(--coral); font-weight:750; }
 .mobile-nav { display:none; }
 
