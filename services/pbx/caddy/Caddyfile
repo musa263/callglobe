@@ -19,3 +19,12 @@
 		format json
 	}
 }
+
+{$TURN_TLS_DOMAIN} {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	respond "Vocivo TURN endpoint" 200
+}

@@ -58,13 +58,15 @@ function normalizeRole(value: unknown): ExtensionUser['role'] {
 }
 
 function encodeName(input: Partial<ExtensionUser>) {
-  return [credentialPrefix, clean(input.extension, 5), clean(input.name, 50), clean(input.department, 30), normalizeRole(input.role), clean(input.email, 70), clean(input.mobile, 24), clean(input.organizationId, 50) || 'primary'].join('|');
+  const organizationId = clean(input.organizationId, 50);
+  if (!organizationId) throw new Error('A tenant organization is required for every extension.');
+  return [credentialPrefix, clean(input.extension, 5), clean(input.name, 50), clean(input.department, 30), normalizeRole(input.role), clean(input.email, 70), clean(input.mobile, 24), organizationId].join('|');
 }
 
 function parseCredential(item: CredentialResource): ExtensionUser | null {
   if (item.tag !== extensionTag || item.resource_id !== connectionResource()) return null;
   const [prefix, extension, name, department, role, email, mobile, organizationId] = (item.name || '').split('|');
-  if (prefix !== credentialPrefix || !/^\d{2,5}$/.test(extension || '')) return null;
+  if (prefix !== credentialPrefix || !/^\d{2,5}$/.test(extension || '') || !organizationId) return null;
   return {
     id: item.id,
     extension,
@@ -73,7 +75,7 @@ function parseCredential(item: CredentialResource): ExtensionUser | null {
     role: normalizeRole(role),
     email: email || '',
     mobile: mobile || '',
-    organizationId: organizationId || 'primary',
+    organizationId,
     sipUsername: item.sip_username || '',
     status: item.expired ? 'expired' : 'active',
     createdAt: item.created_at,

@@ -24,9 +24,12 @@
     </extension>
 
     <extension name="conference-room">
-      <condition field="destination_number" expression="^\*3([0-9]{2,5})$">
+      <condition field="${vocivo_sip_domain}" expression="^[A-Za-z0-9.-]{1,253}$"/>
+      <condition field="destination_number" expression="^\*3([0-9]{2,8})$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="conference_member_flags=moderator"/>
         <action application="answer"/>
-        <action application="conference" data="vocivo-$1@default"/>
+        <action application="conference" data="vocivo-${vocivo_sip_domain}-$1@default"/>
       </condition>
     </extension>
 
@@ -35,9 +38,10 @@
         <action application="set" data="vocivo_call_id=${uuid}"/>
         <action application="set" data="domain_name=${vocivo_sip_domain}"/>
         <action application="set" data="hangup_after_bridge=true"/>
-        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="continue_on_fail=NO_ANSWER,USER_NOT_REGISTERED,SUBSCRIBER_ABSENT"/>
+        <action application="set" data="call_timeout=35"/>
+        <action application="set" data="ignore_early_media=true"/>
         <action application="set" data="bridge_answer_timeout=35"/>
-        <action application="set" data="continue_on_answer_timeout=true"/>
         <action application="set" data="ringback=${us-ring}"/>
         <action application="set" data="transfer_ringback=${us-ring}"/>
         <action application="export" data="nolocal:vocivo_call_type=internal"/>
@@ -53,8 +57,8 @@
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Extension=${caller_id_number}"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Name=${caller_id_name}"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Photo=${vocivo_caller_photo}"/>
-        <action application="bridge" data="{originate_timeout=35,leg_timeout=35}user/$1&#64;${vocivo_sip_domain}"/>
-        <action application="voicemail" data="default ${vocivo_sip_domain} $1"/>
+        <action application="bridge" data="{ignore_early_media=true,originate_timeout=35}[leg_timeout=35]user/$1&#64;${vocivo_sip_domain}"/>
+        <action application="hangup" data="NO_ANSWER"/>
       </condition>
     </extension>
 

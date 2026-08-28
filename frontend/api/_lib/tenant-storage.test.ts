@@ -6,6 +6,7 @@ test('creates stable, isolated tenant storage prefixes', () => {
   assert.equal(tenantStorageKey('company-a'), tenantStorageKey('company-a'));
   assert.notEqual(tenantStorageKey('company-a'), tenantStorageKey('company-b'));
   assert.match(tenantStorageKey('company-a'), /^[a-f0-9]{24}$/);
+  assert.throws(() => tenantStorageKey(''), /tenant organization/i);
 });
 
 test('sorts newer timestamps before older timestamps lexicographically', () => {

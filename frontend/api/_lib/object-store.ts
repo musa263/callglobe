@@ -15,6 +15,8 @@ type StoredRow = { pathname: string; body: Buffer; content_type: string; access:
 let databaseClient: Sql | null = null;
 let storageHealthCache: { expiresAt: number; value: { provider: 'postgres'; status: 'available' } } | null = null;
 let storageHealthRequest: Promise<{ provider: 'postgres'; status: 'available' }> | null = null;
+let replayTableReady = false;
+let replayTableRequest: Promise<void> | null = null;
 
 function databaseUrl() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -95,6 +97,18 @@ async function ensureTable(sql: Sql) {
       etag text not null
     )
   `;
+}
+
+async function ensureReplayTable(sql: Sql) {
+  if (replayTableReady) return;
+  replayTableRequest ||= sql`
+    create table if not exists vocivo_replay_ledger (
+      replay_key text primary key,
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now()
+    )
+  `.then(() => { replayTableReady = true; }).finally(() => { replayTableRequest = null; });
+  await replayTableRequest;
 }
 
 async function bodyBuffer(value: unknown) {
@@ -223,6 +237,44 @@ export async function updateObject(pathname: string, update: (current: Buffer) =
   });
 }
 
+export async function transactObject(
+  pathname: string,
+  update: (current: Buffer | null) => Buffer | Promise<Buffer>,
+  options: Pick<PutOptions, 'access' | 'contentType'> = {},
+) {
+  const contentType = options.contentType || 'application/octet-stream';
+  const access = options.access || 'private';
+  return withDatabaseRetry(async (sql) => {
+    await ensureTable(sql);
+    return sql.begin(async (transaction) => {
+      // The advisory lock also serializes first-write races where no row exists
+      // yet. The etag predicate is the compare-and-swap guard for existing rows.
+      await transaction`select pg_advisory_xact_lock(hashtext(${pathname}))`;
+      const currentRows = await transaction<Array<{ body: Buffer; etag: string }>>`
+        select body, etag from vocivo_objects where pathname = ${pathname} for update
+      `;
+      const current = currentRows[0];
+      const body = await update(current?.body ? Buffer.from(current.body) : null);
+      const etag = createHash('sha256').update(body).digest('hex');
+      const rows = current
+        ? await transaction<StoredRow[]>`
+            update vocivo_objects
+            set body = ${body}, content_type = ${contentType}, access = ${access}, uploaded_at = now(), etag = ${etag}
+            where pathname = ${pathname} and etag = ${current.etag}
+            returning pathname, content_type, access, uploaded_at, etag
+          `
+        : await transaction<StoredRow[]>`
+            insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
+            values (${pathname}, ${body}, ${contentType}, ${access}, now(), ${etag})
+            on conflict (pathname) do nothing
+            returning pathname, content_type, access, uploaded_at, etag
+          `;
+      if (!rows[0]) throw new Error('Stored object changed during the transaction.');
+      return { body, blob: blobMetadata({ ...rows[0], size: body.length }) };
+    });
+  });
+}
+
 export async function get(pathname: string, _options: { access?: 'public' | 'private'; useCache?: boolean } = {}) {
   return withDatabaseRetry(async (sql) => {
     const rows = await sql<StoredRow[]>`
@@ -262,6 +314,23 @@ export async function del(pathnames: string | string[]) {
   if (!values.length) return;
   await withDatabaseRetry(async (sql) => {
     await sql`delete from vocivo_objects where pathname in ${sql(values)}`;
+  });
+}
+
+export async function claimReplayKey(replayKey: string, expiresAt: Date) {
+  if (!/^[a-z0-9:_-]{16,200}$/i.test(replayKey)) throw new Error('Invalid replay key.');
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) throw new Error('Invalid replay expiration.');
+  return withDatabaseRetry(async (sql) => {
+    await ensureReplayTable(sql);
+    await sql`delete from vocivo_replay_ledger where replay_key = ${replayKey} and expires_at <= now()`;
+    const rows = await sql<Array<{ replay_key: string }>>`
+      insert into vocivo_replay_ledger (replay_key, expires_at)
+      values (${replayKey}, ${expiresAt})
+      on conflict (replay_key) do nothing
+      returning replay_key
+    `;
+    if (Math.random() < 0.02) await sql`delete from vocivo_replay_ledger where expires_at <= now()`;
+    return rows.length === 1;
   });
 }
 

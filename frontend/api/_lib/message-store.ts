@@ -13,7 +13,7 @@ export type StoredMessage = {
   createdAt: string;
   error?: string;
   updatedAt: string;
-  organizationId?: string;
+  organizationId: string;
   transport?: 'sms' | 'internal';
   senderExtensionId?: string;
   senderExtension?: string;
@@ -41,7 +41,8 @@ function decrypt(value: Buffer): StoredMessage {
 }
 
 export async function storeMessageEvent(message: StoredMessage) {
-  const organizationId = message.organizationId || 'primary';
+  const organizationId = message.organizationId.trim();
+  if (!organizationId) throw new Error('A tenant organization is required before storing a message.');
   const newestFirst = newestFirstTimestamp(message.updatedAt || message.createdAt);
   const messageKey = createHash('sha256').update(`${message.id}:${message.updatedAt}`).digest('hex').slice(0, 20);
   await put(`vocivo/messages/v3/${tenantStorageKey(organizationId)}/${newestFirst}-${messageKey}.bin`, encrypt({ ...message, organizationId }), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
@@ -71,7 +72,7 @@ export async function listStoredMessages(organizationId: string, viewerExtension
     const legacyObjects = await readObjects(legacyPaths);
     const tenantEvents = legacyPaths.map((pathname) => {
       try { const value = legacyObjects.get(pathname); return value ? decrypt(value) : null; } catch { return null; }
-    }).filter((item): item is StoredMessage => item !== null && (item.organizationId || 'primary') === organizationId);
+    }).filter((item): item is StoredMessage => item !== null && item.organizationId === organizationId);
     if (tenantEvents.length) {
       await putMany(overwriteEntries(tenantEvents.map((message) => ({
         pathname: `vocivo/messages/v3/${tenantKey}/${newestFirstTimestamp(message.updatedAt || message.createdAt)}-${createHash('sha256').update(`${message.id}:${message.updatedAt}`).digest('hex').slice(0, 20)}.bin`,
@@ -95,7 +96,7 @@ export async function listStoredMessages(organizationId: string, viewerExtension
     latest.set(event.id, { ...previous, ...event, text: event.text || previous?.text || '', to: event.to || previous?.to || '', from: event.from || previous?.from || '' });
   });
   return [...latest.values()]
-    .filter((item) => (item.organizationId || 'primary') === organizationId)
+    .filter((item) => item.organizationId === organizationId)
     .map((item) => messageForViewer(item, viewerExtensionId))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);

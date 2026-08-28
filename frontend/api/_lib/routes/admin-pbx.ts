@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { organizationSettingsFrom, pbxForOrganization, readPbxConfig, savePbxConfig, type PbxConfig } from '../pbx-config-store.js';
+import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, readPbxConfig, savePbxConfig, type PbxConfig } from '../pbx-config-store.js';
 import { listExtensions } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
 
@@ -78,7 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           platform: current.platform,
           organizationSettings: { ...current.organizationSettings, [organizationId]: tenant },
           userProfiles: { ...current.userProfiles, ...scopedProfiles },
-        });
+        }, { expectedUpdatedAt: current.updatedAt });
       } else {
         const switchingOrganization = organizationId !== current.activeOrganizationId;
         const organizations = Array.isArray(editable.organizations) ? editable.organizations : current.organizations;
@@ -99,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             ? current.organizationSettings
             : { ...current.organizationSettings, [organizationId]: tenant },
           userProfiles: editable.userProfiles || current.userProfiles,
-        });
+        }, { expectedUpdatedAt: current.updatedAt });
       }
     } else {
       config = await readPbxConfig();
@@ -122,6 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ config });
   } catch (error) {
+    if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This phone-system capability is not enabled for your company.' });

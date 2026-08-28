@@ -15,7 +15,7 @@ export type StoredCallEvent = {
   from?: string;
   to?: string;
   hangup_cause?: string;
-  organizationId?: string;
+  organizationId: string;
   flow?: string;
   routeId?: string;
   sourceExtensionId?: string;
@@ -39,7 +39,8 @@ function decrypt(value: Buffer) {
 }
 
 export async function storeCallEvent(event: StoredCallEvent) {
-  const organizationId = event.organizationId || 'primary';
+  const organizationId = event.organizationId.trim();
+  if (!organizationId) throw new Error('A tenant organization is required before storing a call event.');
   const newestFirst = newestFirstTimestamp(event.event_timestamp);
   const eventKey = createHash('sha256').update(event.id).digest('hex').slice(0, 20);
   await put(`vocivo/call-events/v3/${tenantStorageKey(organizationId)}/${newestFirst}-${eventKey}.bin`, encrypt({ ...event, organizationId }), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
@@ -53,7 +54,7 @@ async function migrateCallEvents(organizationId: string) {
   const objects = await readObjects(paths);
   const events = paths.map((pathname) => {
     try { const value = objects.get(pathname); return value ? decrypt(value) : null; } catch { return null; }
-  }).filter((event): event is StoredCallEvent => event !== null && (event.organizationId || 'primary') === organizationId);
+  }).filter((event): event is StoredCallEvent => event !== null && event.organizationId === organizationId);
   if (events.length) {
     await putMany(overwriteEntries(events.map((event) => ({
       pathname: `vocivo/call-events/v3/${tenantKey}/${newestFirstTimestamp(event.event_timestamp)}-${createHash('sha256').update(event.id).digest('hex').slice(0, 20)}.bin`,

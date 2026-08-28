@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { put } from './object-store.js';
+import { transactObject } from './object-store.js';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 import { validOfficeTime, validTimeZone } from './office-hours.js';
@@ -239,9 +239,7 @@ export async function readPbxConfig() {
   return structuredClone(await configRequest);
 }
 
-export async function savePbxConfig(input: Partial<PbxConfig>) {
-  const current = await readPbxConfig();
-  const next = mergeConfig({ ...current, ...input, updatedAt: new Date().toISOString() });
+function validatePbxConfig(next: PbxConfig) {
   validateOrganizations(next);
   for (const organization of next.organizations) {
     const tenant = pbxForOrganization(next, organization.id);
@@ -250,7 +248,25 @@ export async function savePbxConfig(input: Partial<PbxConfig>) {
     validateOfficeHours(tenant);
   }
   validateUserProfiles(next);
-  await put(pathname, encrypt(next), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
+}
+
+export class PbxConfigConflictError extends Error {
+  constructor() { super('PBX configuration changed. Reload it and try again.'); }
+}
+
+type PbxConfigUpdate = Partial<PbxConfig> | ((current: PbxConfig) => Partial<PbxConfig> | PbxConfig);
+
+export async function savePbxConfig(input: PbxConfigUpdate, options: { expectedUpdatedAt?: string } = {}) {
+  let next: PbxConfig | null = null;
+  await transactObject(pathname, (stored) => {
+    const current = stored ? mergeConfig(decrypt(stored)) : defaultPbxConfig();
+    if (options.expectedUpdatedAt && current.updatedAt !== options.expectedUpdatedAt) throw new PbxConfigConflictError();
+    const update = typeof input === 'function' ? input(structuredClone(current)) : input;
+    next = mergeConfig({ ...current, ...update, updatedAt: new Date().toISOString() });
+    validatePbxConfig(next);
+    return encrypt(next);
+  }, { access: 'private', contentType: 'application/octet-stream' });
+  if (!next) throw new Error('PBX configuration update did not complete.');
   cachedConfig = { expiresAt: Date.now() + cacheTtlMs, value: structuredClone(next) };
   return next;
 }

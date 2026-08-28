@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
-import { readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
+import { PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import {
   createSubscription, effectiveEntitlements, featureCatalog, publicTenantAdmin, readSaasState,
   saveSaasState, saveTenantAdmin, type FeatureKey, type SaasPlan, type SaasSubscription,
@@ -98,7 +98,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internalCallingEnabled: accountType === 'business' && input.internalCallingEnabled !== false,
         status: input.status === 'suspended' ? 'suspended' as const : 'active' as const,
       };
-      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization] });
+      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization] }, { expectedUpdatedAt: config.updatedAt });
       state = await readSaasState(config);
       const planId = text(req.body?.subscription?.planId, 50) || (accountType === 'business' ? 'business' : 'starter');
       const subscription = createSubscription(id, planId, state, req.body?.subscription || {});
@@ -139,6 +139,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json(await responseFor(true));
   } catch (error) {
+    if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Administrator access is required.' });
     if (error instanceof Error && /required|valid|organization|company|subscription|plan|password|email|extension|range|account/i.test(error.message)) return res.status(400).json({ error: error.message });

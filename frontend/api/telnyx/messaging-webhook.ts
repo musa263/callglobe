@@ -3,10 +3,11 @@ import { methodNotAllowed } from '../_lib/http.js';
 import { storeMessageEvent } from '../_lib/message-store.js';
 import { organizationForNumber } from '../_lib/tenancy.js';
 import { verifyTelnyxWebhook } from '../_lib/telnyx-webhook-auth.js';
+import { quarantineSecurityEvent } from '../_lib/security-quarantine.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
-  if (!verifyTelnyxWebhook(req, 'MESSAGING_WEBHOOK_SECRET')) return res.status(401).json({ error: 'Unauthorized' });
+  if (!await verifyTelnyxWebhook(req)) return res.status(401).json({ error: 'Unauthorized' });
   const eventType = typeof req.body?.data?.event_type === 'string' ? req.body.data.event_type : 'unknown';
   const eventId = typeof req.body?.data?.id === 'string' ? req.body.data.id : 'unknown';
   const payload = req.body?.data?.payload ?? {};
@@ -15,6 +16,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const destination = Array.isArray(payload.to) ? payload.to[0]?.phone_number || '' : typeof payload.to === 'string' ? payload.to : '';
   const inbound = eventType === 'message.received' || payload.direction === 'inbound';
   const organizationId = await organizationForNumber(inbound ? destination : from);
+  if (!organizationId) {
+    await quarantineSecurityEvent({
+      source: 'telnyx-messaging',
+      reason: 'unresolved_number_ownership',
+      eventId,
+      details: { eventType, messageId, direction: inbound ? 'inbound' : 'outbound', from, destination },
+    }).catch((error) => console.error('Failed to persist quarantined messaging event.', error));
+    console.warn(`Quarantined unscoped Telnyx messaging event: type=${eventType}, id=${eventId}`);
+    return res.status(202).json({ received: true, quarantined: true });
+  }
   const errors = Array.isArray(payload.errors) ? payload.errors : [];
   if (messageId !== 'unknown') {
     await storeMessageEvent({

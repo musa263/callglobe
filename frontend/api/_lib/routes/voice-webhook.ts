@@ -18,6 +18,7 @@ import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
 import { organizationForNumber } from '../tenancy.js';
 import { verifyTelnyxWebhook } from '../telnyx-webhook-auth.js';
+import { quarantineSecurityEvent } from '../security-quarantine.js';
 import { storeCallEvent } from '../call-event-store.js';
 import { clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
 import { normalizeE164 } from '../tenancy.js';
@@ -273,7 +274,8 @@ async function routeToExtension(input: {
 }
 
 async function routeAfterAgentFailure(state: NonNullable<ReturnType<typeof decodeVoiceState>>, cause: string, eventId: string) {
-  const organizationId = state.organizationId || 'primary';
+  const organizationId = state.organizationId;
+  if (!organizationId) throw new Error('Inbound call state has no tenant organization.');
   const target = forwardingTargetForCause(state, cause);
   const voicemailTarget = !target || ['voicemail', 'main voicemail'].includes(target.toLowerCase());
   if (voicemailTarget || (state.forwardingDepth || 0) >= 2) {
@@ -438,7 +440,7 @@ async function extensionForAgentState(state: NonNullable<ReturnType<typeof decod
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
-  if (!verifyTelnyxWebhook(req)) return res.status(401).json({ error: 'Unauthorized' });
+  if (!await verifyTelnyxWebhook(req)) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const event = (req.body ?? {}) as VoiceEvent;
     const data = event.data;
@@ -452,6 +454,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const eventRoute = verifyVoiceRouteToken(customHeader(payload, 'X-Vocivo-Route-Token'));
     background('call event', (async () => {
       const eventOrganizationId = state?.organizationId || eventRoute?.organizationId || await organizationForNumber(payload?.direction === 'incoming' ? payload?.to || '' : payload?.from || '');
+      if (!eventOrganizationId) {
+        await quarantineSecurityEvent({ source: 'telnyx-voice', reason: 'unresolved_number_ownership', eventId, details: { eventType, callControlId, direction: payload?.direction || '', from: payload?.from || '', to: payload?.to || '' } });
+        return;
+      }
       await storeCallEvent({
         id: eventId,
         name: eventType || 'unknown',
@@ -580,45 +586,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (parentCallControlId) {
         const connectedRouteId = outboundPair?.routeId || (state?.flow === 'outbound_destination' ? state.routeId : undefined);
         try {
-          await callAction(parentCallControlId, 'playback_stop', {
-            stop: 'all',
-            client_state: encodeVoiceState({
-              flow: 'outbound_bridge_pending',
-              parentCallControlId,
-              destinationCallControlId: callControlId,
-              organizationId: state?.organizationId,
-              routeId: connectedRouteId,
-            }),
-            command_id: `${eventId}-stop-ringback`,
-          });
-        } catch (bridgeError) {
-          // If playback has already stopped, Telnyx may reject the stop command.
-          // The bridge remains safe because prevent_double_bridge is enabled.
-          try {
-            await completeOutboundBridge(parentCallControlId, callControlId, eventId, connectedRouteId);
-          } catch {
-            if (connectedRouteId) await updateVoiceRoute(connectedRouteId, { phase: 'failed', failureCause: 'bridge_failed' }).catch(() => undefined);
-            await Promise.all([
-              callAction(parentCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-client` }).catch(() => undefined),
-              callAction(callControlId, 'hangup', { command_id: `${eventId}-bridge-failed-destination` }).catch(() => undefined),
-            ]);
-          }
+          // Ringback cleanup is best-effort. A delayed or missing playback
+          // webhook must never postpone the media bridge after answer.
+          await callAction(parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch(() => undefined);
+          await completeOutboundBridge(parentCallControlId, callControlId, eventId, connectedRouteId);
+        } catch {
+          if (connectedRouteId) await updateVoiceRoute(connectedRouteId, { phase: 'failed', failureCause: 'bridge_failed' }).catch(() => undefined);
+          await Promise.all([
+            callAction(parentCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-client` }).catch(() => undefined),
+            callAction(callControlId, 'hangup', { command_id: `${eventId}-bridge-failed-destination` }).catch(() => undefined),
+          ]);
         }
         return res.status(200).json({ received: true });
       }
-    }
-
-    if (eventType === 'call.playback.ended' && state?.flow === 'outbound_bridge_pending' && state.parentCallControlId && state.destinationCallControlId) {
-      try {
-        await completeOutboundBridge(state.parentCallControlId, state.destinationCallControlId, eventId, state.routeId);
-      } catch {
-        if (state.routeId) await updateVoiceRoute(state.routeId, { phase: 'failed', failureCause: 'bridge_failed' }).catch(() => undefined);
-        await Promise.all([
-          callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-client` }).catch(() => undefined),
-          callAction(state.destinationCallControlId, 'hangup', { command_id: `${eventId}-bridge-failed-destination` }).catch(() => undefined),
-        ]);
-      }
-      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.bridged') {
@@ -784,7 +764,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ received: true });
     }
 
-    if (eventType === 'call.recording.saved' && state?.flow === 'voicemail_recording') {
+    if (eventType === 'call.recording.saved' && state?.flow === 'voicemail_recording' && state.organizationId) {
       const recordingId = payload?.recording_id || data?.id || eventId;
       const sourceUrl = payload?.recording_urls?.mp3 || payload?.public_recording_urls?.mp3;
       if (sourceUrl) {
@@ -800,7 +780,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           durationSeconds: started && ended ? Math.max(0, Math.round((ended - started) / 1000)) : undefined,
           createdAt: payload?.recording_ended_at || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          organizationId: state.organizationId || 'primary',
+          organizationId: state.organizationId,
         });
       }
       await callAction(callControlId, 'hangup', { command_id: `${eventId}-voicemail-finish` }).catch(() => undefined);
@@ -910,7 +890,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    if (eventType === 'call.gather.ended' && state?.flow === 'ivr') {
+    if (eventType === 'call.gather.ended' && state?.flow === 'ivr' && state.organizationId) {
       const config = await readBusinessVoiceConfig(state.organizationId);
       const digit = Number(payload?.digits || payload?.result || '1');
       if (digit === 9 && (await listExtensions(state.organizationId)).length) {
@@ -927,18 +907,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ received: true });
       }
       const department = config.departments[digit - 1] || config.departments[0];
-      await routeToAvailableAgent({ callControlId, department, eventId, organizationId: state.organizationId || 'primary', inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
+      await routeToAvailableAgent({ callControlId, department, eventId, organizationId: state.organizationId, inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
     }
 
-    if (eventType === 'call.gather.ended' && state?.flow === 'extension') {
+    if (eventType === 'call.gather.ended' && state?.flow === 'extension' && state.organizationId) {
       const config = await readBusinessVoiceConfig(state.organizationId);
       const extensionNumber = String(payload?.digits || payload?.result || '').replace(/\D/g, '');
       const extension = await findExtension(extensionNumber, state.organizationId);
       if (extension) {
-        await routeToExtension({ callControlId, eventId, organizationId: state.organizationId || 'primary', inboundNumber: state.inboundNumber || '', extension, callerNumber: state.callerNumber, callerName: state.callerName });
+        await routeToExtension({ callControlId, eventId, organizationId: state.organizationId, inboundNumber: state.inboundNumber || '', extension, callerNumber: state.callerNumber, callerName: state.callerName });
       } else {
         await speakPrompt(callControlId, { payload: 'That extension is not available. We will connect you to the main line.', voice: config.voice, command_id: `${eventId}-extension-missing` });
-        await routeToAvailableAgent({ callControlId, department: config.companyName, eventId, organizationId: state.organizationId || 'primary', inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
+        await routeToAvailableAgent({ callControlId, department: config.companyName, eventId, organizationId: state.organizationId, inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
       }
     }
 

@@ -31,8 +31,13 @@ TELNYX_PHONE_NUMBER_ID=
 TELNYX_SIP_URI=
 TELNYX_SMS_FROM=
 TELNYX_PUBLIC_KEY=
-VOICE_WEBHOOK_SECRET=
-MESSAGING_WEBHOOK_SECRET=
+VOCIVO_PBX_ENGINE=freeswitch
+VOCIVO_SIP_DOMAIN=
+VOCIVO_SIP_WSS_URL=wss://sip-wss.example.com
+VOCIVO_STUN_URLS=stun:stun.cloudflare.com:3478
+VOCIVO_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp,turns:turn.example.com:443?transport=tcp
+VOCIVO_TURN_SECRET=
+VOCIVO_TURN_TTL_SECONDS=600
 VITE_APP_URL=https://vocivo.vercel.app
 ```
 

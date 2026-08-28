@@ -1,40 +1,63 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { verifyTelnyxWebhook } from './telnyx-webhook-auth.js';
 
-test('uses separate legacy secrets for voice and messaging webhooks', () => {
-  const previous = {
-    publicKey: process.env.TELNYX_PUBLIC_KEY,
-    voice: process.env.VOICE_WEBHOOK_SECRET,
-    messaging: process.env.MESSAGING_WEBHOOK_SECRET,
+function signedRequest(body: string, privateKey: KeyObject, timestamp = Math.floor(Date.now() / 1000).toString()): any {
+  const signature = sign(null, Buffer.from(`${timestamp}|${body}`), privateKey).toString('base64');
+  return {
+    headers: { 'telnyx-signature-ed25519': signature, 'telnyx-timestamp': timestamp },
+    query: {},
+    rawBody: Buffer.from(body),
+    body: undefined,
   };
-  delete process.env.TELNYX_PUBLIC_KEY;
-  process.env.VOICE_WEBHOOK_SECRET = 'voice-secret';
-  process.env.MESSAGING_WEBHOOK_SECRET = 'message-secret';
+}
+
+test('accepts a current Telnyx Ed25519 signature and installs the verified JSON body', async () => {
+  const previous = process.env.TELNYX_PUBLIC_KEY;
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  process.env.TELNYX_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString();
   try {
-    assert.equal(verifyTelnyxWebhook({ query: { token: 'voice-secret' }, headers: {}, body: {} } as never), true);
-    assert.equal(verifyTelnyxWebhook({ query: { token: 'message-secret' }, headers: {}, body: {} } as never), false);
-    assert.equal(verifyTelnyxWebhook({ query: { token: 'message-secret' }, headers: {}, body: {} } as never, 'MESSAGING_WEBHOOK_SECRET'), true);
-    assert.equal(verifyTelnyxWebhook({ query: { token: 'voice-secret' }, headers: {}, body: {} } as never, 'MESSAGING_WEBHOOK_SECRET'), false);
+    const request = signedRequest(JSON.stringify({ data: { id: 'event-1' } }), privateKey);
+    assert.equal(await verifyTelnyxWebhook(request), true);
+    assert.deepEqual(request.body, { data: { id: 'event-1' } });
   } finally {
-    if (previous.publicKey === undefined) delete process.env.TELNYX_PUBLIC_KEY; else process.env.TELNYX_PUBLIC_KEY = previous.publicKey;
-    if (previous.voice === undefined) delete process.env.VOICE_WEBHOOK_SECRET; else process.env.VOICE_WEBHOOK_SECRET = previous.voice;
-    if (previous.messaging === undefined) delete process.env.MESSAGING_WEBHOOK_SECRET; else process.env.MESSAGING_WEBHOOK_SECRET = previous.messaging;
+    if (previous === undefined) delete process.env.TELNYX_PUBLIC_KEY; else process.env.TELNYX_PUBLIC_KEY = previous;
   }
 });
 
-test('accepts the scoped webhook token when a public key is configured', () => {
-  const previous = {
-    publicKey: process.env.TELNYX_PUBLIC_KEY,
-    voice: process.env.VOICE_WEBHOOK_SECRET,
+test('verifies the exact raw request stream used by the Vercel Node runtime', async () => {
+  const previous = process.env.TELNYX_PUBLIC_KEY;
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  process.env.TELNYX_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const body = JSON.stringify({ data: { event_type: 'message.received' } });
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const request = Readable.from([Buffer.from(body)]) as any;
+  request.headers = {
+    'telnyx-signature-ed25519': sign(null, Buffer.from(`${timestamp}|${body}`), privateKey).toString('base64'),
+    'telnyx-timestamp': timestamp,
   };
-  process.env.TELNYX_PUBLIC_KEY = Buffer.alloc(32, 1).toString('base64');
-  process.env.VOICE_WEBHOOK_SECRET = 'voice-secret';
+  request.query = {};
   try {
-    assert.equal(verifyTelnyxWebhook({ query: { token: 'voice-secret' }, headers: {}, body: { parsed: true } } as never), true);
-    assert.equal(verifyTelnyxWebhook({ query: { token: 'wrong-secret' }, headers: {}, body: { parsed: true } } as never), false);
+    assert.equal(await verifyTelnyxWebhook(request), true);
+    assert.deepEqual(request.body, { data: { event_type: 'message.received' } });
   } finally {
-    if (previous.publicKey === undefined) delete process.env.TELNYX_PUBLIC_KEY; else process.env.TELNYX_PUBLIC_KEY = previous.publicKey;
-    if (previous.voice === undefined) delete process.env.VOICE_WEBHOOK_SECRET; else process.env.VOICE_WEBHOOK_SECRET = previous.voice;
+    if (previous === undefined) delete process.env.TELNYX_PUBLIC_KEY; else process.env.TELNYX_PUBLIC_KEY = previous;
+  }
+});
+
+test('rejects query-string secrets, stale signatures, and tampered bodies', async () => {
+  const previous = process.env.TELNYX_PUBLIC_KEY;
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  process.env.TELNYX_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  try {
+    assert.equal(await verifyTelnyxWebhook({ headers: {}, query: { token: 'legacy-secret' }, rawBody: Buffer.from('{}') } as never), false);
+    assert.equal(await verifyTelnyxWebhook(signedRequest('{}', privateKey, String(Math.floor(Date.now() / 1000) - 301))), false);
+    const tampered = signedRequest('{"safe":true}', privateKey) as { rawBody: Buffer };
+    tampered.rawBody = Buffer.from('{"safe":false}');
+    assert.equal(await verifyTelnyxWebhook(tampered as never), false);
+  } finally {
+    if (previous === undefined) delete process.env.TELNYX_PUBLIC_KEY; else process.env.TELNYX_PUBLIC_KEY = previous;
   }
 });

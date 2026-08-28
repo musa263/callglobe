@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { list, put, readObject, type PutEntry } from './object-store.js';
 
 export function tenantStorageKey(organizationId: string) {
-  return createHash('sha256').update(organizationId || 'primary').digest('hex').slice(0, 24);
+  const tenant = organizationId.trim();
+  if (!tenant) throw new Error('A tenant organization is required.');
+  return createHash('sha256').update(tenant).digest('hex').slice(0, 24);
 }
 
 export function newestFirstTimestamp(value: string | number | Date = Date.now()) {

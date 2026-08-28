@@ -1,0 +1,17 @@
+.git/
+.claude/
+.vercel/
+backend/
+design/
+docs/
+mobile/
+node_modules/
+output/
+services/
+tmp/
+tools/
+frontend/.vercel/
+frontend/dist/
+frontend/node_modules/
+frontend/credentials.json
+frontend/credentials/

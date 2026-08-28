@@ -36,7 +36,12 @@ function rememberPush(callId) {
 
 async function processEvent(raw) {
   const call = normalizeEslEvent(raw);
-  if (!call) return;
+  if (!call) {
+    const eventName = String(raw?.['Event-Name'] || raw?.event_name || '').slice(0, 80);
+    const callId = String(raw?.variable_vocivo_call_id || raw?.['Channel-Call-UUID'] || raw?.['Unique-ID'] || '').slice(0, 160);
+    if (eventName && callId) log('warn', 'Dropped unscoped ESL event.', { eventName, callId, reason: 'missing_tenant_context' });
+    return;
+  }
   metrics.eventsReceived += 1;
   metrics.lastEventAt = new Date().toISOString();
   if (config.eventWebhookUrl) {
@@ -97,6 +102,17 @@ const server = http.createServer((request, response) => {
     });
     return;
   }
+  if (request.url === '/dialplan' && request.method === 'POST') {
+    readBody(request).then((body) => directory.dialplanXmlFor(body)).then((value) => {
+      response.writeHead(200, { 'content-type': 'text/xml; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(value);
+    }).catch((error) => {
+      log('error', 'PBX dialplan lookup failed.', { error: error.message });
+      response.writeHead(503, { 'content-type': 'text/xml; charset=utf-8', 'cache-control': 'no-store' });
+      response.end('<?xml version="1.0" encoding="UTF-8"?><document type="freeswitch/xml"><section name="result"><result status="not found"/></section></document>');
+    });
+    return;
+  }
   if (request.url === '/healthz') {
     const healthy = esl.connected && directory.ready;
     response.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -123,6 +139,7 @@ function shutdown(signal) {
   log('info', 'Shutting down ESL listener.', { signal });
   esl.stop();
   directory.stop();
+  pushes.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 }

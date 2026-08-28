@@ -43,11 +43,15 @@ ufw allow 22/tcp comment 'SSH'
 ufw allow 80/tcp comment 'ACME HTTP challenge'
 ufw allow 443/tcp comment 'WebRTC WSS'
 ufw allow from 172.30.0.0/24 to any port 5066 proto tcp comment 'Caddy to Sofia WS'
+ufw allow from 172.30.0.0/24 to any port 5349 proto tcp comment 'TLS edge to TURN'
 for carrier_cidr in ${CARRIER_CIDRS:-}; do
   ufw allow from "$carrier_cidr" to any port 5060 proto tcp comment 'Carrier SIP TCP'
   ufw allow from "$carrier_cidr" to any port 5060 proto udp comment 'Carrier SIP UDP'
 done
 ufw allow 20000:29999/udp comment 'FreeSWITCH RTP'
+ufw allow 3478/tcp comment 'TURN TCP'
+ufw allow 3478/udp comment 'TURN UDP'
+ufw allow 30000:39999/udp comment 'TURN relay media'
 ufw --force enable
 
 mkdir -p /opt/vocivo-pbx

@@ -6,6 +6,33 @@ import { postSignedJson } from './signed-http.mjs';
 
 const base64Url = (value) => Buffer.from(value).toString('base64url');
 
+export class ConcurrencyGate {
+  #limit;
+  #maxQueue;
+  #active = 0;
+  #waiting = [];
+
+  constructor(limit, maxQueue = 5000) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('Concurrency limit must be a positive integer.');
+    if (!Number.isInteger(maxQueue) || maxQueue < 0) throw new Error('Concurrency queue limit must be a non-negative integer.');
+    this.#limit = limit;
+    this.#maxQueue = maxQueue;
+  }
+
+  async run(operation) {
+    if (this.#active >= this.#limit) {
+      if (this.#waiting.length >= this.#maxQueue) throw new Error('Push delivery queue is full.');
+      await new Promise((resolve) => this.#waiting.push(resolve));
+    }
+    this.#active += 1;
+    try { return await operation(); }
+    finally {
+      this.#active -= 1;
+      this.#waiting.shift()?.();
+    }
+  }
+}
+
 function parseServiceAccount(path) {
   const value = JSON.parse(fs.readFileSync(path, 'utf8'));
   if (!value.client_email || !value.private_key || !value.project_id) {
@@ -18,10 +45,14 @@ class ApnsVoipClient {
   #config;
   #privateKey;
   #jwt = null;
+  #client = null;
+  #connecting = null;
+  #gate;
 
   constructor(config) {
     this.#config = config;
     this.#privateKey = fs.readFileSync(config.keyPath, 'utf8');
+    this.#gate = new ConcurrencyGate(config.maxConcurrency, config.maxQueue);
   }
 
   #token() {
@@ -37,26 +68,56 @@ class ApnsVoipClient {
     return this.#jwt.value;
   }
 
-  async send(device, envelope) {
-    const authority = this.#config.environment === 'sandbox'
-      ? 'https://api.sandbox.push.apple.com'
-      : 'https://api.push.apple.com';
-    const client = http2.connect(authority);
+  #invalidate(client) {
+    if (this.#client === client) this.#client = null;
+    if (!client.closed && !client.destroyed) client.close();
+  }
+
+  async #connection() {
+    if (this.#client && !this.#client.closed && !this.#client.destroyed) return this.#client;
+    this.#connecting ||= new Promise((resolve, reject) => {
+      const authority = this.#config.environment === 'sandbox'
+        ? 'https://api.sandbox.push.apple.com'
+        : 'https://api.push.apple.com';
+      const client = http2.connect(authority);
+      const failed = (error) => {
+        this.#invalidate(client);
+        reject(error);
+      };
+      client.once('connect', () => {
+        client.off('error', failed);
+        client.on('error', () => this.#invalidate(client));
+        client.on('goaway', () => this.#invalidate(client));
+        this.#client = client;
+        resolve(client);
+      });
+      client.once('error', failed);
+    }).finally(() => { this.#connecting = null; });
+    return this.#connecting;
+  }
+
+  async #sendOnce(device, envelope) {
+    const client = await this.#connection();
+    if (client.closed || client.destroyed) throw Object.assign(new Error('APNs HTTP/2 connection is unavailable.'), { retryable: true });
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (error, value) => {
         if (settled) return;
         settled = true;
-        client.close();
         error ? reject(error) : resolve(value);
       };
-      client.on('error', (error) => finish(error));
-      const request = client.request({
-        ':method': 'POST',
-        ':path': `/3/device/${device.token}`,
-        authorization: `bearer ${this.#token()}`,
-        ...envelope.apns.headers,
-      });
+      let request;
+      try {
+        request = client.request({
+          ':method': 'POST',
+          ':path': `/3/device/${device.token}`,
+          authorization: `bearer ${this.#token()}`,
+          ...envelope.apns.headers,
+        });
+      } catch (error) {
+        this.#invalidate(client);
+        return finish(Object.assign(error instanceof Error ? error : new Error('APNs request failed.'), { retryable: true }));
+      }
       let responseBody = '';
       let status = 0;
       request.setEncoding('utf8');
@@ -68,10 +129,28 @@ class ApnsVoipClient {
         try { reason = JSON.parse(responseBody).reason || responseBody; } catch { /* APNs can return an empty body. */ }
         finish(new Error(`APNs rejected the VoIP push (${status || 'no status'}: ${reason || 'unknown reason'}).`));
       });
-      request.on('error', (error) => finish(error));
-      request.setTimeout(5000, () => request.destroy(new Error('APNs request timed out.')));
+      request.on('error', (error) => {
+        this.#invalidate(client);
+        finish(Object.assign(error, { retryable: true }));
+      });
+      request.setTimeout(5000, () => request.destroy(Object.assign(new Error('APNs request timed out.'), { retryable: true })));
       request.end(JSON.stringify(envelope.apns.payload));
     });
+  }
+
+  async send(device, envelope) {
+    return this.#gate.run(async () => {
+      try { return await this.#sendOnce(device, envelope); }
+      catch (error) {
+        if (!error?.retryable) throw error;
+        return this.#sendOnce(device, envelope);
+      }
+    });
+  }
+
+  close() {
+    if (this.#client && !this.#client.closed && !this.#client.destroyed) this.#client.close();
+    this.#client = null;
   }
 }
 
@@ -172,5 +251,9 @@ export class PushDispatcher {
       failed: results.filter((result) => result.status === 'rejected').length,
       errors: results.flatMap((result) => result.status === 'rejected' ? [result.reason instanceof Error ? result.reason.message : 'Push failed.'] : []),
     };
+  }
+
+  close() {
+    this.#apns?.close();
   }
 }

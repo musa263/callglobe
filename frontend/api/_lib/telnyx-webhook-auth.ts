@@ -1,4 +1,4 @@
-import { createPublicKey, timingSafeEqual, verify } from 'node:crypto';
+import { createPublicKey, verify } from 'node:crypto';
 import type { VercelRequest } from '@vercel/node';
 
 function header(req: VercelRequest, name: string) {
@@ -6,10 +6,20 @@ function header(req: VercelRequest, name: string) {
   return Array.isArray(value) ? value[0] : value || '';
 }
 
-function rawBody(req: VercelRequest) {
-  if (Buffer.isBuffer(req.body)) return req.body;
-  if (typeof req.body === 'string') return Buffer.from(req.body);
-  return Buffer.from(JSON.stringify(req.body ?? {}));
+async function rawBody(req: VercelRequest, maximum = 1024 * 1024) {
+  const explicit = (req as VercelRequest & { rawBody?: Buffer | string }).rawBody;
+  if (Buffer.isBuffer(explicit)) return explicit.length <= maximum ? explicit : null;
+  if (typeof explicit === 'string') return Buffer.byteLength(explicit) <= maximum ? Buffer.from(explicit) : null;
+  if (!(Symbol.asyncIterator in req)) return null;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += value.length;
+    if (size > maximum) return null;
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
 
 function ed25519Key(value: string) {
@@ -20,25 +30,21 @@ function ed25519Key(value: string) {
   return createPublicKey({ key: Buffer.concat([prefix, raw]), format: 'der', type: 'spki' });
 }
 
-function validLegacySecret(req: VercelRequest, secretName: 'VOICE_WEBHOOK_SECRET' | 'MESSAGING_WEBHOOK_SECRET') {
-  const configured = process.env[secretName]?.trim();
-  if (!configured) return false;
-  const expected = Buffer.from(configured);
-  const presented = Buffer.from(typeof req.query.token === 'string' ? req.query.token : '');
-  return expected.length === presented.length && timingSafeEqual(expected, presented);
-}
-
-export function verifyTelnyxWebhook(req: VercelRequest, legacySecretName: 'VOICE_WEBHOOK_SECRET' | 'MESSAGING_WEBHOOK_SECRET' = 'VOICE_WEBHOOK_SECRET') {
-  // Vercel may parse JSON before the function receives it, which makes an exact
-  // Ed25519 body reconstruction impossible. Keep the scoped URL token as a
-  // secure fallback instead of rejecting genuine carrier events.
-  if (validLegacySecret(req, legacySecretName)) return true;
+export async function verifyTelnyxWebhook(req: VercelRequest) {
   const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
   if (!publicKey) return false;
   const signature = header(req, 'telnyx-signature-ed25519');
   const timestamp = header(req, 'telnyx-timestamp');
   const timestampSeconds = Number(timestamp);
   if (!signature || !Number.isFinite(timestampSeconds) || Math.abs(Date.now() / 1000 - timestampSeconds) > 300) return false;
-  const signed = Buffer.concat([Buffer.from(`${timestamp}|`), rawBody(req)]);
-  try { return verify(null, signed, ed25519Key(publicKey), Buffer.from(signature, 'base64')); } catch { return false; }
+  const raw = await rawBody(req);
+  if (!raw) return false;
+  const signed = Buffer.concat([Buffer.from(`${timestamp}|`), raw]);
+  try {
+    if (!verify(null, signed, ed25519Key(publicKey), Buffer.from(signature, 'base64'))) return false;
+    req.body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
+    return true;
+  } catch {
+    return false;
+  }
 }

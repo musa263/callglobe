@@ -20,6 +20,12 @@ test('normalizes the extension B-leg and marks it for one incoming push', () => 
 });
 
 test('does not push a carrier leg without a target extension', () => {
-  const call = normalizeEslEvent({ 'Event-Name': 'CHANNEL_CREATE', 'Unique-ID': 'call-2', 'Call-Direction': 'outbound' });
+  const call = normalizeEslEvent({ 'Event-Name': 'CHANNEL_CREATE', 'Unique-ID': 'call-2', 'Call-Direction': 'outbound', variable_vocivo_organization_id: 'company-a' });
+  assert.equal(shouldPushIncomingCall(call), false);
+});
+
+test('drops an ESL event that has no explicit tenant context', () => {
+  const call = normalizeEslEvent({ 'Event-Name': 'CHANNEL_CREATE', 'Unique-ID': 'call-3', variable_vocivo_push_target_extension: '2001' });
+  assert.equal(call, null);
   assert.equal(shouldPushIncomingCall(call), false);
 });

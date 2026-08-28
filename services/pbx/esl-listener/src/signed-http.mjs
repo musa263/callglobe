@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -8,12 +8,12 @@ export function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-export function signBody(secret, timestamp, body) {
-  return `sha256=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`;
+export function signBody(secret, timestamp, nonce, body) {
+  return `sha256=${createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex')}`;
 }
 
-export function signaturesMatch(secret, timestamp, body, signature) {
-  const expected = Buffer.from(signBody(secret, timestamp, body));
+export function signaturesMatch(secret, timestamp, nonce, body, signature) {
+  const expected = Buffer.from(signBody(secret, timestamp, nonce, body));
   const actual = Buffer.from(signature || '');
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
@@ -22,13 +22,15 @@ export async function postSignedJson(url, value, secret, { timeoutMs = 5000 } = 
   if (!url) return null;
   const body = canonicalJson(value);
   const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = randomUUID();
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'user-agent': 'Vocivo-ESL/1.0',
       'x-vocivo-timestamp': timestamp,
-      'x-vocivo-signature': signBody(secret, timestamp, body),
+      'x-vocivo-nonce': nonce,
+      'x-vocivo-signature': signBody(secret, timestamp, nonce, body),
     },
     body,
     signal: AbortSignal.timeout(timeoutMs),

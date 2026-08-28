@@ -30,11 +30,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     await requireFeature(access.session, 'sipTrunks');
     if (req.method === 'GET') {
-      const [connectionResponse, uacResponse, policies] = await Promise.all([telnyx(telnyxPstnConnectionPath()), telnyx('/uac_connections?page[size]=100'), readTrunkPolicies()]);
-      const connection = (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {};
+      const [connectionResponse, uacResponse, policies] = await Promise.all([
+        access.superadmin ? telnyx(telnyxPstnConnectionPath()) : Promise.resolve(null),
+        telnyx('/uac_connections?page[size]=100'),
+        readTrunkPolicies(),
+      ]);
+      const connection = connectionResponse ? (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {} : null;
       const uac = (await uacResponse.json() as { data?: UacConnection[] }).data ?? [];
       return res.status(200).json({
-        vocivoTrunk: { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.record_type === 'ip_connection' ? '68.183.244.215' : connection.user_name, registrationStatus: connection.record_type === 'ip_connection' ? 'IP authenticated' : connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: connection.transport_protocol || 'UDP' },
+        vocivoTrunk: access.superadmin && connection ? { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.record_type === 'ip_connection' ? '68.183.244.215' : connection.user_name, registrationStatus: connection.record_type === 'ip_connection' ? 'IP authenticated' : connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: connection.transport_protocol || 'UDP' } : null,
         externalTrunks: uac.filter((item) => access.superadmin || policies[item.id]?.organizationId === access.organizationId).map((item) => safeUac(item, policies[item.id])),
       });
     }
@@ -54,6 +58,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const destinationUri = text(req.body?.destinationUri, 200);
     const transport = ['UDP', 'TCP', 'TLS'].includes(req.body?.transport) ? req.body.transport : 'TLS';
     if (!name || !proxy || !username || (!id && !password)) return res.status(400).json({ error: 'Name, proxy, username and password are required for a new trunk.' });
+    const policyOrganizationId = access.superadmin ? text(req.body?.policy?.organizationId, 50) || currentPolicies[id]?.organizationId || '' : access.organizationId || '';
+    if (!policyOrganizationId) return res.status(400).json({ error: 'Choose the customer organization that owns this SIP trunk.' });
     const body = {
       connection_name: name,
       active: req.body?.active !== false,
@@ -63,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const response = await telnyx(id ? `/uac_connections/${encodeURIComponent(id)}` : '/uac_connections', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(body) });
     const payload = await response.json() as { data?: UacConnection };
     if (!payload.data) throw new Error('Telnyx did not return the saved SIP connection.');
-    const policy = await saveTrunkPolicy(payload.data.id, { ...(req.body?.policy ?? {}), organizationId: access.superadmin ? req.body?.policy?.organizationId : access.organizationId });
+    const policy = await saveTrunkPolicy(payload.data.id, { ...(req.body?.policy ?? {}), organizationId: policyOrganizationId });
     return res.status(id ? 200 : 201).json({ trunk: safeUac(payload.data, policy) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });

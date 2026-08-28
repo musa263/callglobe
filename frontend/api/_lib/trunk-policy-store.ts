@@ -42,9 +42,11 @@ export function normalizeTrunkPolicy(id: string, input: Partial<TrunkPolicy>, cu
   const editableText = (value: unknown, previous: string | undefined, max: number) => value === undefined ? previous || '' : text(value, max);
   const dids = Array.isArray(input.inboundDids) ? input.inboundDids : current?.inboundDids ?? [];
   const codecs = Array.isArray(input.codecs) ? input.codecs : current?.codecs ?? ['PCMU', 'PCMA'];
+  const organizationId = text(input.organizationId, 50) || current?.organizationId || '';
+  if (!organizationId) throw new Error('A tenant organization is required for every SIP trunk.');
   return {
     id,
-    organizationId: text(input.organizationId, 50) || current?.organizationId || 'primary',
+    organizationId,
     inboundEnabled: input.inboundEnabled ?? current?.inboundEnabled ?? true,
     outboundEnabled: input.outboundEnabled ?? current?.outboundEnabled ?? true,
     inboundDids: dids.map((item) => text(item, 24)).filter(Boolean).slice(0, 100),

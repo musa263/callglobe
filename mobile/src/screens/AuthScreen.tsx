@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ArrowRight, Eye, EyeOff, Globe2, QrCode, ShieldCheck, X } from 'lucide-react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -46,7 +46,7 @@ export function AuthScreen() {
     setShowScanner(true);
   };
 
-  const scanEnrollment = async ({ data }: { data: string }) => {
+  const scanEnrollment = useCallback(async ({ data }: { data: string }) => {
     if (scanning) return;
     const isVocivoLink = data.startsWith('vocivo://enroll?') || /^https:\/\/[^/]+\/enroll\.html(?:[?#]|$)/i.test(data);
     if (!isVocivoLink) return;
@@ -62,7 +62,20 @@ export function AuthScreen() {
     } finally {
       setScanning(false);
     }
-  };
+  }, [enrollWithQr, scanning]);
+
+  useEffect(() => {
+    let mounted = true;
+    const openEnrollment = (url: string | null) => {
+      if (mounted && url) scanEnrollment({ data: url }).catch(() => undefined);
+    };
+    Linking.getInitialURL().then(openEnrollment).catch(() => undefined);
+    const subscription = Linking.addEventListener('url', ({ url }) => openEnrollment(url));
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, [scanEnrollment]);
 
   return (
     <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

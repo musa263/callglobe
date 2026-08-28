@@ -4,7 +4,7 @@ import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { getExtensionCredentials } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
-import { sipWebSocketUrl, voiceProvider } from '../voice-provider.js';
+import { sipWebSocketUrl, voiceIceServers, voiceProvider } from '../voice-provider.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -30,6 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sip_password: credential.sipPassword,
       sip_domain: credential.sipDomain,
       websocket_url: provider === 'freeswitch' ? sipWebSocketUrl(config) : '',
+      ice_servers: voiceIceServers(`${credential.extension.organizationId}:${credential.extension.id}`),
       extension: credential.extension.extension,
       organization_id: credential.extension.organizationId,
     });

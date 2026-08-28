@@ -55,6 +55,23 @@ async function terminate(session) {
   if (session instanceof Inviter && [SessionState.Initial, SessionState.Establishing].includes(session.state)) return session.cancel();
 }
 
+function waitForEstablished(session, timeoutMs = 10_000) {
+  if (session.state === SessionState.Established) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const listener = (nextState) => {
+      if (nextState === SessionState.Established) finish();
+      if (nextState === SessionState.Terminated) finish(new Error('The conference room ended before it connected.'));
+    };
+    const timer = setTimeout(() => finish(new Error('The conference room did not answer in time.')), timeoutMs);
+    const finish = (error) => {
+      clearTimeout(timer);
+      session.stateChange.removeListener(listener);
+      error ? reject(error) : resolve();
+    };
+    session.stateChange.addListener(listener);
+  });
+}
+
 function attachRemoteAudio(leg) {
   const stream = leg.session?.sessionDescriptionHandler?.remoteMediaStream;
   if (!stream || leg.audio) return;
@@ -289,10 +306,14 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         reconnectionDelay: 3,
         noAnswerTimeout: 60,
         logBuiltinEnabled: false,
-        sessionDescriptionHandlerFactoryOptions: { peerConnectionConfiguration: { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] } },
+        sessionDescriptionHandlerFactoryOptions: { peerConnectionConfiguration: { iceServers: configuration.ice_servers || [{ urls: 'stun:stun.cloudflare.com:3478' }] } },
         delegate: {
           onInvite: (invitation) => {
             if (cancelled) return invitation.reject().catch(() => undefined);
+            const pendingIncoming = incomingRef.current;
+            if (pendingIncoming && pendingIncoming.session.state !== SessionState.Terminated) {
+              return invitation.reject({ statusCode: 486, reasonPhrase: 'Busy Here' }).catch(() => undefined);
+            }
             const leg = track(invitation, 'inbound');
             incomingRef.current = leg;
             setIncomingCall(publicCall(leg));
@@ -508,7 +529,23 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     actionBusyRef.current = true;
     try {
       await setHeld(current, true);
-      await setHeld(held, false);
+      try {
+        await setHeld(held, false);
+      } catch (swapError) {
+        try { await setHeld(current, false); }
+        catch (rollbackError) {
+          setCall(publicCall(current, SessionState.Established));
+          setHeldCall({ id: held.id, identity: held.identity, state: 'held' });
+          setRemoteIdentity(current.identity);
+          setState(current.held ? 'held' : 'active');
+          throw new AggregateError([swapError, rollbackError], 'The held call could not resume and the original call could not be restored.');
+        }
+        setCall(publicCall(current, SessionState.Established));
+        setHeldCall({ id: held.id, identity: held.identity, state: 'held' });
+        setRemoteIdentity(current.identity);
+        setState('active');
+        throw swapError;
+      }
       activeRef.current = held;
       heldRef.current = current;
       setCall(publicCall(held, SessionState.Established));
@@ -523,21 +560,42 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     const current = activeRef.current;
     const held = heldRef.current;
     if (!current || !held || current.session.state !== SessionState.Established || held.session.state !== SessionState.Established) throw new Error('Two connected calls are required before merging.');
+    const configuration = configRef.current;
+    if (!configuration) throw new Error('The PBX configuration is unavailable.');
     actionBusyRef.current = true;
+    const room = `${Date.now() % 100000000}`.padStart(8, '0');
+    let host = null;
     try {
-      await setHeld(held, false);
-      const merged = {
-        id: `conference-${Date.now()}`,
-        legs: [held, current],
-        participants: [held, current].map((leg) => ({ id: leg.id, ...leg.identity })),
-      };
-      conferenceRef.current = merged;
+      if (!current.held) await setHeld(current, true);
+      host = await placeCall(`*3${room}`, { name: 'Conference', number: `Room ${room}`, internal: true, photoUrl: '' }, ['X-Vocivo-Call-Type: conference']);
+      await waitForEstablished(host.session);
+      const uri = UserAgent.makeURI(`sip:*3${room}@${configuration.sip_domain}`);
+      if (!uri) throw new Error('The conference destination is invalid.');
+      const referrals = await Promise.allSettled([current.session.refer(uri), held.session.refer(uri)]);
+      const failures = referrals.filter((result) => result.status === 'rejected');
+      if (failures.length === referrals.length) throw new AggregateError(failures.map((result) => result.reason), 'Neither call could join the conference.');
       heldRef.current = null;
       setHeldCall(null);
-      setConference({ id: merged.id, participants: merged.participants });
+      activeRef.current = host;
+      const participants = [current, held].map((leg) => ({ id: leg.id, name: leg.identity.name, number: leg.identity.number, internal: leg.identity.internal }));
+      conferenceRef.current = { id: room, room, legs: [host], participants };
+      setConference({ id: room, room, participants });
+      setCall(publicCall(host, SessionState.Established));
+      setRemoteIdentity(host.identity);
       setState('active');
+      if (failures.length) setError('One participant could not join the conference.');
+    } catch (mergeError) {
+      if (host) await terminate(host.session).catch(() => undefined);
+      activeRef.current = current;
+      heldRef.current = held;
+      if (current.held) await setHeld(current, false).catch(() => undefined);
+      setCall(publicCall(current, SessionState.Established));
+      setHeldCall({ id: held.id, identity: held.identity, state: 'held' });
+      setRemoteIdentity(current.identity);
+      setState(current.held ? 'held' : 'active');
+      throw mergeError;
     } finally { actionBusyRef.current = false; }
-  }, [setHeld]);
+  }, [placeCall, setHeld]);
 
   const removeConferenceParticipant = useCallback(async (participantId) => {
     const current = conferenceRef.current;

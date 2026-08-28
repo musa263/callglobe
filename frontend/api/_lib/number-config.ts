@@ -114,8 +114,7 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
     voice: bounded(input.voice, defaults.voice, 100),
     backgroundImageUrl: typeof input.backgroundImageUrl === 'string' && /^https:\/\//.test(input.backgroundImageUrl) ? input.backgroundImageUrl.slice(0, 500) : '',
   };
-  const pbx = await readPbxConfig();
-  await savePbxConfig({ businessVoiceConfigs: { ...pbx.businessVoiceConfigs, [organizationId]: config } });
+  const pbx = await savePbxConfig((current) => ({ businessVoiceConfigs: { ...current.businessVoiceConfigs, [organizationId]: config } }));
   const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
   const payload = await response.json() as { data?: Array<{ id: string; phone_number: string; connection_id?: string | null }> };
   const callControlId = telnyxPstnConnectionId();

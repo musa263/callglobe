@@ -13,7 +13,7 @@ export type StoredVoicemail = {
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
-  organizationId?: string;
+  organizationId: string;
 };
 
 function key() {
@@ -34,7 +34,8 @@ function decrypt(value: Buffer): StoredVoicemail {
 }
 
 export async function storeVoicemail(voicemail: StoredVoicemail) {
-  const organizationId = voicemail.organizationId || 'primary';
+  const organizationId = voicemail.organizationId.trim();
+  if (!organizationId) throw new Error('A tenant organization is required before storing voicemail.');
   const newestFirst = newestFirstTimestamp(voicemail.updatedAt || voicemail.createdAt);
   const voicemailKey = createHash('sha256').update(`${voicemail.id}:${voicemail.updatedAt}`).digest('hex').slice(0, 20);
   await put(`vocivo/voicemails/v3/${tenantStorageKey(organizationId)}/${newestFirst}-${voicemailKey}.bin`, encrypt({ ...voicemail, organizationId }), {
@@ -71,7 +72,7 @@ export async function listVoicemails(organizationId: string) {
     const legacyObjects = await readObjects(legacyPaths);
     const tenantEvents = legacyPaths.map((pathname) => {
       try { const value = legacyObjects.get(pathname); return value ? decrypt(value) : null; } catch { return null; }
-    }).filter((item): item is StoredVoicemail => item !== null && (item.organizationId || 'primary') === organizationId);
+    }).filter((item): item is StoredVoicemail => item !== null && item.organizationId === organizationId);
     if (tenantEvents.length) {
       await putMany(overwriteEntries(tenantEvents.map((voicemail) => ({
         pathname: `vocivo/voicemails/v3/${tenantKey}/${newestFirstTimestamp(voicemail.updatedAt || voicemail.createdAt)}-${createHash('sha256').update(`${voicemail.id}:${voicemail.updatedAt}`).digest('hex').slice(0, 20)}.bin`,
@@ -91,7 +92,7 @@ export async function listVoicemails(organizationId: string) {
   }).filter((item): item is StoredVoicemail => Boolean(item));
   const latest = new Map<string, StoredVoicemail>();
   events.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).forEach((event) => latest.set(event.id, { ...latest.get(event.id), ...event }));
-  return [...latest.values()].filter((item) => !item.deleted && (item.organizationId || 'primary') === organizationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
+  return [...latest.values()].filter((item) => !item.deleted && item.organizationId === organizationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
 }
 
 export async function deleteVoicemail(id: string, organizationId: string) {

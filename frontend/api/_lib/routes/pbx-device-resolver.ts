@@ -7,7 +7,7 @@ import { listPushDevices } from '../push-device-store.js';
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
   try {
-    verifyPbxRequest(req);
+    await verifyPbxRequest(req);
     const organizationId = typeof req.body?.organizationId === 'string' ? req.body.organizationId : '';
     const extensionNumber = typeof req.body?.extension === 'string' ? req.body.extension : '';
     if (!organizationId || !/^\d{2,5}$/.test(extensionNumber)) return res.status(400).json({ error: 'A valid organization and extension are required.' });

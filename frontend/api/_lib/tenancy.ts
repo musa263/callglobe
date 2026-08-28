@@ -21,31 +21,29 @@ export function sessionCanAccessNumber(session: VocivoSession, phoneNumber: stri
   return session.sub === 'vocivo-owner' || numberOrganizationId(phoneNumber, config) === sessionOrganizationId(session, config);
 }
 
-export function organizationForInboundNumber(phoneNumber: string, config: PbxConfig, serviceNumber = process.env.TELNYX_SMS_FROM) {
+export function organizationForInboundNumber(phoneNumber: string, config: PbxConfig) {
   const assigned = numberOrganizationId(phoneNumber, config);
-  if (assigned) return assigned;
-  if (normalizeE164(phoneNumber) === normalizeE164(serviceNumber)) return config.activeOrganizationId || primaryOrganizationId(config);
-  return '';
+  return assigned && config.organizations.some((organization) => organization.id === assigned && organization.status === 'active') ? assigned : '';
 }
 
 export async function organizationForNumber(phoneNumber: string) {
   const config = await readPbxConfig();
-  // The shared Vocivo ingress number can route the primary workspace without
-  // becoming that customer's owned caller ID or appearing in its inventory.
   return organizationForInboundNumber(phoneNumber, config);
 }
 
 export async function assignNumberToOrganization(phoneNumber: string, organizationId: string, patch: Omit<PbxConfig['numberAssignments'][string], 'organizationId'> = {}) {
   const normalized = normalizeE164(phoneNumber);
-  const config = await readPbxConfig();
-  if (!config.organizations.some((item) => item.id === organizationId)) throw new Error('Organization not found.');
-  await savePbxConfig({ numberAssignments: { ...config.numberAssignments, [normalized]: { ...config.numberAssignments[normalized], ...patch, organizationId } } });
+  await savePbxConfig((config) => {
+    if (!config.organizations.some((item) => item.id === organizationId)) throw new Error('Organization not found.');
+    return { numberAssignments: { ...config.numberAssignments, [normalized]: { ...config.numberAssignments[normalized], ...patch, organizationId } } };
+  });
 }
 
 export async function removeNumberAssignment(phoneNumber: string) {
   const normalized = normalizeE164(phoneNumber);
-  const config = await readPbxConfig();
-  const numberAssignments = { ...config.numberAssignments };
-  delete numberAssignments[normalized];
-  await savePbxConfig({ numberAssignments });
+  await savePbxConfig((config) => {
+    const numberAssignments = { ...config.numberAssignments };
+    delete numberAssignments[normalized];
+    return { numberAssignments };
+  });
 }

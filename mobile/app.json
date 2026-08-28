@@ -37,6 +37,8 @@
         "POST_NOTIFICATIONS",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_PHONE_CALL",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.WAKE_LOCK",
         "READ_PHONE_NUMBERS",
         "READ_CONTACTS",
         "CAMERA",

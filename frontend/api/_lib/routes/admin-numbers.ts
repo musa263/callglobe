@@ -68,11 +68,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const ordersPayload = await ordersResponse.json() as { data?: Array<Record<string, any>> };
       const profilesPayload = await profilesResponse.json() as { data?: Array<Record<string, any>> };
       const visibleNumbers = (numbersPayload.data ?? []).filter((item) => config.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
+      const visibleProfileIds = new Set(visibleNumbers.map((item) => String(item.messaging_profile_id || '')).filter(Boolean));
+      const visibleProfiles = access.superadmin ? profilesPayload.data ?? [] : (profilesPayload.data ?? []).filter((item) => visibleProfileIds.has(String(item.id || '')));
       const orderPrefix = `Vocivo ${activeOrganizationId} `;
       return res.status(200).json({
-        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, connectionId: item.connection_id, connectionName: item.connection_name, messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
+        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
         orders: (ordersPayload.data ?? []).filter((item) => String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
-        messagingProfiles: (profilesPayload.data ?? []).map((item) => ({ id: item.id, name: item.name || item.id, webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' })),
+        messagingProfiles: visibleProfiles.map((item) => ({ id: item.id, name: item.name || item.id, ...(access.superadmin ? { webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' } : {}) })),
       });
     }
     if (req.method === 'POST') {
@@ -120,9 +122,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const ownedNumber = text(owned.data?.phone_number, 24);
     if (!ownedNumber || config.numberAssignments[ownedNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
     const body: Record<string, unknown> = {};
-    if (req.body?.assignToVocivo === true) body.connection_id = telnyxPstnConnectionId();
-    else if (req.body?.connectionId !== undefined) body.connection_id = text(req.body.connectionId, 80) || null;
-    if (req.body?.messagingProfileId !== undefined) body.messaging_profile_id = text(req.body.messagingProfileId, 80) || null;
+    if (!access.superadmin && (req.body?.assignToVocivo === true || req.body?.connectionId !== undefined)) return res.status(403).json({ error: 'Only the Vocivo superadmin can change carrier connections.' });
+    if (access.superadmin && req.body?.assignToVocivo === true) body.connection_id = telnyxPstnConnectionId();
+    else if (access.superadmin && req.body?.connectionId !== undefined) body.connection_id = text(req.body.connectionId, 80) || null;
+    if (req.body?.messagingProfileId !== undefined) {
+      const requestedProfileId = text(req.body.messagingProfileId, 80);
+      if (!access.superadmin && requestedProfileId) {
+        const inventoryResponse = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
+        const inventoryPayload = await inventoryResponse.json() as { data?: Array<{ phone_number?: string; messaging_profile_id?: string }> };
+        const allowed = new Set((inventoryPayload.data ?? [])
+          .filter((item) => item.phone_number && config.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId)
+          .map((item) => item.messaging_profile_id || '').filter(Boolean));
+        if (!allowed.has(requestedProfileId)) return res.status(403).json({ error: 'This messaging profile is not assigned to your company.' });
+      }
+      body.messaging_profile_id = requestedProfileId || null;
+    }
     if (Array.isArray(req.body?.tags)) body.tags = req.body.tags.map((item: unknown) => text(item, 50)).filter(Boolean).slice(0, 20);
     const requestedOrganizationId = text(req.body?.organizationId, 50);
     const organizationId = access.superadmin ? requestedOrganizationId || activeOrganizationId : activeOrganizationId;

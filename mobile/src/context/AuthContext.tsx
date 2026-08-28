@@ -1,10 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, Settings } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { api } from '../lib/api';
 import type { CallerNumber, CallLog, CallRate, Profile } from '../types';
 import { fallbackRates } from '../data/fallbackRates';
-import { signOutVoiceDevice } from '../lib/voipClient';
+import { setVoiceSignedIn, signOutVoiceDevice } from '../lib/voipClient';
 
 type AuthContextValue = {
   loading: boolean;
@@ -124,6 +125,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const activeUserIdRef = useRef<string | null>(null);
   const [isPreview, setIsPreview] = useState(false);
 
+  useEffect(() => {
+    if (Platform.OS === 'ios') Settings.set({ vocivoSignedIn: isAuthenticated && !isPreview });
+    setVoiceSignedIn(isAuthenticated && !isPreview).catch(() => undefined);
+  }, [isAuthenticated, isPreview]);
+
   const refreshServerHistory = useCallback(async (userId: string, directory: DirectoryResponse['users']) => {
     const server = await api.get<HistoryResponse>('/api/voice/history');
     if (activeUserIdRef.current !== userId) return;
@@ -159,7 +165,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       const storedHistory = await readHistory(baseProfile.id);
       if (activeUserIdRef.current !== baseProfile.id) return;
-      setProfile({ ...basicProfile, can_call: true });
+      setProfile({ ...basicProfile, can_call: false });
+      setCallerNumbers([]);
       historyRef.current = storedHistory;
       setHistory(storedHistory);
       return;
@@ -224,6 +231,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccount]);
 
   const signOut = useCallback(async () => {
+    if (Platform.OS === 'ios') Settings.set({ vocivoSignedIn: false });
+    await setVoiceSignedIn(false).catch(() => undefined);
     await signOutVoiceDevice();
     setIsPreview(false);
     setAuthenticated(false);

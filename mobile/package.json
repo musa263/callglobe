@@ -2,17 +2,20 @@
   "name": "vocivo-mobile",
   "version": "1.0.0",
   "private": true,
-  "main": "node_modules/expo/AppEntry.js",
+  "main": "index.js",
   "scripts": {
     "start": "expo start --dev-client",
     "ios": "expo run:ios",
     "android": "expo run:android",
     "prebuild": "expo prebuild",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/lib/*.test.ts"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "11.4.1",
+    "@react-native-firebase/app": "25.1.0",
+    "@react-native-firebase/messaging": "25.1.0",
     "expo": "^54.0.0",
     "expo-asset": "~12.0.13",
     "expo-audio": "~1.1.1",
@@ -49,6 +52,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
+    "tsx": "^4.23.12",
     "typescript": "~5.9.2"
   },
   "overrides": {

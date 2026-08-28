@@ -1,0 +1,24 @@
+global
+  log stdout format raw local0
+  maxconn 10000
+
+defaults
+  log global
+  mode tcp
+  option tcplog
+  timeout connect 5s
+  timeout client 2m
+  timeout server 2m
+
+frontend tls-edge
+  bind :443
+  tcp-request inspect-delay 5s
+  tcp-request content accept if { req_ssl_hello_type 1 }
+  use_backend turn-tls if { req_ssl_sni -i @@TURN_TLS_DOMAIN@@ }
+  default_backend caddy-tls
+
+backend caddy-tls
+  server caddy 172.30.0.2:443 check
+
+backend turn-tls
+  server coturn host.docker.internal:5349 check

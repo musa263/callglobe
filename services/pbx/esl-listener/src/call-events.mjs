@@ -23,7 +23,8 @@ function phaseFor(eventName) {
 export function normalizeEslEvent(event) {
   const eventName = first(event, 'Event-Name', 'event_name').toUpperCase();
   const callId = first(event, 'variable_vocivo_call_id', 'variable_call_uuid', 'Channel-Call-UUID', 'Unique-ID');
-  if (!eventName || !callId) return null;
+  const organizationId = first(event, 'variable_vocivo_organization_id');
+  if (!eventName || !callId || !organizationId) return null;
   const targetExtension = first(event, 'variable_vocivo_push_target_extension', 'variable_dialed_extension');
   const callerNumber = first(event, 'variable_vocivo_caller_number', 'Caller-Caller-ID-Number', 'variable_effective_caller_id_number');
   const callerName = first(event, 'variable_vocivo_caller_name', 'Caller-Caller-ID-Name', 'variable_effective_caller_id_name') || callerNumber || 'Unknown caller';
@@ -40,7 +41,7 @@ export function normalizeEslEvent(event) {
     sessionId: first(event, 'variable_sip_call_id', 'Channel-Call-UUID') || callId,
     direction: first(event, 'Call-Direction').toLowerCase() || 'unknown',
     callType: first(event, 'variable_vocivo_call_type') || 'voice',
-    organizationId: first(event, 'variable_vocivo_organization_id') || 'primary',
+    organizationId,
     organizationName: first(event, 'variable_vocivo_organization_name') || 'Vocivo customer',
     targetExtension,
     destination,
@@ -57,5 +58,5 @@ export function normalizeEslEvent(event) {
 }
 
 export function shouldPushIncomingCall(call) {
-  return call.phase === 'created' && Boolean(call.targetExtension);
+  return Boolean(call && call.phase === 'created' && call.targetExtension);
 }

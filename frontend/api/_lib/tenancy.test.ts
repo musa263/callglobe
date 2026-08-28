@@ -3,12 +3,12 @@ import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
 import { numberOrganizationId, normalizeE164, organizationForInboundNumber } from './tenancy.js';
 
-test('normalizes public numbers without assigning an unallocated service number', () => {
+test('normalizes public numbers and never assigns an unallocated service number', () => {
   const config = defaultPbxConfig();
   assert.equal(normalizeE164('+1 (844) 716-1777'), '+18447161777');
   assert.equal(numberOrganizationId('+18447161777', config), '');
-  assert.equal(organizationForInboundNumber('+18447161777', config, '+18447161777'), 'primary');
-  assert.equal(organizationForInboundNumber('+15550001111', config, '+18447161777'), '');
+  assert.equal(organizationForInboundNumber('+18447161777', config), '');
+  assert.equal(organizationForInboundNumber('+15550001111', config), '');
 });
 
 test('returns only explicit customer number assignments', () => {

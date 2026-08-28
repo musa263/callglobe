@@ -41,6 +41,7 @@ RUN cd /usr/src/libs/libks \
     && make -j"$(nproc)" install
 
 RUN cd /usr/src/freeswitch \
+    && sed -i 's|#applications/mod_conference|applications/mod_conference|' build/modules.conf.in \
     && sed -i 's|#endpoints/mod_verto|endpoints/mod_verto|' build/modules.conf.in \
     && sed -i 's|#codecs/mod_opus|codecs/mod_opus|' build/modules.conf.in \
     && sed -i 's|#xml_int/mod_xml_curl|xml_int/mod_xml_curl|' build/modules.conf.in \

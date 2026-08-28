@@ -1,11 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import {
   createCredentialConfig,
   TelnyxCallState,
   TelnyxConnectionState,
   TelnyxVoipClient,
   VoicePnBridge,
+  getAndroidPushToken,
+  onAndroidPushTokenRefresh,
   type Call,
   pushDeviceId,
 } from '../lib/voipClient';
@@ -88,7 +91,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [conference, setConference] = useState<MergedConference | null>(null);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [pushRegistration, setPushRegistration] = useState<VoiceContextValue['pushRegistration']>(Platform.OS === 'ios' ? 'registering' : 'not_required');
+  const [pushRegistration, setPushRegistration] = useState<VoiceContextValue['pushRegistration']>(Platform.OS === 'ios' || Platform.OS === 'android' ? 'registering' : 'not_required');
   const callRef = useRef<Call | null>(null);
   const callMetaRef = useRef(new Map<string, Partial<ActiveCall>>());
   const callRouteIdsRef = useRef(new Map<string, string>());
@@ -100,9 +103,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const durationRef = useRef(0);
   const loggedCalls = useRef(new Set<string>());
   const endingCallIdsRef = useRef(new Set<string>());
+  const endCallOperationRef = useRef<Promise<void> | null>(null);
   const callSubscriptions = useRef<Array<{ unsubscribe: () => void }>>([]);
   const routePollGenerationRef = useRef(0);
-  const loginConfigRef = useRef<{ sipUser: string; sipPassword: string; sipDomain: string; websocketUrl: string; extension: string; ringtone: string } | null>(null);
+  const loginConfigRef = useRef<{ sipUser: string; sipPassword: string; sipDomain: string; websocketUrl: string; extension: string; ringtone: string; iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }> } | null>(null);
 
   // Telnyx streams ringback into the parked call leg. Keeping Expo Audio out of
   // an active call also leaves the iOS WebRTC/CallKit audio session authoritative.
@@ -182,7 +186,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (endingCallIdsRef.current.has(call.callId) && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
-      call.hangup().catch(() => undefined);
+      voipClient.endCall(call.callId).catch(() => undefined);
       return;
     }
 
@@ -239,7 +243,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, [clearCallSubscriptions, describeCall, finalizeCall, stopRingback]);
 
   useEffect(() => {
-    const connectionSubscription = voipClient.connectionState$.subscribe(setConnection);
+    const connectionSubscription = voipClient.connectionState$.subscribe((state) => {
+      setConnection(state);
+      if (state === TelnyxConnectionState.CONNECTED) {
+        setError((current) => current && /connect|registration|PBX/i.test(current) ? null : current);
+      }
+    });
     const callsSubscription = voipClient.calls$.subscribe((calls) => {
       const currentId = voipClient.currentActiveCall?.callId;
       const waiting = calls.find((call) => call.callId !== currentId && call.isIncoming && call.currentState === TelnyxCallState.RINGING);
@@ -272,22 +281,28 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     if (loading) return;
     if (!isAuthenticated || isPreview) {
       voipClient.logout().catch(() => undefined);
-      setPushRegistration(Platform.OS === 'ios' ? 'unavailable' : 'not_required');
+      setPushRegistration(Platform.OS === 'ios' || Platform.OS === 'android' ? 'unavailable' : 'not_required');
       return;
     }
     let canceled = false;
     let tokenTimer: ReturnType<typeof setInterval> | undefined;
     let activeRegistrationTimer: ReturnType<typeof setTimeout> | undefined;
     let appStateSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
+    let tokenRefreshSubscription: (() => void) | undefined;
     const connect = async () => {
       try {
         if (canceled) return;
-        const data = await api.get<{ provider: string; sip_user: string; sip_password: string; sip_domain: string; websocket_url: string; extension: string }>('/api/voice/config');
+        const data = await api.get<{ provider: string; sip_user: string; sip_password: string; sip_domain: string; websocket_url: string; extension: string; ice_servers?: Array<{ urls: string | string[]; username?: string; credential?: string }> }>('/api/voice/config');
         if (data.provider !== 'freeswitch' || !data.sip_user || !data.sip_password || !data.sip_domain || !data.websocket_url) throw new Error('Calling credentials were not returned.');
         const ringtone = await loadIncomingRingtone();
         await applyIncomingRingtone(ringtone);
-        loginConfigRef.current = { sipUser: data.sip_user, sipPassword: data.sip_password, sipDomain: data.sip_domain, websocketUrl: data.websocket_url, extension: data.extension, ringtone };
-        const pushNotificationDeviceToken = Platform.OS === 'ios' ? (await VoicePnBridge.getVoipToken())?.trim() || undefined : undefined;
+        loginConfigRef.current = { sipUser: data.sip_user, sipPassword: data.sip_password, sipDomain: data.sip_domain, websocketUrl: data.websocket_url, extension: data.extension, ringtone, iceServers: data.ice_servers };
+        const readPushToken = async () => Platform.OS === 'ios'
+          ? (await VoicePnBridge.getVoipToken())?.trim() || undefined
+          : Platform.OS === 'android'
+            ? (await getAndroidPushToken())?.trim() || undefined
+            : undefined;
+        const pushNotificationDeviceToken = await readPushToken();
         let registeredToken: string | undefined;
         let registrationBusy = false;
         const login = async () => {
@@ -300,6 +315,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
                 extension: data.extension,
                 displayName: profile?.full_name || undefined,
                 incomingCallRingtone: ringtone,
+                iceServers: data.ice_servers,
               }));
               return;
             } catch (loginError) {
@@ -309,19 +325,19 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           }
           throw lastError instanceof Error ? lastError : new Error('Unable to connect to calling service.');
         };
-        const registerLatestDevice = async () => {
-          if (Platform.OS !== 'ios' || canceled || registrationBusy) return;
-          const token = (await VoicePnBridge.getVoipToken())?.trim();
+        const registerLatestDevice = async (refreshedToken?: string) => {
+          if (!['ios', 'android'].includes(Platform.OS) || canceled || registrationBusy) return;
+          const token = refreshedToken?.trim() || await readPushToken();
           if (!token || token === registeredToken) return;
           registrationBusy = true;
           setPushRegistration('registering');
           try {
             await api.post('/api/voice/devices', {
               deviceId: await pushDeviceId(),
-              platform: 'ios',
+              platform: Platform.OS,
               token,
-              environment: __DEV__ ? 'sandbox' : 'production',
-              bundleId: 'app.vocivo.mobile',
+              environment: Platform.OS === 'ios' && __DEV__ ? 'sandbox' : 'production',
+              bundleId: Platform.OS === 'ios' ? 'app.vocivo.mobile' : undefined,
             });
             registeredToken = token;
             if (!canceled) setPushRegistration('registered');
@@ -332,9 +348,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           }
         };
         await login();
-        if (pushNotificationDeviceToken) await registerLatestDevice();
-        if (Platform.OS === 'ios') setPushRegistration(registeredToken ? 'registered' : 'registering');
-        if (Platform.OS === 'ios' && !pushNotificationDeviceToken) {
+        if (pushNotificationDeviceToken) await registerLatestDevice(pushNotificationDeviceToken);
+        if (Platform.OS === 'ios' || Platform.OS === 'android') setPushRegistration(registeredToken ? 'registered' : 'registering');
+        if (!pushNotificationDeviceToken && (Platform.OS === 'ios' || Platform.OS === 'android')) {
           tokenTimer = setInterval(() => {
             registerLatestDevice().then(() => {
               if (!registeredToken || !tokenTimer) return;
@@ -343,7 +359,13 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
             }).catch(() => undefined);
           }, 2000);
         }
-        if (Platform.OS === 'ios') {
+        if (Platform.OS === 'android') {
+          tokenRefreshSubscription = onAndroidPushTokenRefresh((token) => {
+            registeredToken = undefined;
+            registerLatestDevice(token).catch(() => undefined);
+          });
+        }
+        if (Platform.OS === 'ios' || Platform.OS === 'android') {
           appStateSubscription = AppState.addEventListener('change', (state) => {
             if (state !== 'active' || canceled) return;
             if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
@@ -351,7 +373,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           });
         }
       } catch (voiceError) {
-        if (Platform.OS === 'ios') setPushRegistration('unavailable');
+        if (Platform.OS === 'ios' || Platform.OS === 'android') setPushRegistration('unavailable');
         if (!canceled) setError(voiceError instanceof Error ? voiceError.message : 'Unable to connect to calling service.');
       }
     };
@@ -361,26 +383,164 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       if (tokenTimer) clearInterval(tokenTimer);
       if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
       appStateSubscription?.remove();
+      tokenRefreshSubscription?.();
     };
   }, [isAuthenticated, isPreview, loading]);
 
+  useEffect(() => {
+    if (loading || !isAuthenticated || isPreview) return;
+    let canceled = false;
+    let reconnecting = false;
+    let retryDelay = 1_000;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let iceRestartTimer: ReturnType<typeof setTimeout> | undefined;
+    let iceRetryTimer: ReturnType<typeof setTimeout> | undefined;
+    let backgroundedAt = 0;
+    let previousNetworkRoute: string | undefined;
+
+    const scheduleReconnect = (delay: number) => {
+      if (canceled || reconnectTimer || voipClient.currentConnectionState === TelnyxConnectionState.CONNECTED) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = undefined;
+        reconnect().catch(() => undefined);
+      }, delay);
+    };
+
+    const reconnect = async () => {
+      const config = loginConfigRef.current;
+      if (canceled || reconnecting || !config || voipClient.currentConnectionState === TelnyxConnectionState.CONNECTED) return;
+      const network = await NetInfo.fetch();
+      if (!network.isConnected || network.isInternetReachable === false) {
+        scheduleReconnect(3_000);
+        return;
+      }
+      reconnecting = true;
+      try {
+        await voipClient.login(createCredentialConfig(config.sipUser, config.sipPassword, {
+          sipDomain: config.sipDomain,
+          websocketUrl: config.websocketUrl,
+          extension: config.extension,
+          displayName: profile?.full_name || undefined,
+          incomingCallRingtone: config.ringtone,
+          iceServers: config.iceServers,
+        }));
+        retryDelay = 1_000;
+      } catch (reconnectError) {
+        if (!canceled) {
+          setError(reconnectError instanceof Error ? reconnectError.message : 'Unable to reconnect to calling service.');
+          scheduleReconnect(retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 15_000);
+        }
+      } finally {
+        reconnecting = false;
+      }
+    };
+
+    const connectionSubscription = voipClient.connectionState$.subscribe((state) => {
+      if (state === TelnyxConnectionState.CONNECTED) {
+        retryDelay = 1_000;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+        return;
+      }
+      scheduleReconnect(state === TelnyxConnectionState.CONNECTING ? 13_000 : retryDelay);
+    });
+    const refreshOrReconnect = () => {
+      if (voipClient.currentConnectionState === TelnyxConnectionState.CONNECTED) {
+        voipClient.refreshRegistration().catch(() => scheduleReconnect(0));
+      } else {
+        scheduleReconnect(0);
+      }
+    };
+    const recoverActiveMedia = () => {
+      if (!voipClient.currentCalls.some((call) => [TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(call.currentState))) return;
+      if (iceRestartTimer) clearTimeout(iceRestartTimer);
+      if (iceRetryTimer) clearTimeout(iceRetryTimer);
+      iceRestartTimer = setTimeout(() => {
+        iceRestartTimer = undefined;
+        voipClient.restartIce().catch(() => {
+          // A network handoff can briefly race the SIP WebSocket reconnect. Retry
+          // once after registration recovery instead of dropping the media path.
+          voipClient.refreshRegistration().catch(() => undefined);
+          iceRetryTimer = setTimeout(() => {
+            iceRetryTimer = undefined;
+            voipClient.restartIce().catch(() => undefined);
+          }, 1_250);
+        });
+      }, 150);
+    };
+    const networkSubscription = NetInfo.addEventListener((state) => {
+      const details = state.details && typeof state.details === 'object' ? state.details as Record<string, unknown> : undefined;
+      const route = state.isConnected
+        ? `${state.type}:${String(details?.ipAddress || details?.carrier || '')}`
+        : 'offline';
+      if (previousNetworkRoute && previousNetworkRoute !== 'offline' && route !== 'offline' && route !== previousNetworkRoute) {
+        recoverActiveMedia();
+      }
+      previousNetworkRoute = route;
+      if (state.isConnected && state.isInternetReachable !== false) refreshOrReconnect();
+    });
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        backgroundedAt = Date.now();
+        return;
+      }
+      const wasSuspended = backgroundedAt > 0 && Date.now() - backgroundedAt >= 5_000;
+      backgroundedAt = 0;
+      if (wasSuspended && !voipClient.currentCalls.length) {
+        reconnecting = true;
+        voipClient.reconnect()
+          .then(() => {
+            retryDelay = 1_000;
+            setError('');
+          })
+          .catch((reconnectError) => {
+            if (!canceled) {
+              setError(reconnectError instanceof Error ? reconnectError.message : 'Unable to reconnect to calling service.');
+              scheduleReconnect(retryDelay);
+            }
+          })
+          .finally(() => { reconnecting = false; });
+        return;
+      }
+      refreshOrReconnect();
+    });
+
+    scheduleReconnect(500);
+    return () => {
+      canceled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (iceRestartTimer) clearTimeout(iceRestartTimer);
+      if (iceRetryTimer) clearTimeout(iceRetryTimer);
+      connectionSubscription.unsubscribe();
+      networkSubscription();
+      appStateSubscription.remove();
+    };
+  }, [isAuthenticated, isPreview, loading, profile?.full_name]);
+
   const refreshIncomingCalls = useCallback(async () => {
-    if (Platform.OS !== 'ios') return;
+    if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
     setPushRegistration('registering');
     let data = loginConfigRef.current;
     if (!data) {
-      const credentials = await api.get<{ sip_user: string; sip_password: string; sip_domain: string; websocket_url: string; extension: string }>('/api/voice/config');
-      data = { sipUser: credentials.sip_user, sipPassword: credentials.sip_password, sipDomain: credentials.sip_domain, websocketUrl: credentials.websocket_url, extension: credentials.extension, ringtone: await loadIncomingRingtone() };
+      const credentials = await api.get<{ sip_user: string; sip_password: string; sip_domain: string; websocket_url: string; extension: string; ice_servers?: Array<{ urls: string | string[]; username?: string; credential?: string }> }>('/api/voice/config');
+      data = { sipUser: credentials.sip_user, sipPassword: credentials.sip_password, sipDomain: credentials.sip_domain, websocketUrl: credentials.websocket_url, extension: credentials.extension, ringtone: await loadIncomingRingtone(), iceServers: credentials.ice_servers };
     }
     loginConfigRef.current = data;
-    const token = await waitForVoipToken();
+    const token = Platform.OS === 'ios' ? await waitForVoipToken() : await getAndroidPushToken();
     if (!token) {
       setPushRegistration('unavailable');
-      throw new Error('iPhone did not provide a VoIP push token. Allow notifications, then reopen Vocivo and try again.');
+      throw new Error(`${Platform.OS === 'ios' ? 'iPhone' : 'Android'} did not provide a push token. Allow notifications, then reopen Vocivo and try again.`);
     }
     await Promise.all([
-      voipClient.login(createCredentialConfig(data.sipUser, data.sipPassword, { sipDomain: data.sipDomain, websocketUrl: data.websocketUrl, extension: data.extension, displayName: profile?.full_name || undefined, incomingCallRingtone: data.ringtone })),
-      api.post('/api/voice/devices', { deviceId: await pushDeviceId(), platform: 'ios', token, environment: __DEV__ ? 'sandbox' : 'production', bundleId: 'app.vocivo.mobile' }),
+      voipClient.login(createCredentialConfig(data.sipUser, data.sipPassword, { sipDomain: data.sipDomain, websocketUrl: data.websocketUrl, extension: data.extension, displayName: profile?.full_name || undefined, incomingCallRingtone: data.ringtone, iceServers: data.iceServers })),
+      api.post('/api/voice/devices', {
+        deviceId: await pushDeviceId(),
+        platform: Platform.OS,
+        token,
+        environment: Platform.OS === 'ios' && __DEV__ ? 'sandbox' : 'production',
+        bundleId: Platform.OS === 'ios' ? 'app.vocivo.mobile' : undefined,
+      }),
     ]);
     setPushRegistration('registered');
   }, []);
@@ -409,22 +569,14 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         if (result.phase === 'failed' || result.phase === 'ended') {
           stopRingback();
           if (result.failureCause) setError(`Call ended: ${result.failureCause.replaceAll('_', ' ')}.`);
-          const call = voipClient.getCall(callId);
-          if (call && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
-            await call.hangup().catch(() => undefined);
-          }
-          await VoicePnBridge.endCall(callId).catch(() => false);
+          await voipClient.endCall(callId).catch(() => undefined);
           return;
         }
       } catch (routeError) {
         if (attempt > 8) {
           stopRingback();
           setError(routeError instanceof Error ? routeError.message : 'Call status could not be confirmed.');
-          const call = voipClient.getCall(callId);
-          if (call && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
-            await call.hangup().catch(() => undefined);
-          }
-          await VoicePnBridge.endCall(callId).catch(() => false);
+          await voipClient.endCall(callId).catch(() => undefined);
           return;
         }
       }
@@ -433,11 +585,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     if (routePollGenerationRef.current === generation) {
       stopRingback();
       setError('Call setup timed out. Please try again.');
-      const call = voipClient.getCall(callId);
-      if (call && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
-        await call.hangup().catch(() => undefined);
-      }
-      await VoicePnBridge.endCall(callId).catch(() => false);
+      await voipClient.endCall(callId).catch(() => undefined);
     }
   }, [stopRingback]);
 
@@ -460,7 +608,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setActiveCall(optimisticCall);
     startingCallRef.current = true;
     try {
-      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound'));
+      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', displayName || rate.country_name, callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound'));
       if (startAttemptRef.current !== attempt) {
         await call.hangup().catch(() => undefined);
         return;
@@ -489,7 +637,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     multiCallBusyRef.current = true;
     try {
       await current.hold();
-      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound'));
+      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', rate.country_name, callerNumber?.phone_number, outboundHeaders(number, callerNumber?.phone_number, 'outbound'));
       callMetaRef.current.set(call.callId, { displayName: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now(), callerId: callerNumber?.phone_number });
       voipClient.setActiveCall(call.callId);
       attachCall(call);
@@ -523,7 +671,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setActiveCall(optimisticCall);
     startingCallRef.current = true;
     try {
-      const call = await voipClient.newCall(destination, profile?.full_name || 'Vocivo', profile?.extension, outboundHeaders(destination, undefined, 'internal'));
+      const call = await voipClient.newCall(destination, profile?.full_name || 'Vocivo', displayName, profile?.extension, outboundHeaders(destination, undefined, 'internal'));
       if (startAttemptRef.current !== attempt) {
         await call.hangup().catch(() => undefined);
         return;
@@ -595,16 +743,19 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     if (!current || !held || current.currentState !== TelnyxCallState.ACTIVE || held.currentState !== TelnyxCallState.HELD) {
       throw new Error('Connect the second call before merging.');
     }
+    const participants = [describeCall(current), describeCall(held)];
     multiCallBusyRef.current = true;
     try {
-      await held.resume();
-      conferenceCallIdsRef.current = [held.callId, current.callId];
-      setConference({ id: `conference-${Date.now()}`, participants: [describeCall(held), describeCall(current)] });
+      const merged = await voipClient.mergeCalls(held.callId);
+      conferenceCallIdsRef.current = [merged.host.callId];
       setHeldCall(null);
+      setConference({ id: merged.room, participants: merged.participants.map((call) => participants.find((item) => item.id === call.callId) || describeCall(call)) });
+      attachCall(merged.host);
+      if (merged.partial) setError('One participant could not join the conference.');
     } finally {
       multiCallBusyRef.current = false;
     }
-  }, [describeCall, heldCall?.id, isPreview]);
+  }, [attachCall, describeCall, heldCall?.id, isPreview]);
 
   const removeConferenceParticipant = useCallback(async (participantId: string) => {
     const currentConference = conference;
@@ -637,41 +788,45 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, [activeCall?.connectedAt, activeCall?.phase]);
 
   const endCall = useCallback(async () => {
-    startAttemptRef.current += 1;
-    startingCallRef.current = false;
-    routePollGenerationRef.current += 1;
-    stopRingback();
-    if (conferenceCallIdsRef.current.length) {
-      const mergedIds = [...conferenceCallIdsRef.current];
-      const mergedCalls = mergedIds.map((id) => voipClient.getCall(id)).filter((call): call is Call => Boolean(call));
-      mergedIds.forEach((id) => endingCallIdsRef.current.add(id));
-      conferenceCallIdsRef.current = [];
-      setConference(null);
-      setHeldCall(null);
-      finalizeCall('ended', activeCall?.id);
+    if (endCallOperationRef.current) return endCallOperationRef.current;
+    const operation = (async () => {
+      startAttemptRef.current += 1;
+      startingCallRef.current = false;
+      routePollGenerationRef.current += 1;
+      stopRingback();
+      if (conferenceCallIdsRef.current.length) {
+        const mergedIds = [...conferenceCallIdsRef.current];
+        mergedIds.forEach((id) => endingCallIdsRef.current.add(id));
+        conferenceCallIdsRef.current = [];
+        setConference(null);
+        setHeldCall(null);
+        finalizeCall('ended', activeCall?.id);
+        setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
+        await Promise.all(mergedIds.map((id) => voipClient.endCall(id).catch(() => undefined)));
+        setTimeout(() => setActiveCall(null), 200);
+        return;
+      }
+      const callId = activeCall?.id || callRef.current?.callId;
+      if (!callId) return;
+      endingCallIdsRef.current.add(callId);
+      const resumeAfterEnd = voipClient.currentCalls.find((call) => call.callId !== callId && call.currentState === TelnyxCallState.HELD);
+      finalizeCall('ended', callId);
       setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
-      await Promise.all([
-        ...mergedCalls.map((call) => call.hangup().catch(() => undefined)),
-        ...mergedIds.map((id) => VoicePnBridge.endCall(id).catch(() => false)),
-      ]);
+      await voipClient.endCall(callId).catch(() => undefined);
+      if (resumeAfterEnd) {
+        await resumeAfterEnd.resume().catch(() => undefined);
+        voipClient.setActiveCall(resumeAfterEnd.callId);
+        attachCall(resumeAfterEnd);
+        return;
+      }
       setTimeout(() => setActiveCall(null), 200);
-      return;
+    })();
+    endCallOperationRef.current = operation;
+    try {
+      await operation;
+    } finally {
+      if (endCallOperationRef.current === operation) endCallOperationRef.current = null;
     }
-    if (activeCall?.id) endingCallIdsRef.current.add(activeCall.id);
-    const resumeAfterEnd = voipClient.currentCalls.find((call) => call.callId !== callRef.current?.callId && call.currentState === TelnyxCallState.HELD);
-    finalizeCall('ended', activeCall?.id);
-    setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
-    await Promise.all([
-      ...(callRef.current ? [callRef.current.hangup().catch(() => undefined)] : []),
-      ...(activeCall?.id ? [VoicePnBridge.endCall(activeCall.id).catch(() => false)] : []),
-    ]);
-    if (resumeAfterEnd) {
-      await resumeAfterEnd.resume().catch(() => undefined);
-      voipClient.setActiveCall(resumeAfterEnd.callId);
-      attachCall(resumeAfterEnd);
-      return;
-    }
-    setTimeout(() => setActiveCall(null), 200);
   }, [activeCall?.id, attachCall, finalizeCall, stopRingback]);
 
   const answerCall = useCallback(async () => {
@@ -682,6 +837,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'connecting' } : current);
     try {
       voipClient.setActiveCall(call.callId);
+      await VoicePnBridge.answerCall(call.callId);
       await call.answer();
       if (Platform.OS === 'android') await VoicePnBridge.hideIncomingCallNotification();
       attachCall(call);

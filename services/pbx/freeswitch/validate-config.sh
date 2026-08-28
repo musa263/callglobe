@@ -40,6 +40,12 @@ if ! grep -q '<param name="method" value="POST"/>' "$root/config/autoload_config
   exit 1
 fi
 
+if ! grep -Fq 'value="http://127.0.0.1:8088/dialplan" bindings="dialplan"' "$root/config/autoload_configs/xml_curl.conf.xml" \
+  || ! grep -Fq 'freeswitch/config/dialplan/default/vocivo.xml:/run/vocivo/dialplan/vocivo.xml:ro' "$root/../docker-compose.yml"; then
+  echo "Tenant DID routing must use the signed local dialplan service." >&2
+  exit 1
+fi
+
 if ! grep -Fq '"$conf/dialplan/vocivo-internal.xml"' "$root/entrypoint.sh" \
   || ! grep -Fq '"$conf/dialplan/vocivo-public.xml"' "$root/entrypoint.sh"; then
   echo "Complete Vocivo dialplan contexts must be installed at the dialplan root." >&2
@@ -52,16 +58,26 @@ if ! grep -Fq '"$conf/tls"' "$root/entrypoint.sh" \
   exit 1
 fi
 
-if ! grep -Fq 'rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@' "$root/config/dialplan/default/vocivo.xml" \
-  || ! grep -Fq 'rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@' "$root/config/dialplan/public/vocivo-inbound.xml"; then
+if ! grep -Fq 'rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@' "$root/config/dialplan/default/vocivo.xml"; then
   echo "WebRTC dialplans must advertise the PBX public media address." >&2
   exit 1
 fi
 
-if ! grep -Fq '{originate_timeout=35,leg_timeout=35}user/$1' "$root/config/dialplan/default/vocivo.xml" \
+if grep -Fq 'vocivo_organization_id=primary' "$root/config/dialplan/public/vocivo-inbound.xml" \
+  || grep -Fq 'PBX_DEFAULT_EXTENSION' "$root/config/dialplan/public/vocivo-inbound.xml"; then
+  echo "Public inbound calls must not fall back to the primary tenant or default extension." >&2
+  exit 1
+fi
+
+if ! grep -Fq '{ignore_early_media=true,originate_timeout=35}[leg_timeout=35]user/$1' "$root/config/dialplan/default/vocivo.xml" \
   || ! grep -Fq 'bridge_answer_timeout=35' "$root/config/dialplan/default/vocivo.xml" \
-  || ! grep -Fq 'continue_on_answer_timeout=true' "$root/config/dialplan/default/vocivo.xml"; then
+  || ! grep -Fq 'continue_on_fail=NO_ANSWER,USER_NOT_REGISTERED,SUBSCRIBER_ABSENT' "$root/config/dialplan/default/vocivo.xml"; then
   echo "Internal extension bridges must enforce a bounded no-answer timeout." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'apply-candidate-acl" value="any_v4.auto' "$root/config/sip_profiles/vocivo-internal.xml"; then
+  echo "WebRTC endpoints must accept valid public and relay ICE candidates." >&2
   exit 1
 fi
 
@@ -79,15 +95,30 @@ if ! grep -Fq -- '- ./caddy:/etc/caddy:ro' "$root/../docker-compose.yml" \
   exit 1
 fi
 
-if sed -n '/^[[:space:]]*caddy:/,/^[[:space:]]*asterisk:/p' "$root/../docker-compose.yml" | grep -q 'network_mode: host' \
-  || ! sed -n '/^[[:space:]]*caddy:/,/^[[:space:]]*asterisk:/p' "$root/../docker-compose.yml" | grep -Fq '"443:443"'; then
-  echo "Caddy must use an isolated network namespace while publishing WSS on 443." >&2
+if sed -n '/^[[:space:]]*caddy:/,/^[[:space:]]*edge-router:/p' "$root/../docker-compose.yml" | grep -q 'network_mode: host' \
+  || sed -n '/^[[:space:]]*caddy:/,/^[[:space:]]*edge-router:/p' "$root/../docker-compose.yml" | grep -Fq '"443:443"' \
+  || ! sed -n '/^[[:space:]]*edge-router:/,/^[[:space:]]*asterisk:/p' "$root/../docker-compose.yml" | grep -Fq '"443:443"'; then
+  echo "The TLS edge must own public port 443 and route WSS to isolated Caddy." >&2
   exit 1
 fi
 
 if ! grep -Fq 'subnet: 172.30.0.0/24' "$root/../docker-compose.yml" \
-  || ! grep -Fq "ufw allow from 172.30.0.0/24 to any port 5066 proto tcp" "$root/../digitalocean/bootstrap-host.sh"; then
-  echo "The isolated Caddy subnet must be allowlisted only to Sofia WS." >&2
+  || ! grep -Fq "ufw allow from 172.30.0.0/24 to any port 5066 proto tcp" "$root/../digitalocean/bootstrap-host.sh" \
+  || ! grep -Fq "ufw allow from 172.30.0.0/24 to any port 5349 proto tcp" "$root/../digitalocean/bootstrap-host.sh"; then
+  echo "The isolated TLS subnet must be allowlisted only to Sofia WS and TURN TLS." >&2
+  exit 1
+fi
+
+if ! grep -Fq -- '--use-auth-secret' "$root/../docker-compose.yml" \
+  || ! grep -Fq 'turn_auth_secret' "$root/../docker-compose.yml" \
+  || grep -Fq -- '--user=${TURN_USERNAME}:${TURN_PASSWORD}' "$root/../docker-compose.yml" \
+  || ! grep -Fq 'turn-tls if { req_ssl_sni -i @@TURN_TLS_DOMAIN@@ }' "$root/../haproxy/haproxy.cfg.template"; then
+  echo "TURN must use short-lived REST credentials and the TLS 443 fallback." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'vocivo-${vocivo_sip_domain}-$1@default' "$root/config/dialplan/default/vocivo.xml"; then
+  echo "Conference rooms must be namespaced to the tenant SIP domain." >&2
   exit 1
 fi
 
