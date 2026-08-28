@@ -16,8 +16,6 @@ fi
 rsync -az --delete \
   --exclude '.env' \
   --exclude 'secrets/' \
-  --exclude 'asterisk/config/pjsip_extensions.conf' \
-  --exclude 'asterisk/config/voicemail_users.conf' \
   "$source_dir/" "$PBX_USER@$PBX_HOST:$PBX_PATH/"
 scp "$source_dir/.env" "$PBX_USER@$PBX_HOST:$PBX_PATH/.env"
 if [ -d "$source_dir/secrets" ]; then

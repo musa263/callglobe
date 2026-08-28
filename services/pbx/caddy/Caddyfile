@@ -1,8 +1,18 @@
 {
+	admin off
 	email {$TLS_CONTACT_EMAIL}
 }
 
+(production_tls) {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+}
+
 {$PBX_WSS_DOMAIN} {
+	import production_tls
 	# Keep the proxy hop off loopback so Sofia can apply the profile's
 	# external RTP address to WebRTC SDP. UFW still blocks direct port 5066.
 	reverse_proxy {$PBX_CARRIER_BIND_IP}:5066
@@ -13,6 +23,7 @@
 }
 
 {$PBX_VERTO_DOMAIN} {
+	import production_tls
 	reverse_proxy 127.0.0.1:8081
 	log {
 		output file /data/access-verto.log
@@ -21,10 +32,10 @@
 }
 
 {$TURN_TLS_DOMAIN} {
-	tls {
-		issuer acme {
-			disable_tlsalpn_challenge
-		}
-	}
+	import production_tls
 	respond "Vocivo TURN endpoint" 200
+	log {
+		output file /data/access-turn-certificate.log
+		format json
+	}
 }

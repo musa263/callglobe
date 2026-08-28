@@ -82,6 +82,13 @@ services:
   caddy:
     image: caddy:2.11.4-alpine
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     env_file: .env
     ports:
       - "80:80"
@@ -92,13 +99,27 @@ services:
       - ./caddy:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     depends_on:
       freeswitch:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 8s
+      retries: 5
 
   edge-router:
     image: haproxy:3.2.22-alpine
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     env_file: .env
     command:
       - /bin/sh
@@ -116,6 +137,8 @@ services:
         ipv4_address: 172.30.0.3
     volumes:
       - ./haproxy/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     depends_on:
       - caddy
       - coturn
@@ -125,19 +148,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Rollback only. This service is not started by default.
-  asterisk:
-    profiles: ["legacy-asterisk"]
-    build: ./asterisk
-    restart: unless-stopped
-    network_mode: host
-    env_file: .env
-    volumes:
-      - ./asterisk/config/pjsip_extensions.conf:/etc/asterisk/pjsip_extensions.conf:ro
-      - ./asterisk/config/voicemail_users.conf:/etc/asterisk/voicemail_users.conf:ro
-      - asterisk-data:/var/lib/asterisk
-      - asterisk-logs:/var/log/asterisk
-
 volumes:
   freeswitch-db:
   freeswitch-certs:
@@ -145,8 +155,6 @@ volumes:
   freeswitch-logs:
   caddy-data:
   caddy-config:
-  asterisk-data:
-  asterisk-logs:
 
 networks:
   edge:

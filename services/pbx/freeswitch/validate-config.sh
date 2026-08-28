@@ -97,8 +97,14 @@ fi
 
 if sed -n '/^[[:space:]]*caddy:/,/^[[:space:]]*edge-router:/p' "$root/../docker-compose.yml" | grep -q 'network_mode: host' \
   || sed -n '/^[[:space:]]*caddy:/,/^[[:space:]]*edge-router:/p' "$root/../docker-compose.yml" | grep -Fq '"443:443"' \
-  || ! sed -n '/^[[:space:]]*edge-router:/,/^[[:space:]]*asterisk:/p' "$root/../docker-compose.yml" | grep -Fq '"443:443"'; then
+  || ! sed -n '/^[[:space:]]*edge-router:/,/^[[:space:]]*volumes:/p' "$root/../docker-compose.yml" | grep -Fq '"443:443"'; then
   echo "The TLS edge must own public port 443 and route WSS to isolated Caddy." >&2
+  exit 1
+fi
+
+if find "$root/.." -type f -path '*/asterisk/*' | grep -q . \
+  || grep -Rqi 'legacy-asterisk' "$root/../docker-compose.yml" "$root/../digitalocean" "$root/../README.md"; then
+  echo "Legacy Asterisk configuration must not remain in the FreeSWITCH deployment." >&2
   exit 1
 fi
 
@@ -114,6 +120,31 @@ if ! grep -Fq -- '--use-auth-secret' "$root/../docker-compose.yml" \
   || grep -Fq -- '--user=${TURN_USERNAME}:${TURN_PASSWORD}' "$root/../docker-compose.yml" \
   || ! grep -Fq 'turn-tls if { req_ssl_sni -i @@TURN_TLS_DOMAIN@@ }' "$root/../haproxy/haproxy.cfg.template"; then
   echo "TURN must use short-lived REST credentials and the TLS 443 fallback." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'admin off' "$root/../caddy/Caddyfile" \
+  || [ "$(grep -Fc 'import production_tls' "$root/../caddy/Caddyfile")" -ne 3 ] \
+  || ! grep -Fq 'disable_tlsalpn_challenge' "$root/../caddy/Caddyfile"; then
+  echo "Every public PBX hostname must use the hardened ACME TLS policy." >&2
+  exit 1
+fi
+
+production_env="$root/../.env.production.example"
+if [ "$(grep -Ec '^APNS_ENABLED=true$|^FCM_ENABLED=true$' "$production_env")" -ne 2 ] \
+  || ! grep -Fq 'TURN_REALM=turn.68.183.244.215.nip.io' "$production_env" \
+  || ! grep -Fq 'TURN_TLS_DOMAIN=turn.68.183.244.215.nip.io' "$production_env" \
+  || grep -Eq '^TURN_(USERNAME|PASSWORD)=' "$production_env"; then
+  echo "Production push and temporary TURN settings are inconsistent." >&2
+  exit 1
+fi
+
+deploy_script="$root/../../../deploy-production.sh"
+if [ ! -x "$deploy_script" ] \
+  || ! grep -Fq 'git pull --ff-only' "$deploy_script" \
+  || ! grep -Fq 'validate-production-env.sh' "$deploy_script" \
+  || [ ! -x "$root/../digitalocean/validate-production-env.sh" ]; then
+  echo "The production deployment preflight is missing or not executable." >&2
   exit 1
 fi
 

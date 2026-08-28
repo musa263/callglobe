@@ -48,7 +48,7 @@ function withVocivoAppDelegate(config) {
       "supportsVideo": true,
       "maximumCallGroups": 2,
       "maximumCallsPerCallGroup": 5,
-      "includesCallsInRecents": false,
+      "includesCallsInRecents": true,
       "ringtoneSound": ringtoneSound
     ])
 

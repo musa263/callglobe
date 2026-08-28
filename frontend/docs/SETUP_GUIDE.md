@@ -35,7 +35,7 @@ VOCIVO_PBX_ENGINE=freeswitch
 VOCIVO_SIP_DOMAIN=
 VOCIVO_SIP_WSS_URL=wss://sip-wss.example.com
 VOCIVO_STUN_URLS=stun:stun.cloudflare.com:3478
-VOCIVO_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp,turns:turn.example.com:443?transport=tcp
+VOCIVO_TURN_URLS=turn:turn.68.183.244.215.nip.io:3478?transport=udp,turn:turn.68.183.244.215.nip.io:3478?transport=tcp,turns:turn.68.183.244.215.nip.io:443?transport=tcp
 VOCIVO_TURN_SECRET=
 VOCIVO_TURN_TTL_SECONDS=600
 VITE_APP_URL=https://vocivo.vercel.app

@@ -393,8 +393,6 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     let reconnecting = false;
     let retryDelay = 1_000;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let iceRestartTimer: ReturnType<typeof setTimeout> | undefined;
-    let iceRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let backgroundedAt = 0;
     let previousNetworkRoute: string | undefined;
 
@@ -452,33 +450,21 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         scheduleReconnect(0);
       }
     };
-    const recoverActiveMedia = () => {
-      if (!voipClient.currentCalls.some((call) => [TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(call.currentState))) return;
-      if (iceRestartTimer) clearTimeout(iceRestartTimer);
-      if (iceRetryTimer) clearTimeout(iceRetryTimer);
-      iceRestartTimer = setTimeout(() => {
-        iceRestartTimer = undefined;
-        voipClient.restartIce().catch(() => {
-          // A network handoff can briefly race the SIP WebSocket reconnect. Retry
-          // once after registration recovery instead of dropping the media path.
-          voipClient.refreshRegistration().catch(() => undefined);
-          iceRetryTimer = setTimeout(() => {
-            iceRetryTimer = undefined;
-            voipClient.restartIce().catch(() => undefined);
-          }, 1_250);
-        });
-      }, 150);
-    };
     const networkSubscription = NetInfo.addEventListener((state) => {
       const details = state.details && typeof state.details === 'object' ? state.details as Record<string, unknown> : undefined;
       const route = state.isConnected
         ? `${state.type}:${String(details?.ipAddress || details?.carrier || '')}`
         : 'offline';
-      if (previousNetworkRoute && previousNetworkRoute !== 'offline' && route !== 'offline' && route !== previousNetworkRoute) {
-        recoverActiveMedia();
-      }
+      const migrated = Boolean(previousNetworkRoute && previousNetworkRoute !== 'offline' && route !== 'offline' && route !== previousNetworkRoute);
       previousNetworkRoute = route;
-      if (state.isConnected && state.isInternetReachable !== false) refreshOrReconnect();
+      const migration = voipClient.handleNetworkRoute(route);
+      if (migrated) {
+        migration
+          .then((restarted) => { if (!restarted) refreshOrReconnect(); })
+          .catch((error) => setError(error instanceof Error ? error.message : 'Call media could not recover after the network changed.'));
+      } else if (state.isConnected && state.isInternetReachable !== false) {
+        refreshOrReconnect();
+      }
     });
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') {
@@ -510,8 +496,6 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     return () => {
       canceled = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (iceRestartTimer) clearTimeout(iceRestartTimer);
-      if (iceRetryTimer) clearTimeout(iceRetryTimer);
       connectionSubscription.unsubscribe();
       networkSubscription();
       appStateSubscription.remove();
@@ -713,7 +697,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const rejectWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
-    await voipClient.getCall(waitingCall.id)?.hangup();
+    await voipClient.endCall(waitingCall.id, { reason: 'rejected' });
   }, [waitingCall?.id]);
 
   const swapCalls = useCallback(async () => {
@@ -810,9 +794,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       if (!callId) return;
       endingCallIdsRef.current.add(callId);
       const resumeAfterEnd = voipClient.currentCalls.find((call) => call.callId !== callId && call.currentState === TelnyxCallState.HELD);
+      const terminationReason = activeCallRef.current?.id === callId && activeCallRef.current.isIncoming && activeCallRef.current.phase === 'ringing'
+        ? 'rejected'
+        : 'local_ended';
       finalizeCall('ended', callId);
       setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
-      await voipClient.endCall(callId).catch(() => undefined);
+      await voipClient.endCall(callId, { reason: terminationReason }).catch(() => undefined);
       if (resumeAfterEnd) {
         await resumeAfterEnd.resume().catch(() => undefined);
         voipClient.setActiveCall(resumeAfterEnd.callId);

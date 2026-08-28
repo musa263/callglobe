@@ -10,6 +10,16 @@ import { Invitation, Inviter, Registerer, RegistererState, SessionState, UserAge
 import { api } from './api';
 import { canTransitionCallState, SerialTaskQueue, SingleFlightTermination } from './callLifecycle';
 import { ProxyAwareSipTransport, registerAndWait } from './sipTransport';
+import {
+  BackgroundWakeCoordinator,
+  CallTerminationLedger,
+  DisposableScope,
+  logTelephonyError,
+  NetworkMigrationCoordinator,
+  nativeCallEndAction,
+  settleTelephony,
+  type CallTerminationReason,
+} from './voipRuntime';
 
 registerGlobals();
 
@@ -59,6 +69,7 @@ class ValueStream<T> {
     listener(this.#value);
     return { unsubscribe: () => this.#listeners.delete(listener) };
   }
+  clear() { this.#listeners.clear(); }
 }
 
 export type CredentialConfig = {
@@ -96,7 +107,12 @@ function randomUuid() {
 }
 
 function requestHeader(session: Session, name: string) {
-  try { return (session as Invitation).request?.getHeader?.(name) || ''; } catch { return ''; }
+  try {
+    return (session as Invitation).request?.getHeader?.(name) || '';
+  } catch (error) {
+    logTelephonyError('read-sip-header', error, { header: name });
+    return '';
+  }
 }
 
 function visibleUser(session: Session) {
@@ -176,6 +192,8 @@ function incomingPushPayload(message: RemoteMessage | { data?: Record<string, st
   };
 }
 
+type IncomingPushPayload = NonNullable<ReturnType<typeof incomingPushPayload>>;
+
 function stringPushData(data: RemoteMessage['data']) {
   return Object.fromEntries(
     Object.entries(data || {}).flatMap(([key, value]) => typeof value === 'string' ? [[key, value]] : []),
@@ -194,7 +212,8 @@ async function readCredentialConfig() {
   try {
     const config = JSON.parse(value) as CredentialConfig;
     return config.username && config.password && config.sipDomain && config.websocketUrl ? config : undefined;
-  } catch {
+  } catch (error) {
+    logTelephonyError('read-persisted-sip-credentials', error);
     return undefined;
   }
 }
@@ -217,8 +236,13 @@ export class Call {
   #connectedAt?: number;
   #answerPromise?: Promise<void>;
   #termination = new SingleFlightTermination();
+  #terminationLedger = new CallTerminationLedger();
   #reinviteQueue = new SerialTaskQueue();
   #lastIceRestartAt = 0;
+  #lifecycle = new DisposableScope();
+  #waiters = new Set<(error: Error) => void>();
+  #disposed = false;
+  #nativeAlreadyEnded = false;
 
   constructor(client: VocivoVoipClient, session: Session, input: { incoming: boolean; callId?: string; destination?: string; callerName?: string; callerNumber?: string; headers?: Header[] }) {
     this.#client = client;
@@ -230,11 +254,13 @@ export class Call {
     this.callerNumber = input.callerNumber || visibleUser(session);
     this.inviteCustomHeaders = input.headers || inviteHeaders(session);
     this.callState$ = new ValueStream<TelnyxCallState>(input.incoming ? TelnyxCallState.RINGING : TelnyxCallState.CONNECTING);
-    session.stateChange.addListener((nextState) => this.#stateChanged(nextState));
+    const stateListener = (nextState: SessionState) => this.#stateChanged(nextState);
+    session.stateChange.addListener(stateListener);
+    this.#lifecycle.add(() => session.stateChange.removeListener(stateListener));
     if (!input.incoming) {
       this.#noAnswerTimer = setTimeout(() => {
         if (![SessionState.Initial, SessionState.Establishing].includes(this.session.state)) return;
-        this.hangup().catch(() => undefined);
+        void settleTelephony('outgoing-no-answer-timeout', this.hangup('unanswered'), { callId: this.callId });
       }, outgoingAnswerTimeoutMs);
     }
   }
@@ -244,6 +270,7 @@ export class Call {
   get currentIsHeld() { return this.isHeld$.value; }
   get currentDuration() { return this.duration$.value; }
   get terminationRequested() { return this.#termination.requested; }
+  get terminationReason() { return this.#terminationLedger.reason; }
 
   #transition(next: TelnyxCallState) {
     if (!canTransitionCallState(this.currentState, next, this.#termination.requested)) return false;
@@ -253,13 +280,16 @@ export class Call {
   }
 
   async answer() {
+    if (this.#disposed || this.#termination.requested || this.#terminationLedger.finished) throw new Error('The call has already ended.');
     if (!(this.session instanceof Invitation) || this.session.state !== SessionState.Initial) return;
     this.#answerPromise ||= this.session.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } })
       .finally(() => { this.#answerPromise = undefined; });
     await this.#answerPromise;
   }
 
-  async hangup() {
+  async hangup(reason: CallTerminationReason = 'local_ended', nativeAlreadyEnded = false) {
+    this.#terminationLedger.request(reason);
+    this.#nativeAlreadyEnded ||= nativeAlreadyEnded;
     return this.#termination.run(async () => {
       if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
       this.#noAnswerTimer = undefined;
@@ -269,7 +299,7 @@ export class Call {
       try {
         await terminateSession(this.session);
       } finally {
-        this.#client.completeCall(this.callId, CONSTANTS.END_CALL_REASONS.REMOTE_ENDED);
+        this.#client.completeCall(this.callId, this.#terminationLedger.finish(reason), this.#nativeAlreadyEnded);
       }
     });
   }
@@ -341,20 +371,43 @@ export class Call {
   }
 
   async waitUntilConnected(timeoutMs = 10_000) {
+    if (this.#disposed) throw new Error('The call has already ended.');
     if (this.session.state === SessionState.Established) return;
     await new Promise<void>((resolve, reject) => {
+      let settled = false;
       const listener = (state: SessionState) => {
         if (state === SessionState.Established) finish();
         if (state === SessionState.Terminated) finish(new Error('The call ended before it connected.'));
       };
       const timer = setTimeout(() => finish(new Error('The call did not connect in time.')), timeoutMs);
       const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         this.session.stateChange.removeListener(listener);
+        this.#waiters.delete(cancel);
         error ? reject(error) : resolve();
       };
+      const cancel = (error: Error) => finish(error);
+      this.#waiters.add(cancel);
       this.session.stateChange.addListener(listener);
     });
+  }
+
+  dispose() {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
+    if (this.#durationTimer) clearInterval(this.#durationTimer);
+    this.#noAnswerTimer = undefined;
+    this.#durationTimer = undefined;
+    this.#waiters.forEach((cancel) => cancel(new Error('The call was disposed before the operation completed.')));
+    this.#waiters.clear();
+    this.#lifecycle.dispose();
+    this.callState$.clear();
+    this.isMuted$.clear();
+    this.isHeld$.clear();
+    this.duration$.clear();
   }
 
   #stateChanged(state: SessionState) {
@@ -385,9 +438,10 @@ export class Call {
       this.#durationTimer = undefined;
       InCallManager.stopRingback();
       InCallManager.stopRingtone();
-      this.#termination.finish();
       this.#transition(TelnyxCallState.ENDED);
-      this.#client.completeCall(this.callId, CONSTANTS.END_CALL_REASONS.REMOTE_ENDED);
+      const reason = this.#terminationLedger.finish('remote_ended');
+      this.#termination.finish();
+      this.#client.completeCall(this.callId, reason, this.#nativeAlreadyEnded);
     }
   }
 }
@@ -404,12 +458,16 @@ export class VocivoVoipClient {
   #callKeepReady: Promise<void>;
   #terminalCalls = new Map<string, number>();
   #nativeEndedCalls = new Set<string>();
-  #foregroundMessageUnsubscribe?: () => void;
+  #nativeEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #callActionQueue = new SerialTaskQueue();
+  #platformListeners?: DisposableScope;
+  #sipListeners?: DisposableScope;
+  #backgroundWake: BackgroundWakeCoordinator<IncomingPushPayload>;
+  #networkMigration: NetworkMigrationCoordinator;
 
   constructor() {
     this.#callKeepReady = RNCallKeep.setup({
-      ios: { appName: 'Vocivo', supportsVideo: true, maximumCallGroups: '2', maximumCallsPerCallGroup: '5', ringtoneSound: 'vocivo_classic.wav', includesCallsInRecents: false },
+      ios: { appName: 'Vocivo', supportsVideo: true, maximumCallGroups: '2', maximumCallsPerCallGroup: '5', ringtoneSound: 'vocivo_classic.wav', includesCallsInRecents: true },
       android: {
         alertTitle: 'Phone account permission',
         alertDescription: 'Vocivo needs calling permission to show incoming business calls.',
@@ -419,62 +477,135 @@ export class VocivoVoipClient {
         foregroundService: androidForegroundService,
       },
     }).then(() => undefined);
-    RNCallKeep.addEventListener('answerCall', ({ callUUID }) => this.nativeAction(callUUID, 'answer'));
-    RNCallKeep.addEventListener('endCall', ({ callUUID }) => this.nativeAction(callUUID, 'end'));
-    RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ callUUID }) => this.getCall(callUUID)?.toggleMute().catch(() => undefined));
-    RNCallKeep.addEventListener('didToggleHoldCallAction', ({ callUUID, hold }) => {
-      const call = this.getCall(callUUID);
-      if (call) (hold ? call.hold() : call.resume()).catch(() => undefined);
+    this.#backgroundWake = new BackgroundWakeCoordinator<IncomingPushPayload>({
+      display: async (payload) => {
+        rememberPush(payload);
+        if (Platform.OS !== 'android' || this.#calls.has(payload.callUUID)) return;
+        await this.#callKeepReady;
+        await RNCallKeep.displayIncomingCall(
+          payload.callUUID,
+          payload.callerNumber,
+          payload.callerName,
+          'generic',
+          payload.hasVideo,
+          payload,
+        );
+      },
+      complete: (payload) => {
+        if (Platform.OS === 'ios') RNVoipPushNotification.onVoipNotificationCompleted(payload.callUUID);
+      },
+      wake: async () => {
+        if (this.currentConnectionState === TelnyxConnectionState.CONNECTED) return;
+        const config = this.#config || await readCredentialConfig();
+        if (config) await this.login(config);
+      },
     });
-    RNCallKeep.addEventListener('didPerformDTMFAction', ({ callUUID, digits }) => this.getCall(callUUID)?.dtmf(digits).catch(() => undefined));
-    RNCallKeep.addEventListener('didActivateAudioSession', () => {
-      RTCAudioSession.audioSessionDidActivate();
-      InCallManager.start({ media: 'audio' });
-    });
-    RNCallKeep.addEventListener('didDeactivateAudioSession', () => {
-      RTCAudioSession.audioSessionDidDeactivate();
-      if (!this.currentCalls.some((call) => call.currentState === TelnyxCallState.ACTIVE)) InCallManager.stop();
-    });
-    if (Platform.OS === 'ios') {
-      RNVoipPushNotification.addEventListener('register', (token) => AsyncStorage.setItem(pushTokenKey, token).catch(() => undefined));
-      RNVoipPushNotification.addEventListener('notification', (payload) => {
-        const push = rememberPush(payload);
-        const uuid = String(push.callUUID || '');
-        if (uuid) RNVoipPushNotification.onVoipNotificationCompleted(uuid);
-      });
-      RNVoipPushNotification.addEventListener('didLoadWithEvents', (events) => {
-        events.forEach((event) => {
-          if (event.name === RNVoipPushNotification.RNVoipPushRemoteNotificationsRegisteredEvent) AsyncStorage.setItem(pushTokenKey, String(event.data)).catch(() => undefined);
-          if (event.name === RNVoipPushNotification.RNVoipPushRemoteNotificationReceivedEvent && event.data && typeof event.data === 'object') rememberPush(event.data);
-        });
-      });
-      RNVoipPushNotification.registerVoipToken();
-    }
-    if (Platform.OS === 'android') {
-      try {
-        const { getMessaging, onMessage } = androidMessaging();
-        this.#foregroundMessageUnsubscribe = onMessage(getMessaging(), handleAndroidRemoteMessage);
-      } catch (error) {
-        console.error('[VocivoVoice] Android Firebase listener could not start.', error);
-      }
-    }
-    this.#callKeepReady
-      .then(async () => {
-        if (Platform.OS === 'android') RNCallKeep.setForegroundServiceSettings(androidForegroundService);
-        const events = await RNCallKeep.getInitialEvents();
-        events.forEach((event) => {
-          if (event.name === 'RNCallKeepPerformAnswerCallAction') this.nativeAction(event.data.callUUID, 'answer');
-          if (event.name === 'RNCallKeepPerformEndCallAction') this.nativeAction(event.data.callUUID, 'end');
-        });
-        RNCallKeep.clearInitialEvents();
-      })
-      .catch(() => undefined);
+    this.#networkMigration = new NetworkMigrationCoordinator(
+      () => this.restartIce(),
+      async () => { await this.refreshRegistration(); },
+    );
+    this.#ensurePlatformListeners();
   }
 
   get currentConnectionState() { return this.connectionState$.value; }
   get currentCalls() { return [...this.#calls.values()]; }
   get currentActiveCall() { return this.activeCall$.value; }
   get sipDomain() { return this.#config?.sipDomain || ''; }
+
+  #ensurePlatformListeners() {
+    if (this.#platformListeners && !this.#platformListeners.disposed) return;
+    const scope = new DisposableScope();
+    this.#platformListeners = scope;
+    const callKeepListener = <T extends Parameters<typeof RNCallKeep.addEventListener>[0]>(
+      event: T,
+      listener: Parameters<typeof RNCallKeep.addEventListener<T>>[1],
+    ) => {
+      const subscription = RNCallKeep.addEventListener(event, listener);
+      scope.add(() => subscription.remove());
+    };
+
+    callKeepListener('answerCall', ({ callUUID }) => this.nativeAction(callUUID, 'answer'));
+    callKeepListener('endCall', ({ callUUID }) => this.nativeAction(callUUID, 'end'));
+    callKeepListener('didPerformSetMutedCallAction', ({ callUUID }) => {
+      const call = this.getCall(callUUID);
+      if (call) void settleTelephony('callkeep-toggle-mute', call.toggleMute(), { callId: callUUID });
+    });
+    callKeepListener('didToggleHoldCallAction', ({ callUUID, hold }) => {
+      const call = this.getCall(callUUID);
+      if (call) void settleTelephony(hold ? 'callkeep-hold' : 'callkeep-resume', hold ? call.hold() : call.resume(), { callId: callUUID });
+    });
+    callKeepListener('didPerformDTMFAction', ({ callUUID, digits }) => {
+      const call = this.getCall(callUUID);
+      if (call) void settleTelephony('callkeep-dtmf', call.dtmf(digits), { callId: callUUID, digits });
+    });
+    callKeepListener('didActivateAudioSession', () => {
+      try {
+        RTCAudioSession.audioSessionDidActivate();
+        InCallManager.start({ media: 'audio' });
+      } catch (error) {
+        logTelephonyError('activate-native-audio-session', error);
+      }
+    });
+    callKeepListener('didDeactivateAudioSession', () => {
+      try {
+        RTCAudioSession.audioSessionDidDeactivate();
+        if (!this.currentCalls.some((call) => call.currentState === TelnyxCallState.ACTIVE)) InCallManager.stop();
+      } catch (error) {
+        logTelephonyError('deactivate-native-audio-session', error);
+      }
+    });
+
+    if (Platform.OS === 'ios') {
+      RNVoipPushNotification.addEventListener('register', (token) => {
+        void settleTelephony('persist-ios-push-token', AsyncStorage.setItem(pushTokenKey, token));
+      });
+      scope.add(() => RNVoipPushNotification.removeEventListener('register'));
+      RNVoipPushNotification.addEventListener('notification', (payload) => {
+        const data = Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, String(value)]));
+        void settleTelephony('ios-pushkit-background-wake', this.wakeForIncomingPush(data));
+      });
+      scope.add(() => RNVoipPushNotification.removeEventListener('notification'));
+      RNVoipPushNotification.addEventListener('didLoadWithEvents', (events) => {
+        events.forEach((event) => {
+          if (event.name === RNVoipPushNotification.RNVoipPushRemoteNotificationsRegisteredEvent) {
+            void settleTelephony('persist-cold-start-ios-push-token', AsyncStorage.setItem(pushTokenKey, String(event.data)));
+          }
+          if (event.name === RNVoipPushNotification.RNVoipPushRemoteNotificationReceivedEvent && event.data && typeof event.data === 'object') {
+            const data = Object.fromEntries(Object.entries(event.data).map(([key, value]) => [key, String(value)]));
+            void settleTelephony('ios-cold-start-push-wake', this.wakeForIncomingPush(data));
+          }
+        });
+      });
+      scope.add(() => RNVoipPushNotification.removeEventListener('didLoadWithEvents'));
+      RNVoipPushNotification.registerVoipToken();
+    }
+
+    if (Platform.OS === 'android') {
+      try {
+        const { getMessaging, onMessage } = androidMessaging();
+        scope.add(onMessage(getMessaging(), handleAndroidRemoteMessage));
+      } catch (error) {
+        logTelephonyError('register-android-foreground-push-listener', error);
+      }
+    }
+
+    void this.#callKeepReady.then(async () => {
+      if (this.#platformListeners !== scope || scope.disposed) return;
+      if (Platform.OS === 'android') RNCallKeep.setForegroundServiceSettings(androidForegroundService);
+      const events = await RNCallKeep.getInitialEvents();
+      if (this.#platformListeners !== scope || scope.disposed) return;
+      events.forEach((event) => {
+        if (event.name === 'RNCallKeepPerformAnswerCallAction') this.nativeAction(event.data.callUUID, 'answer');
+        if (event.name === 'RNCallKeepPerformEndCallAction') this.nativeAction(event.data.callUUID, 'end');
+      });
+      RNCallKeep.clearInitialEvents();
+    }).catch((error) => logTelephonyError('load-callkeep-initial-events', error));
+  }
+
+  #disposePlatformListeners() {
+    this.#platformListeners?.dispose();
+    this.#platformListeners = undefined;
+  }
 
   #rememberTerminalCall(callId: string) {
     const now = Date.now();
@@ -489,33 +620,44 @@ export class VocivoVoipClient {
     return false;
   }
 
-  #reportNativeEnd(callId: string, reason: number) {
+  #finishNativeCall(callId: string, reason: CallTerminationReason, nativeAlreadyEnded = false) {
     if (this.#nativeEndedCalls.has(callId)) return;
     this.#nativeEndedCalls.add(callId);
-    RNCallKeep.reportEndCallWithUUID(callId, reason);
-    setTimeout(() => this.#nativeEndedCalls.delete(callId), 5 * 60_000);
+    const action = nativeCallEndAction(reason, nativeAlreadyEnded);
+    if (action === 'end') RNCallKeep.endCall(callId);
+    if (action === 'reject') RNCallKeep.rejectCall(callId);
+    if (action === 'report_remote') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.REMOTE_ENDED);
+    if (action === 'report_unanswered') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.UNANSWERED);
+    if (action === 'report_failed') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.FAILED);
+    if (action === 'report_missed') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.MISSED);
+    const timer = setTimeout(() => {
+      this.#nativeEndedCalls.delete(callId);
+      this.#nativeEndTimers.delete(callId);
+    }, 5 * 60_000);
+    this.#nativeEndTimers.set(callId, timer);
   }
 
-  completeCall(callId: string, reason: number) {
+  completeCall(callId: string, reason: CallTerminationReason, nativeAlreadyEnded = false) {
     if (this.#isTerminalCall(callId)) return;
     this.#rememberTerminalCall(callId);
     const pending = pendingNativeActions.get(callId);
     if (pending) clearTimeout(pending.timer);
     pendingNativeActions.delete(callId);
-    this.#reportNativeEnd(callId, reason);
+    this.#finishNativeCall(callId, reason, nativeAlreadyEnded);
     this.removeCall(callId);
   }
 
-  async endCall(callId: string, nativeAlreadyEnded = false) {
+  async endCall(callId: string, options: { nativeAlreadyEnded?: boolean; reason?: CallTerminationReason } = {}) {
     if (!callId || this.#isTerminalCall(callId)) return;
-    if (nativeAlreadyEnded) this.#nativeEndedCalls.add(callId);
+    const nativeAlreadyEnded = Boolean(options.nativeAlreadyEnded);
+    const reason = options.reason || 'local_ended';
     const call = this.getCall(callId);
     if (!call) {
       this.#rememberTerminalCall(callId);
-      if (!nativeAlreadyEnded) this.#reportNativeEnd(callId, CONSTANTS.END_CALL_REASONS.REMOTE_ENDED);
+      this.#finishNativeCall(callId, reason, nativeAlreadyEnded);
       return;
     }
-    await call.hangup();
+    await call.hangup(reason, nativeAlreadyEnded);
   }
 
   async restartIce() {
@@ -525,31 +667,19 @@ export class VocivoVoipClient {
     return results.some((result) => result.status === 'fulfilled' && result.value);
   }
 
+  handleNetworkRoute(route: string) {
+    return this.#networkMigration.observe(route);
+  }
+
   async receiveRemotePush(data: Record<string, string | undefined>) {
-    if (Platform.OS !== 'android') return false;
     const payload = incomingPushPayload({ data });
     if (!payload || this.#isTerminalCall(payload.callUUID)) return false;
-    rememberPush(payload);
-    if (this.#calls.has(payload.callUUID)) return true;
-    await this.#callKeepReady;
-    await RNCallKeep.displayIncomingCall(
-      payload.callUUID,
-      payload.callerNumber,
-      payload.callerName,
-      'generic',
-      payload.hasVideo,
-      payload,
-    );
-    return true;
+    this.#ensurePlatformListeners();
+    return this.#backgroundWake.handle(payload);
   }
 
   async wakeForIncomingPush(data: Record<string, string | undefined>) {
-    if (!await this.receiveRemotePush(data)) return false;
-    if (this.currentConnectionState === TelnyxConnectionState.CONNECTED) return true;
-    const config = this.#config || await readCredentialConfig();
-    if (!config) return true;
-    await this.login(config);
-    return true;
+    return this.receiveRemotePush(data);
   }
 
   async refreshRegistration() {
@@ -573,6 +703,7 @@ export class VocivoVoipClient {
 
   async login(config: CredentialConfig) {
     if (!config.username || !config.password || !config.sipDomain || !config.websocketUrl) throw new Error('Vocivo returned incomplete SIP credentials.');
+    this.#ensurePlatformListeners();
     await persistCredentialConfig(config);
     const sameRegistration = Boolean(
       this.#userAgent
@@ -593,6 +724,7 @@ export class VocivoVoipClient {
   }
 
   async reconnect() {
+    this.#ensurePlatformListeners();
     if (this.currentCalls.length) return;
     const config = this.#config;
     if (!config) throw new Error('Calling service is not initialized.');
@@ -602,7 +734,7 @@ export class VocivoVoipClient {
   }
 
   private async performLogin(config: CredentialConfig) {
-    await this.logout();
+    await this.#teardownSipRegistration();
     this.#config = config;
     this.connectionState$.next(TelnyxConnectionState.CONNECTING);
     const uri = UserAgent.makeURI(`sip:${config.username}@${config.sipDomain}`);
@@ -622,6 +754,8 @@ export class VocivoVoipClient {
       delegate: { onInvite: (invitation) => this.receiveInvite(invitation) },
     });
     const registerer = new Registerer(userAgent, { expires: 300 });
+    const sipScope = new DisposableScope();
+    this.#sipListeners = sipScope;
     let transportConnectedOnce = false;
     let recoveryRegistration: Promise<void> | undefined;
     let reconnectWatchdog: ReturnType<typeof setTimeout> | undefined;
@@ -629,10 +763,13 @@ export class VocivoVoipClient {
       if (reconnectWatchdog) clearTimeout(reconnectWatchdog);
       reconnectWatchdog = undefined;
     };
-    registerer.stateChange.addListener((state) => {
+    const registrationStateListener = (state: RegistererState) => {
+      if (this.#registerer !== registerer) return;
       this.connectionState$.next(state === RegistererState.Registered ? TelnyxConnectionState.CONNECTED : TelnyxConnectionState.CONNECTING);
-    });
-    userAgent.transport.stateChange.addListener((state) => {
+    };
+    registerer.stateChange.addListener(registrationStateListener);
+    sipScope.add(() => registerer.stateChange.removeListener(registrationStateListener));
+    const transportStateListener = (state: unknown) => {
       if (this.#userAgent !== userAgent) return;
       if (String(state) === 'Disconnected') {
         this.connectionState$.next(TelnyxConnectionState.CONNECTING);
@@ -655,11 +792,16 @@ export class VocivoVoipClient {
         .then(() => {
           if (this.#userAgent === userAgent) this.connectionState$.next(TelnyxConnectionState.CONNECTED);
         })
-        .catch(() => {
+        .catch((error) => {
+          logTelephonyError('recover-sip-registration', error, { username: config.username });
           if (this.#userAgent === userAgent) this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
         })
         .finally(() => { recoveryRegistration = undefined; });
-    });
+    };
+    userAgent.transport.stateChange.addListener(transportStateListener);
+    sipScope.add(() => userAgent.transport.stateChange.removeListener(transportStateListener));
+    sipScope.add(clearReconnectWatchdog);
+    sipScope.add(() => { userAgent.delegate = undefined; });
     this.#userAgent = userAgent;
     this.#registerer = registerer;
     try {
@@ -667,30 +809,52 @@ export class VocivoVoipClient {
       await registerAndWait(registerer);
       if (Platform.OS === 'android') RNCallKeep.setAvailable(true);
     } catch (error) {
-      clearReconnectWatchdog();
-      await registerer.unregister().catch(() => undefined);
-      await userAgent.stop().catch(() => undefined);
+      sipScope.dispose();
+      await settleTelephony('rollback-failed-sip-registration', registerer.unregister(), { username: config.username });
+      await settleTelephony('stop-failed-sip-user-agent', userAgent.stop(), { username: config.username });
       if (this.#userAgent === userAgent) this.#userAgent = undefined;
       if (this.#registerer === registerer) this.#registerer = undefined;
+      if (this.#sipListeners === sipScope) this.#sipListeners = undefined;
       this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
       throw error;
     }
   }
 
+  async #teardownSipRegistration() {
+    const registerer = this.#registerer;
+    const userAgent = this.#userAgent;
+    this.#registerer = undefined;
+    this.#userAgent = undefined;
+    this.#sipListeners?.dispose();
+    this.#sipListeners = undefined;
+    if (registerer) await settleTelephony('unregister-sip-extension', registerer.unregister(), { username: this.#config?.username });
+    if (userAgent) await settleTelephony('stop-sip-user-agent', userAgent.stop(), { username: this.#config?.username });
+  }
+
   async logout() {
     pendingNativeActions.forEach(({ timer }) => clearTimeout(timer));
     pendingNativeActions.clear();
-    await Promise.all(this.currentCalls.map((call) => call.hangup().catch(() => undefined)));
-    await this.#registerer?.unregister().catch(() => undefined);
-    await this.#userAgent?.stop().catch(() => undefined);
-    this.#registerer = undefined;
-    this.#userAgent = undefined;
+    await Promise.all(this.currentCalls.map((call) => settleTelephony('hangup-call-during-logout', call.hangup('local_ended'), { callId: call.callId })));
+    await this.#teardownSipRegistration();
+    this.currentCalls.forEach((call) => call.dispose());
     this.#calls.clear();
     this.calls$.next([]);
     this.activeCall$.next(null);
     this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
     if (Platform.OS === 'android') RNCallKeep.setAvailable(false);
     InCallManager.stop();
+    this.#disposePlatformListeners();
+  }
+
+  async dispose() {
+    await this.logout();
+    this.#nativeEndTimers.forEach((timer) => clearTimeout(timer));
+    this.#nativeEndTimers.clear();
+    this.#nativeEndedCalls.clear();
+    this.#terminalCalls.clear();
+    this.connectionState$.clear();
+    this.calls$.clear();
+    this.activeCall$.clear();
   }
 
   async newCall(destination: string, localCallerName: string, remoteDisplayName: string, _callerNumber?: string, headers: Header[] = []) {
@@ -712,7 +876,7 @@ export class VocivoVoipClient {
       await inviter.invite({ requestDelegate: { onProgress: () => call.markRinging() } });
       return call;
     } catch (error) {
-      await call.hangup().catch(() => undefined);
+      await settleTelephony('cleanup-failed-outgoing-call', call.hangup('failed'), { callId: call.callId, destination: user });
       throw error;
     }
   }
@@ -772,9 +936,9 @@ export class VocivoVoipClient {
         this.emitCalls();
         return { room, host, participants: joined, partial: joined.length !== 2 };
       } catch (error) {
-        if (host) await host.hangup().catch(() => undefined);
+        if (host) await settleTelephony('cleanup-failed-conference-host', host.hangup('failed'), { callId: host.callId, room });
         this.setActiveCall(current.callId);
-        await current.resume().catch(() => undefined);
+        await settleTelephony('restore-call-after-conference-failure', current.resume(), { callId: current.callId, room });
         this.emitCalls();
         throw error;
       }
@@ -787,7 +951,9 @@ export class VocivoVoipClient {
   emitCalls() { this.calls$.next(this.currentCalls); }
 
   removeCall(id: string) {
+    const call = this.#calls.get(id);
     this.#calls.delete(id);
+    call?.dispose();
     this.emitCalls();
     if (this.currentActiveCall?.callId === id) {
       const remaining = this.currentCalls.find((call) => ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) || null;
@@ -813,14 +979,20 @@ export class VocivoVoipClient {
     const push = takePush(headerCallUuid);
     const callId = validCallUuid(push?.callUUID) || headerCallUuid || randomUuid();
     if (this.#isTerminalCall(callId)) {
-      terminateSession(invitation).catch(() => undefined);
+      void settleTelephony('reject-terminal-sip-invite', terminateSession(invitation), { callId });
       return;
     }
     const callerName = typeof push?.callerName === 'string' ? push.callerName : invitation.remoteIdentity.displayName || visibleUser(invitation);
     const callerNumber = typeof push?.callerNumber === 'string' ? push.callerNumber : visibleUser(invitation);
     const call = new Call(this, invitation, { incoming: true, callId, destination: this.#config?.extension || this.#config?.username, callerName, callerNumber });
     this.addCall(call, !this.currentActiveCall);
-    if (!push) RNCallKeep.displayIncomingCall(call.callId, callerNumber, callerName, 'generic', false, { organizationName: 'Vocivo' });
+    if (!push) {
+      void settleTelephony(
+        'display-unannounced-incoming-call',
+        Promise.resolve(RNCallKeep.displayIncomingCall(call.callId, callerNumber, callerName, 'generic', false, { organizationName: 'Vocivo' })),
+        { callId: call.callId },
+      );
+    }
   }
 
   private nativeAction(callId: string, action: 'answer' | 'end') {
@@ -833,7 +1005,7 @@ export class VocivoVoipClient {
       const timer = setTimeout(() => {
         pendingNativeActions.delete(callId);
         this.#rememberTerminalCall(callId);
-        RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.FAILED);
+        this.#finishNativeCall(callId, action === 'end' ? 'rejected' : 'failed', action === 'end');
       }, 30_000);
       pendingNativeActions.set(callId, { action, timer });
       return;
@@ -844,14 +1016,17 @@ export class VocivoVoipClient {
       call.answer()
         .then(() => console.warn('[VocivoVoice] Native answer completed.'))
         .catch((error) => {
-          console.error('[VocivoVoice] Native answer failed.', error);
-          RNCallKeep.endCall(callId);
+          logTelephonyError('native-answer-call', error, { callId });
+          void settleTelephony('cleanup-failed-native-answer', call.hangup('failed'), { callId });
         });
       return;
     }
-    this.endCall(callId, true)
+    const reason: CallTerminationReason = call.isIncoming && ![TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(call.currentState)
+      ? 'rejected'
+      : 'local_ended';
+    this.endCall(callId, { nativeAlreadyEnded: true, reason })
       .then(() => console.warn('[VocivoVoice] Native end completed.'))
-      .catch((error) => console.error('[VocivoVoice] Native end failed.', error));
+      .catch((error) => logTelephonyError('native-end-call', error, { callId, reason }));
   }
 }
 
@@ -874,7 +1049,7 @@ export const VoicePnBridge = {
   },
   setIncomingCallRingtone: async (ringtone: string) => {
     RNCallKeep.setSettings({
-      ios: { appName: 'Vocivo', supportsVideo: true, maximumCallGroups: '2', maximumCallsPerCallGroup: '5', ringtoneSound: `${ringtone}.wav`, includesCallsInRecents: false },
+      ios: { appName: 'Vocivo', supportsVideo: true, maximumCallGroups: '2', maximumCallsPerCallGroup: '5', ringtoneSound: `${ringtone}.wav`, includesCallsInRecents: true },
       android: {
         alertTitle: 'Phone account permission',
         alertDescription: 'Vocivo needs calling permission.',
@@ -920,8 +1095,8 @@ export async function pushDeviceId() {
 
 export async function signOutVoiceDevice() {
   voipClient.disablePushNotifications();
-  await SecureStore.deleteItemAsync(voiceCredentialKey).catch(() => undefined);
+  await settleTelephony('delete-persisted-sip-credentials', SecureStore.deleteItemAsync(voiceCredentialKey));
   const id = await pushDeviceId();
-  await api.delete(`/api/voice/devices?deviceId=${encodeURIComponent(id)}`).catch(() => undefined);
-  await voipClient.logout().catch(() => undefined);
+  await settleTelephony('delete-push-device-registration', api.delete(`/api/voice/devices?deviceId=${encodeURIComponent(id)}`), { deviceId: id });
+  await settleTelephony('logout-voice-device', voipClient.logout());
 }
