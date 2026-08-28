@@ -118,6 +118,15 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     callSubscriptions.current = [];
   }, []);
 
+  const clearActiveCallUi = useCallback(() => {
+    clearCallSubscriptions();
+    callRef.current = null;
+    activeCallRef.current = null;
+    durationRef.current = 0;
+    setActiveCall(null);
+    setDuration(0);
+  }, [clearCallSubscriptions]);
+
   useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
@@ -174,6 +183,27 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       started_at: new Date(snapshot.startedAt).toISOString(),
     }).catch(() => undefined);
   }, [addHistory, describeCall]);
+
+  const emergencyTransportCleanup = useCallback((failure: { code?: number; reason: string }) => {
+    const callId = activeCallRef.current?.id || callRef.current?.callId;
+    if (callId) finalizeCall('failed', callId);
+    startAttemptRef.current += 1;
+    startingCallRef.current = false;
+    routePollGenerationRef.current += 1;
+    conferenceCallIdsRef.current = [];
+    endingCallIdsRef.current.clear();
+    callRouteIdsRef.current.clear();
+    callMetaRef.current.clear();
+    stopRingback();
+    clearActiveCallUi();
+    setWaitingCall(null);
+    setHeldCall(null);
+    setConference(null);
+    setConnection(TelnyxConnectionState.DISCONNECTED);
+    setError(failure.code === 1006
+      ? 'The call ended because the network connection was lost.'
+      : failure.reason || 'The call ended because the calling connection failed.');
+  }, [clearActiveCallUi, finalizeCall, stopRingback]);
 
   const attachCall = useCallback((call: Call | null) => {
     clearCallSubscriptions();
@@ -268,14 +298,18 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }
     });
     const callSubscription = voipClient.activeCall$.subscribe(attachCall);
+    const transportFailureSubscription = voipClient.transportFailure$.subscribe((failure) => {
+      if (failure) emergencyTransportCleanup(failure);
+    });
     if (voipClient.currentActiveCall) attachCall(voipClient.currentActiveCall);
     return () => {
       connectionSubscription.unsubscribe();
       callsSubscription.unsubscribe();
       callSubscription.unsubscribe();
+      transportFailureSubscription.unsubscribe();
       clearCallSubscriptions();
     };
-  }, [attachCall, clearCallSubscriptions, describeCall]);
+  }, [attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup]);
 
   useEffect(() => {
     if (loading) return;
@@ -785,9 +819,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         setConference(null);
         setHeldCall(null);
         finalizeCall('ended', activeCall?.id);
-        setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
+        clearActiveCallUi();
         await Promise.all(mergedIds.map((id) => voipClient.endCall(id).catch(() => undefined)));
-        setTimeout(() => setActiveCall(null), 200);
         return;
       }
       const callId = activeCall?.id || callRef.current?.callId;
@@ -798,7 +831,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         ? 'rejected'
         : 'local_ended';
       finalizeCall('ended', callId);
-      setActiveCall((current) => current ? { ...current, phase: 'ended' } : current);
+      clearActiveCallUi();
       await voipClient.endCall(callId, { reason: terminationReason }).catch(() => undefined);
       if (resumeAfterEnd) {
         await resumeAfterEnd.resume().catch(() => undefined);
@@ -806,7 +839,6 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         attachCall(resumeAfterEnd);
         return;
       }
-      setTimeout(() => setActiveCall(null), 200);
     })();
     endCallOperationRef.current = operation;
     try {
@@ -814,7 +846,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     } finally {
       if (endCallOperationRef.current === operation) endCallOperationRef.current = null;
     }
-  }, [activeCall?.id, attachCall, finalizeCall, stopRingback]);
+  }, [activeCall?.id, attachCall, clearActiveCallUi, finalizeCall, stopRingback]);
 
   const answerCall = useCallback(async () => {
     const call = callRef.current;

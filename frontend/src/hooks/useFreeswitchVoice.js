@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Invitation, Inviter, Registerer, RegistererState, SessionState, UserAgent, Web } from 'sip.js';
 import { api } from '../lib/api';
-import { ProxyAwareSipTransport, registerAndWait } from '../lib/sipTransport';
+import { installTransportSafety, ProxyAwareSipTransport, registerAndWait } from '../lib/sipTransport';
 
 const mediaOptions = { constraints: { audio: true, video: false } };
 const outgoingAnswerTimeoutMs = 35_000;
@@ -74,16 +74,21 @@ function waitForEstablished(session, timeoutMs = 10_000) {
 
 function attachRemoteAudio(leg) {
   const stream = leg.session?.sessionDescriptionHandler?.remoteMediaStream;
-  if (!stream || leg.audio) return;
-  const audio = document.createElement('audio');
-  audio.autoplay = true;
-  audio.playsInline = true;
-  audio.dataset.vocivoCall = leg.id;
-  audio.style.display = 'none';
-  audio.srcObject = stream;
-  document.body.appendChild(audio);
-  leg.audio = audio;
-  audio.play().catch(() => undefined);
+  if (!stream) return;
+  stream.getAudioTracks?.().forEach((track) => { track.enabled = true; });
+  if (!leg.audio) {
+    const audio = document.createElement('audio');
+    audio.autoplay = true;
+    audio.playsInline = true;
+    audio.dataset.vocivoCall = leg.id;
+    audio.style.display = 'none';
+    document.body.appendChild(audio);
+    leg.audio = audio;
+  }
+  leg.audio.muted = false;
+  leg.audio.volume = 1;
+  if (leg.audio.srcObject !== stream) leg.audio.srcObject = stream;
+  leg.audio.play().catch(() => undefined);
 }
 
 function removeRemoteAudio(leg) {
@@ -92,6 +97,87 @@ function removeRemoteAudio(leg) {
   leg.audio.srcObject = null;
   leg.audio.remove();
   leg.audio = null;
+}
+
+function clearLegRuntime(leg) {
+  if (!leg) return;
+  if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
+  if (leg.mediaRecoveryTimer) clearTimeout(leg.mediaRecoveryTimer);
+  if (leg.remoteTrackTimer) clearTimeout(leg.remoteTrackTimer);
+  leg.noAnswerTimer = null;
+  leg.mediaRecoveryTimer = null;
+  leg.remoteTrackTimer = null;
+  if (leg.stateListener) leg.session.stateChange.removeListener(leg.stateListener);
+  leg.stateListener = null;
+  for (const dispose of leg.mediaDisposers || []) dispose();
+  leg.mediaDisposers = [];
+  removeRemoteAudio(leg);
+}
+
+async function restartLegIce(leg) {
+  if (!leg || leg.session.state !== SessionState.Established) return false;
+  if (leg.iceRestartPromise) return leg.iceRestartPromise;
+  const handler = leg.session.sessionDescriptionHandler;
+  leg.iceRestartPromise = (async () => {
+    handler?.peerConnection?.restartIce?.();
+    await leg.session.invite({
+      sessionDescriptionHandlerOptions: {
+        ...mediaOptions,
+        offerOptions: { iceRestart: true },
+        iceGatheringTimeout: 6_000,
+      },
+      sessionDescriptionHandlerModifiers: leg.held ? [Web.holdModifier] : [],
+    });
+    return true;
+  })().finally(() => { leg.iceRestartPromise = null; });
+  return leg.iceRestartPromise;
+}
+
+function bindLegMediaSafety(leg, recover) {
+  const peerConnection = leg.session?.sessionDescriptionHandler?.peerConnection;
+  if (!peerConnection?.addEventListener || leg.mediaDisposers?.length) return;
+  leg.mediaDisposers ||= [];
+  const connectionChanged = () => {
+    const state = peerConnection.connectionState || peerConnection.iceConnectionState || '';
+    if (state === 'connected' || state === 'completed') {
+      if (leg.mediaRecoveryTimer) clearTimeout(leg.mediaRecoveryTimer);
+      leg.mediaRecoveryTimer = null;
+      attachRemoteAudio(leg);
+      return;
+    }
+    if (state === 'failed') {
+      void recover();
+      return;
+    }
+    if (state === 'disconnected' && !leg.mediaRecoveryTimer) {
+      leg.mediaRecoveryTimer = setTimeout(() => {
+        leg.mediaRecoveryTimer = null;
+        void recover();
+      }, 2_000);
+    }
+  };
+  const trackAdded = () => {
+    attachRemoteAudio(leg);
+    const tracks = leg.session?.sessionDescriptionHandler?.remoteMediaStream?.getAudioTracks?.() || [];
+    if (tracks.length && leg.remoteTrackTimer) clearTimeout(leg.remoteTrackTimer);
+    if (tracks.length) leg.remoteTrackTimer = null;
+  };
+  peerConnection.addEventListener('connectionstatechange', connectionChanged);
+  peerConnection.addEventListener('iceconnectionstatechange', connectionChanged);
+  peerConnection.addEventListener('track', trackAdded);
+  leg.mediaDisposers.push(() => peerConnection.removeEventListener('connectionstatechange', connectionChanged));
+  leg.mediaDisposers.push(() => peerConnection.removeEventListener('iceconnectionstatechange', connectionChanged));
+  leg.mediaDisposers.push(() => peerConnection.removeEventListener('track', trackAdded));
+  connectionChanged();
+  trackAdded();
+  const remoteTracks = leg.session?.sessionDescriptionHandler?.remoteMediaStream?.getAudioTracks?.() || [];
+  if (!remoteTracks.length) {
+    leg.remoteTrackTimer = setTimeout(() => {
+      leg.remoteTrackTimer = null;
+      const currentTracks = leg.session?.sessionDescriptionHandler?.remoteMediaStream?.getAudioTracks?.() || [];
+      if (!currentTracks.length) void recover();
+    }, 4_000);
+  }
 }
 
 export function useFreeswitchVoice(token, enabled, identity = {}) {
@@ -108,6 +194,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
   const ringbackRef = useRef(null);
   const incomingNotificationRef = useRef(null);
   const actionBusyRef = useRef(false);
+  const mediaRecoveryRef = useRef(async () => undefined);
   const [ready, setReady] = useState(false);
   const [statusLabel, setStatusLabel] = useState('Connecting...');
   const [error, setError] = useState('');
@@ -192,8 +279,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     stopRingback();
     stopIncomingRingtone();
     for (const leg of legsRef.current.values()) {
-      if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
-      removeRemoteAudio(leg);
+      clearLegRuntime(leg);
       terminate(leg.session).catch(() => undefined);
     }
     legsRef.current.clear();
@@ -203,6 +289,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     userAgentRef.current = null;
     configRef.current = null;
     trackSessionRef.current = null;
+    mediaRecoveryRef.current = async () => undefined;
     setReady(false);
     resetCallState();
   }, [resetCallState, stopIncomingRingtone, stopRingback]);
@@ -210,13 +297,27 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
   useEffect(() => {
     if (!enabled || !token) return undefined;
     let cancelled = false;
+    const lifecycleDisposers = [];
     setStatusLabel('Connecting...');
     setError('');
 
+    const emergencyTransportCleanup = (failure) => {
+      if (cancelled) return;
+      stopRingback();
+      stopIncomingRingtone();
+      for (const leg of legsRef.current.values()) clearLegRuntime(leg);
+      legsRef.current.clear();
+      actionBusyRef.current = false;
+      resetCallState();
+      setReady(false);
+      setStatusLabel('Reconnecting...');
+      setError(failure?.code === 1006
+        ? 'The call ended because the network connection was lost.'
+        : failure?.reason || 'The call ended because the calling connection failed.');
+    };
+
     const finishLeg = (leg) => {
-      if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
-      leg.noAnswerTimer = null;
-      removeRemoteAudio(leg);
+      clearLegRuntime(leg);
       legsRef.current.delete(leg.id);
       if (incomingRef.current?.id === leg.id) {
         incomingRef.current = null;
@@ -263,14 +364,28 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     };
 
     const track = (session, direction, fallback) => {
-      const leg = { id: session.id, session, direction, identity: identityFor(session, fallback), held: false, audio: null, noAnswerTimer: null };
+      const leg = {
+        id: session.id,
+        session,
+        direction,
+        identity: identityFor(session, fallback),
+        held: false,
+        audio: null,
+        noAnswerTimer: null,
+        mediaRecoveryTimer: null,
+        remoteTrackTimer: null,
+        mediaDisposers: [],
+        iceRestartPromise: null,
+        stateListener: null,
+      };
       legsRef.current.set(leg.id, leg);
-      session.stateChange.addListener((nextState) => {
+      const stateListener = (nextState) => {
         if (cancelled) return;
         if (nextState === SessionState.Established) {
           if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
           leg.noAnswerTimer = null;
           attachRemoteAudio(leg);
+          bindLegMediaSafety(leg, () => mediaRecoveryRef.current('media'));
           if (activeRef.current?.id === leg.id) {
             stopRingback();
             stopIncomingRingtone();
@@ -284,7 +399,9 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         } else if (nextState === SessionState.Terminated) {
           finishLeg(leg);
         }
-      });
+      };
+      leg.stateListener = stateListener;
+      session.stateChange.addListener(stateListener);
       return leg;
     };
     trackSessionRef.current = track;
@@ -301,7 +418,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         authorizationUsername: configuration.sip_user,
         authorizationPassword: configuration.sip_password,
         transportConstructor: ProxyAwareSipTransport,
-        transportOptions: { server: configuration.websocket_url, connectionTimeout: 12, keepAliveInterval: 25, traceSip: false },
+        transportOptions: { server: configuration.websocket_url, connectionTimeout: 12, keepAliveInterval: 0, traceSip: false },
         reconnectionAttempts: 20,
         reconnectionDelay: 3,
         noAnswerTimeout: 60,
@@ -324,7 +441,36 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
       const registerer = new Registerer(userAgent, { expires: 300 });
       let transportConnectedOnce = false;
       let recoveryRegistration = null;
-      registerer.stateChange.addListener((nextState) => {
+      let signalingRecovery = null;
+      const restartEstablishedMedia = async () => {
+        const established = [...legsRef.current.values()].filter((leg) => leg.session.state === SessionState.Established);
+        if (!established.length) return false;
+        const results = await Promise.allSettled(established.map(restartLegIce));
+        return results.some((result) => result.status === 'fulfilled' && result.value);
+      };
+      const recoverSignaling = () => {
+        if (signalingRecovery) return signalingRecovery;
+        signalingRecovery = (async () => {
+          setReady(false);
+          setStatusLabel('Reconnecting...');
+          await restartEstablishedMedia().catch(() => false);
+          await userAgent.transport.disconnect().catch(() => undefined);
+          if (cancelled) return;
+          await userAgent.reconnect();
+          await registerAndWait(registerer);
+          await restartEstablishedMedia();
+          if (cancelled) return;
+          setReady(true);
+          setStatusLabel('Ready for calls');
+          setError('');
+        })().catch((recoveryError) => {
+          if (cancelled) return;
+          emergencyTransportCleanup({ reason: recoveryError.message || 'The calling connection could not be recovered.' });
+        }).finally(() => { signalingRecovery = null; });
+        return signalingRecovery;
+      };
+      mediaRecoveryRef.current = recoverSignaling;
+      const registrationStateListener = (nextState) => {
         if (cancelled) return;
         if (nextState === RegistererState.Registered) {
           setReady(true);
@@ -334,8 +480,10 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
           setReady(false);
           setStatusLabel('Reconnecting...');
         }
-      });
-      userAgent.transport.stateChange.addListener((nextState) => {
+      };
+      registerer.stateChange.addListener(registrationStateListener);
+      lifecycleDisposers.push(() => registerer.stateChange.removeListener(registrationStateListener));
+      const transportStateListener = (nextState) => {
         if (cancelled) return;
         if (String(nextState) === 'Disconnected') {
           setReady(false);
@@ -363,7 +511,13 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
             setError(registrationError.message || 'The Vocivo web phone could not reconnect.');
           })
           .finally(() => { recoveryRegistration = null; });
-      });
+      };
+      userAgent.transport.stateChange.addListener(transportStateListener);
+      lifecycleDisposers.push(() => userAgent.transport.stateChange.removeListener(transportStateListener));
+      lifecycleDisposers.push(installTransportSafety(userAgent.transport, {
+        onFatalDisconnect: emergencyTransportCleanup,
+        onHeartbeatFailure: recoverSignaling,
+      }));
       userAgentRef.current = userAgent;
       registererRef.current = registerer;
       await userAgent.start();
@@ -376,7 +530,11 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
       setStatusLabel('Unable to connect');
     });
 
-    return () => { cancelled = true; disconnect(); };
+    return () => {
+      cancelled = true;
+      lifecycleDisposers.splice(0).reverse().forEach((dispose) => dispose());
+      disconnect();
+    };
   }, [disconnect, enabled, identity.name, startIncomingRingtone, stopIncomingRingtone, stopRingback, token]);
 
   const placeCall = useCallback(async (destination, fallbackIdentity, extraHeaders = []) => {
@@ -453,14 +611,24 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     stopIncomingRingtone();
     incomingRef.current = null;
     setIncomingCall(null);
-    if (incoming) await terminate(incoming.session).catch(() => undefined);
+    if (incoming) {
+      clearLegRuntime(incoming);
+      legsRef.current.delete(incoming.id);
+      await terminate(incoming.session).catch(() => undefined);
+    }
   }, [stopIncomingRingtone]);
 
   const hangup = useCallback(() => {
     stopRingback();
     stopIncomingRingtone();
     const legs = conferenceRef.current?.legs || [activeRef.current, heldRef.current].filter(Boolean);
-    for (const leg of new Map(legs.map((item) => [item.id, item])).values()) terminate(leg.session).catch(() => undefined);
+    const active = activeRef.current;
+    if (active) setEndedCall({ id: active.id, number: active.identity.number || 'Unknown', direction: active.direction === 'inbound' ? 'incoming' : 'outgoing' });
+    for (const leg of new Map(legs.map((item) => [item.id, item])).values()) {
+      clearLegRuntime(leg);
+      legsRef.current.delete(leg.id);
+      terminate(leg.session).catch(() => undefined);
+    }
     resetCallState();
   }, [resetCallState, stopIncomingRingtone, stopRingback]);
 

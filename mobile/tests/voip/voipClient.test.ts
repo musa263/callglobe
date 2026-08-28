@@ -8,6 +8,7 @@ import {
   nativeCallEndAction,
   settleTelephony,
 } from '../../src/lib/voipRuntime';
+import { installTransportSafety } from '../../src/lib/sipTransport';
 
 class MockEmitter<T> {
   listeners = new Set<(value: T) => void>();
@@ -15,7 +16,23 @@ class MockEmitter<T> {
     this.listeners.add(listener);
     return { remove: () => this.listeners.delete(listener) };
   }
+  removeListener(listener: (value: T) => void) { this.listeners.delete(listener); }
   emit(value: T) { this.listeners.forEach((listener) => listener(value)); }
+}
+
+class MockSocket {
+  listeners = new Map<string, Set<(event: { code?: number; reason?: string; data?: unknown }) => void>>();
+  addEventListener(event: string, listener: (event: { code?: number; reason?: string; data?: unknown }) => void) {
+    const listeners = this.listeners.get(event) || new Set();
+    listeners.add(listener);
+    this.listeners.set(event, listeners);
+  }
+  removeEventListener(event: string, listener: (event: { code?: number; reason?: string; data?: unknown }) => void) {
+    this.listeners.get(event)?.delete(listener);
+  }
+  emit(event: string, value: { code?: number; reason?: string; data?: unknown }) {
+    this.listeners.get(event)?.forEach((listener) => listener(value));
+  }
 }
 
 const push = {
@@ -135,4 +152,51 @@ test('asynchronous telephony failures retain their stack in structured logs', as
   const record = entries[0]?.[1] as { operation?: string; error?: { stack?: string } };
   assert.equal(record.operation, 'mock-sip-operation');
   assert.match(record.error?.stack || '', /mock SIP failure/);
+});
+
+test('WebSocket 1006 triggers one fatal cleanup and removes every listener', async () => {
+  const socket = new MockSocket();
+  const stateChange = new MockEmitter<unknown>();
+  const failures: Array<{ code?: number }> = [];
+  const dispose = installTransportSafety({
+    ws: socket,
+    isConnected: () => true,
+    send: async () => undefined,
+    stateChange,
+  }, {
+    onFatalDisconnect: (failure) => { failures.push(failure); },
+    onHeartbeatFailure: async () => undefined,
+  }, { heartbeatIntervalMs: 1_000 });
+
+  socket.emit('error', {});
+  socket.emit('close', { code: 1006, reason: 'abnormal closure' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(failures.length, 1);
+  dispose();
+  assert.equal(stateChange.listeners.size, 0);
+  assert.equal([...socket.listeners.values()].reduce((total, listeners) => total + listeners.size, 0), 0);
+});
+
+test('two missed SIP heartbeat responses trigger one signaling recovery', async () => {
+  const socket = new MockSocket();
+  const stateChange = new MockEmitter<unknown>();
+  let sends = 0;
+  let recoveries = 0;
+  const dispose = installTransportSafety({
+    ws: socket,
+    isConnected: () => true,
+    send: async (message) => {
+      assert.equal(message, '\r\n\r\n');
+      sends += 1;
+    },
+    stateChange,
+  }, {
+    onFatalDisconnect: async () => undefined,
+    onHeartbeatFailure: async () => { recoveries += 1; },
+  }, { heartbeatIntervalMs: 10, maximumMisses: 2 });
+
+  await new Promise((resolve) => setTimeout(resolve, 38));
+  dispose();
+  assert.ok(sends >= 3);
+  assert.equal(recoveries, 1);
 });

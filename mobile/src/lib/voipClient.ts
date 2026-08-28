@@ -9,7 +9,7 @@ import { registerGlobals, RTCAudioSession } from 'react-native-webrtc';
 import { Invitation, Inviter, Registerer, RegistererState, SessionState, UserAgent, Web, type Session } from 'sip.js';
 import { api } from './api';
 import { canTransitionCallState, SerialTaskQueue, SingleFlightTermination } from './callLifecycle';
-import { ProxyAwareSipTransport, registerAndWait } from './sipTransport';
+import { installTransportSafety, ProxyAwareSipTransport, registerAndWait, type SipTransportFailure } from './sipTransport';
 import {
   BackgroundWakeCoordinator,
   CallTerminationLedger,
@@ -243,6 +243,9 @@ export class Call {
   #waiters = new Set<(error: Error) => void>();
   #disposed = false;
   #nativeAlreadyEnded = false;
+  #peerConnectionSafetyBound = false;
+  #iceDisconnectTimer?: ReturnType<typeof setTimeout>;
+  #remoteAudioTimer?: ReturnType<typeof setTimeout>;
 
   constructor(client: VocivoVoipClient, session: Session, input: { incoming: boolean; callId?: string; destination?: string; callerName?: string; callerNumber?: string; headers?: Header[] }) {
     this.#client = client;
@@ -291,8 +294,7 @@ export class Call {
     this.#terminationLedger.request(reason);
     this.#nativeAlreadyEnded ||= nativeAlreadyEnded;
     return this.#termination.run(async () => {
-      if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
-      this.#noAnswerTimer = undefined;
+      this.#clearRuntimeTimers();
       InCallManager.stopRingback();
       InCallManager.stopRingtone();
       this.#transition(TelnyxCallState.ENDED);
@@ -302,6 +304,17 @@ export class Call {
         this.#client.completeCall(this.callId, this.#terminationLedger.finish(reason), this.#nativeAlreadyEnded);
       }
     });
+  }
+
+  forceDrop() {
+    if (this.#disposed || this.#terminationLedger.finished) return;
+    this.#terminationLedger.request('failed');
+    this.#termination.finish();
+    this.#clearRuntimeTimers();
+    InCallManager.stopRingback();
+    InCallManager.stopRingtone();
+    this.#transition(TelnyxCallState.DROPPED);
+    this.#client.completeCall(this.callId, this.#terminationLedger.finish('failed'), this.#nativeAlreadyEnded);
   }
 
   markRinging() {
@@ -397,10 +410,7 @@ export class Call {
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;
-    if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
-    if (this.#durationTimer) clearInterval(this.#durationTimer);
-    this.#noAnswerTimer = undefined;
-    this.#durationTimer = undefined;
+    this.#clearRuntimeTimers();
     this.#waiters.forEach((cancel) => cancel(new Error('The call was disposed before the operation completed.')));
     this.#waiters.clear();
     this.#lifecycle.dispose();
@@ -408,6 +418,77 @@ export class Call {
     this.isMuted$.clear();
     this.isHeld$.clear();
     this.duration$.clear();
+  }
+
+  #clearRuntimeTimers() {
+    if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
+    if (this.#durationTimer) clearInterval(this.#durationTimer);
+    if (this.#iceDisconnectTimer) clearTimeout(this.#iceDisconnectTimer);
+    if (this.#remoteAudioTimer) clearTimeout(this.#remoteAudioTimer);
+    this.#noAnswerTimer = undefined;
+    this.#durationTimer = undefined;
+    this.#iceDisconnectTimer = undefined;
+    this.#remoteAudioTimer = undefined;
+  }
+
+  #bindPeerConnectionSafety() {
+    if (this.#peerConnectionSafetyBound) return;
+    const handler = this.session.sessionDescriptionHandler as unknown as {
+      localMediaStream?: MediaStream;
+      remoteMediaStream?: MediaStream;
+      peerConnection?: {
+        connectionState?: string;
+        iceConnectionState?: string;
+        addEventListener?: (event: string, listener: () => void) => void;
+        removeEventListener?: (event: string, listener: () => void) => void;
+      };
+    } | undefined;
+    const peerConnection = handler?.peerConnection;
+    if (!peerConnection?.addEventListener) return;
+    this.#peerConnectionSafetyBound = true;
+    const requestRecovery = () => {
+      if (this.#disposed || this.#termination.requested) return;
+      void this.#client.recoverCallMedia(this.callId);
+    };
+    const connectionChanged = () => {
+      const state = peerConnection.connectionState || peerConnection.iceConnectionState || '';
+      if (state === 'connected' || state === 'completed') {
+        if (this.#iceDisconnectTimer) clearTimeout(this.#iceDisconnectTimer);
+        this.#iceDisconnectTimer = undefined;
+        return;
+      }
+      if (state === 'failed') {
+        requestRecovery();
+        return;
+      }
+      if (state === 'disconnected' && !this.#iceDisconnectTimer) {
+        this.#iceDisconnectTimer = setTimeout(() => {
+          this.#iceDisconnectTimer = undefined;
+          requestRecovery();
+        }, 2_000);
+      }
+    };
+    const trackAdded = () => {
+      handler?.remoteMediaStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
+      if (this.#remoteAudioTimer) clearTimeout(this.#remoteAudioTimer);
+      this.#remoteAudioTimer = undefined;
+    };
+    peerConnection.addEventListener('connectionstatechange', connectionChanged);
+    peerConnection.addEventListener('iceconnectionstatechange', connectionChanged);
+    peerConnection.addEventListener('track', trackAdded);
+    this.#lifecycle.add(() => {
+      peerConnection.removeEventListener?.('connectionstatechange', connectionChanged);
+      peerConnection.removeEventListener?.('iceconnectionstatechange', connectionChanged);
+      peerConnection.removeEventListener?.('track', trackAdded);
+    });
+    connectionChanged();
+    trackAdded();
+    if (!handler?.remoteMediaStream?.getAudioTracks().length) {
+      this.#remoteAudioTimer = setTimeout(() => {
+        this.#remoteAudioTimer = undefined;
+        if (!handler?.remoteMediaStream?.getAudioTracks().length) requestRecovery();
+      }, 4_000);
+    }
   }
 
   #stateChanged(state: SessionState) {
@@ -422,20 +503,18 @@ export class Call {
       if (!this.#transition(this.currentIsHeld ? TelnyxCallState.HELD : TelnyxCallState.ACTIVE)) return;
       InCallManager.stopRingback();
       InCallManager.stopRingtone();
-      InCallManager.start({ media: 'audio' });
+      if (Platform.OS === 'android') InCallManager.start({ media: 'audio' });
       const handler = this.session.sessionDescriptionHandler as unknown as { localMediaStream?: MediaStream; remoteMediaStream?: MediaStream } | undefined;
       handler?.localMediaStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
       handler?.remoteMediaStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
+      this.#bindPeerConnectionSafety();
       if (Platform.OS === 'android') RNCallKeep.setCurrentCallActive(this.callId);
       if (!this.isIncoming && Platform.OS === 'ios') RNCallKeep.reportConnectedOutgoingCallWithUUID(this.callId);
       this.#durationTimer ||= setInterval(() => this.duration$.next(Math.max(0, Math.floor((Date.now() - (this.#connectedAt || Date.now())) / 1000))), 1000);
       return;
     }
     if (state === SessionState.Terminated) {
-      if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
-      this.#noAnswerTimer = undefined;
-      if (this.#durationTimer) clearInterval(this.#durationTimer);
-      this.#durationTimer = undefined;
+      this.#clearRuntimeTimers();
       InCallManager.stopRingback();
       InCallManager.stopRingtone();
       this.#transition(TelnyxCallState.ENDED);
@@ -450,6 +529,7 @@ export class VocivoVoipClient {
   readonly connectionState$ = new ValueStream(TelnyxConnectionState.DISCONNECTED);
   readonly calls$ = new ValueStream<Call[]>([]);
   readonly activeCall$ = new ValueStream<Call | null>(null);
+  readonly transportFailure$ = new ValueStream<SipTransportFailure | null>(null);
   #userAgent?: UserAgent;
   #registerer?: Registerer;
   #calls = new Map<string, Call>();
@@ -464,6 +544,7 @@ export class VocivoVoipClient {
   #sipListeners?: DisposableScope;
   #backgroundWake: BackgroundWakeCoordinator<IncomingPushPayload>;
   #networkMigration: NetworkMigrationCoordinator;
+  #signalingRecovery?: Promise<void>;
 
   constructor() {
     this.#callKeepReady = RNCallKeep.setup({
@@ -541,7 +622,7 @@ export class VocivoVoipClient {
     callKeepListener('didActivateAudioSession', () => {
       try {
         RTCAudioSession.audioSessionDidActivate();
-        InCallManager.start({ media: 'audio' });
+        if (Platform.OS === 'android') InCallManager.start({ media: 'audio' });
       } catch (error) {
         logTelephonyError('activate-native-audio-session', error);
       }
@@ -624,12 +705,16 @@ export class VocivoVoipClient {
     if (this.#nativeEndedCalls.has(callId)) return;
     this.#nativeEndedCalls.add(callId);
     const action = nativeCallEndAction(reason, nativeAlreadyEnded);
-    if (action === 'end') RNCallKeep.endCall(callId);
-    if (action === 'reject') RNCallKeep.rejectCall(callId);
-    if (action === 'report_remote') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.REMOTE_ENDED);
-    if (action === 'report_unanswered') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.UNANSWERED);
-    if (action === 'report_failed') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.FAILED);
-    if (action === 'report_missed') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.MISSED);
+    try {
+      if (action === 'end') RNCallKeep.endCall(callId);
+      if (action === 'reject') RNCallKeep.rejectCall(callId);
+      if (action === 'report_remote') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.REMOTE_ENDED);
+      if (action === 'report_unanswered') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.UNANSWERED);
+      if (action === 'report_failed') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.FAILED);
+      if (action === 'report_missed') RNCallKeep.reportEndCallWithUUID(callId, CONSTANTS.END_CALL_REASONS.MISSED);
+    } catch (error) {
+      logTelephonyError('finish-native-call-ui', error, { callId, reason, action });
+    }
     const timer = setTimeout(() => {
       this.#nativeEndedCalls.delete(callId);
       this.#nativeEndTimers.delete(callId);
@@ -657,7 +742,10 @@ export class VocivoVoipClient {
       this.#finishNativeCall(callId, reason, nativeAlreadyEnded);
       return;
     }
-    await call.hangup(reason, nativeAlreadyEnded);
+    // Native and React UIs must close synchronously. SIP BYE/CANCEL is allowed
+    // to finish in the background and cannot keep a dead call screen alive.
+    this.#finishNativeCall(callId, reason, nativeAlreadyEnded);
+    await call.hangup(reason, true);
   }
 
   async restartIce() {
@@ -665,6 +753,21 @@ export class VocivoVoipClient {
     if (!calls.length) return false;
     const results = await Promise.allSettled(calls.map((call) => call.restartIce()));
     return results.some((result) => result.status === 'fulfilled' && result.value);
+  }
+
+  async recoverCallMedia(callId: string) {
+    const call = this.getCall(callId);
+    if (!call || call.terminationRequested || call.session.state !== SessionState.Established) return false;
+    try {
+      if (await call.restartIce()) return true;
+    } catch (error) {
+      logTelephonyError('recover-call-media-ice-restart', error, { callId });
+    }
+    const userAgent = this.#userAgent;
+    const registerer = this.#registerer;
+    if (!userAgent || !registerer) return false;
+    await this.#recoverSignaling(userAgent, registerer, { type: 'heartbeat', reason: 'Media transport failed.' });
+    return true;
   }
 
   handleNetworkRoute(route: string) {
@@ -745,7 +848,7 @@ export class VocivoVoipClient {
       authorizationUsername: config.username,
       authorizationPassword: config.password,
       transportConstructor: ProxyAwareSipTransport,
-      transportOptions: { server: config.websocketUrl, connectionTimeout: 12, keepAliveInterval: 25, traceSip: false },
+      transportOptions: { server: config.websocketUrl, connectionTimeout: 12, keepAliveInterval: 0, traceSip: false },
       reconnectionAttempts: 20,
       reconnectionDelay: 3,
       noAnswerTimeout: 60,
@@ -800,6 +903,11 @@ export class VocivoVoipClient {
     };
     userAgent.transport.stateChange.addListener(transportStateListener);
     sipScope.add(() => userAgent.transport.stateChange.removeListener(transportStateListener));
+    sipScope.add(installTransportSafety(userAgent.transport, {
+      onFatalDisconnect: (failure) => this.#handleFatalTransportFailure(userAgent, failure),
+      onHeartbeatFailure: (failure) => this.#recoverSignaling(userAgent, registerer, failure),
+      onCallbackError: (operation, error) => logTelephonyError(operation, error, { username: config.username }),
+    }));
     sipScope.add(clearReconnectWatchdog);
     sipScope.add(() => { userAgent.delegate = undefined; });
     this.#userAgent = userAgent;
@@ -818,6 +926,55 @@ export class VocivoVoipClient {
       this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
       throw error;
     }
+  }
+
+  #handleFatalTransportFailure(userAgent: UserAgent, failure: SipTransportFailure) {
+    if (this.#userAgent !== userAgent) return;
+    logTelephonyError('sip-websocket-fatal-disconnect', new Error(failure.reason), { code: failure.code, type: failure.type });
+    this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
+    this.transportFailure$.next(failure);
+    this.transportFailure$.next(null);
+    for (const call of [...this.currentCalls]) call.forceDrop();
+    for (const [callId, pending] of pendingNativeActions) {
+      clearTimeout(pending.timer);
+      pendingNativeActions.delete(callId);
+      this.#rememberTerminalCall(callId);
+      this.#finishNativeCall(callId, 'failed');
+    }
+    this.activeCall$.next(null);
+    InCallManager.stopRingback();
+    InCallManager.stopRingtone();
+    InCallManager.stop();
+    if (Platform.OS === 'android') RNCallKeep.setAvailable(false);
+  }
+
+  #recoverSignaling(userAgent: UserAgent, registerer: Registerer, failure: SipTransportFailure) {
+    if (this.#signalingRecovery) return this.#signalingRecovery;
+    const operation = (async () => {
+      if (this.#userAgent !== userAgent || this.#registerer !== registerer) return;
+      this.connectionState$.next(TelnyxConnectionState.CONNECTING);
+      try {
+        await this.restartIce();
+      } catch (error) {
+        logTelephonyError('pre-reconnect-ice-restart', error, { reason: failure.reason });
+      }
+      await settleTelephony('disconnect-stale-sip-transport', userAgent.transport.disconnect(), { reason: failure.reason });
+      if (this.#userAgent !== userAgent || this.#registerer !== registerer) return;
+      await userAgent.reconnect();
+      await registerAndWait(registerer);
+      await this.restartIce();
+      if (this.#userAgent === userAgent && this.#registerer === registerer) {
+        this.connectionState$.next(TelnyxConnectionState.CONNECTED);
+        if (Platform.OS === 'android') RNCallKeep.setAvailable(true);
+      }
+    })().catch((error) => {
+      logTelephonyError('recover-sip-heartbeat', error, { reason: failure.reason });
+      this.#handleFatalTransportFailure(userAgent, { type: 'heartbeat', reason: 'The calling connection could not be recovered.' });
+    });
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => { if (this.#signalingRecovery === tracked) this.#signalingRecovery = undefined; });
+    this.#signalingRecovery = tracked;
+    return tracked;
   }
 
   async #teardownSipRegistration() {
@@ -855,6 +1012,7 @@ export class VocivoVoipClient {
     this.connectionState$.clear();
     this.calls$.clear();
     this.activeCall$.clear();
+    this.transportFailure$.clear();
   }
 
   async newCall(destination: string, localCallerName: string, remoteDisplayName: string, _callerNumber?: string, headers: Header[] = []) {
