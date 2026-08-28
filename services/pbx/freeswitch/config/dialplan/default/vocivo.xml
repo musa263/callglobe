@@ -1,5 +1,14 @@
 <include>
   <context name="vocivo-internal">
+    <extension name="webrtc-public-media-address" continue="true">
+      <condition field="destination_number" expression="^.*$">
+        <action application="set" data="rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@"/>
+        <action application="set" data="rtp_adv_video_ip=@@PBX_PUBLIC_IP@@"/>
+        <action application="export" data="nolocal:rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@"/>
+        <action application="export" data="nolocal:rtp_adv_video_ip=@@PBX_PUBLIC_IP@@"/>
+      </condition>
+    </extension>
+
     <extension name="emergency-calling-disabled">
       <condition field="destination_number" expression="^(911|112|999)$">
         <action application="respond" data="503 Emergency calling is not configured"/>
@@ -27,6 +36,8 @@
         <action application="set" data="domain_name=${vocivo_sip_domain}"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="bridge_answer_timeout=35"/>
+        <action application="set" data="continue_on_answer_timeout=true"/>
         <action application="set" data="ringback=${us-ring}"/>
         <action application="set" data="transfer_ringback=${us-ring}"/>
         <action application="export" data="nolocal:vocivo_call_type=internal"/>
@@ -42,7 +53,7 @@
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Extension=${caller_id_number}"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Name=${caller_id_name}"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Photo=${vocivo_caller_photo}"/>
-        <action application="bridge" data="user/$1&#64;${vocivo_sip_domain}"/>
+        <action application="bridge" data="{originate_timeout=35,leg_timeout=35}user/$1&#64;${vocivo_sip_domain}"/>
         <action application="voicemail" data="default ${vocivo_sip_domain} $1"/>
       </condition>
     </extension>

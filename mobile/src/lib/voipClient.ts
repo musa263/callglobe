@@ -10,6 +10,8 @@ import { ProxyAwareSipTransport, registerAndWait } from './sipTransport';
 
 registerGlobals();
 
+const outgoingAnswerTimeoutMs = 35_000;
+
 export enum TelnyxConnectionState {
   DISCONNECTED = 'DISCONNECTED',
   CONNECTING = 'CONNECTING',
@@ -144,6 +146,7 @@ export class Call {
   readonly duration$ = new ValueStream(0);
   #client: VocivoVoipClient;
   #durationTimer?: ReturnType<typeof setInterval>;
+  #noAnswerTimer?: ReturnType<typeof setTimeout>;
   #connectedAt?: number;
 
   constructor(client: VocivoVoipClient, session: Session, input: { incoming: boolean; callId?: string; destination?: string; callerName?: string; callerNumber?: string; headers?: Header[] }) {
@@ -157,6 +160,12 @@ export class Call {
     this.inviteCustomHeaders = input.headers || inviteHeaders(session);
     this.callState$ = new ValueStream<TelnyxCallState>(input.incoming ? TelnyxCallState.RINGING : TelnyxCallState.CONNECTING);
     session.stateChange.addListener((nextState) => this.#stateChanged(nextState));
+    if (!input.incoming) {
+      this.#noAnswerTimer = setTimeout(() => {
+        if (![SessionState.Initial, SessionState.Establishing].includes(this.session.state)) return;
+        this.hangup().catch(() => undefined);
+      }, outgoingAnswerTimeoutMs);
+    }
   }
 
   get currentState() { return this.callState$.value; }
@@ -169,7 +178,11 @@ export class Call {
     await this.session.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
   }
 
-  async hangup() { await terminateSession(this.session); }
+  async hangup() {
+    if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
+    this.#noAnswerTimer = undefined;
+    await terminateSession(this.session);
+  }
 
   async hold() {
     if (this.session.state !== SessionState.Established) throw new Error('The call is not connected.');
@@ -213,6 +226,8 @@ export class Call {
       return;
     }
     if (state === SessionState.Established) {
+      if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
+      this.#noAnswerTimer = undefined;
       this.#connectedAt = Date.now();
       this.callState$.next(this.currentIsHeld ? TelnyxCallState.HELD : TelnyxCallState.ACTIVE);
       InCallManager.stopRingback();
@@ -224,6 +239,8 @@ export class Call {
       return;
     }
     if (state === SessionState.Terminated) {
+      if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
+      this.#noAnswerTimer = undefined;
       if (this.#durationTimer) clearInterval(this.#durationTimer);
       this.#durationTimer = undefined;
       this.callState$.next(TelnyxCallState.ENDED);
@@ -307,8 +324,31 @@ export class VocivoVoipClient {
       delegate: { onInvite: (invitation) => this.receiveInvite(invitation) },
     });
     const registerer = new Registerer(userAgent, { expires: 300 });
+    let transportConnectedOnce = false;
+    let recoveryRegistration: Promise<void> | undefined;
     registerer.stateChange.addListener((state) => {
       this.connectionState$.next(state === RegistererState.Registered ? TelnyxConnectionState.CONNECTED : TelnyxConnectionState.CONNECTING);
+    });
+    userAgent.transport.stateChange.addListener((state) => {
+      if (this.#userAgent !== userAgent) return;
+      if (String(state) === 'Disconnected') {
+        this.connectionState$.next(TelnyxConnectionState.CONNECTING);
+        return;
+      }
+      if (String(state) !== 'Connected') return;
+      if (!transportConnectedOnce) {
+        transportConnectedOnce = true;
+        return;
+      }
+      this.connectionState$.next(TelnyxConnectionState.CONNECTING);
+      recoveryRegistration ||= registerAndWait(registerer)
+        .then(() => {
+          if (this.#userAgent === userAgent) this.connectionState$.next(TelnyxConnectionState.CONNECTED);
+        })
+        .catch(() => {
+          if (this.#userAgent === userAgent) this.connectionState$.next(TelnyxConnectionState.DISCONNECTED);
+        })
+        .finally(() => { recoveryRegistration = undefined; });
     });
     this.#userAgent = userAgent;
     this.#registerer = registerer;

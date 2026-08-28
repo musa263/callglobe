@@ -15,11 +15,12 @@
     <param name="ext-rtp-ip" value="@@PBX_PUBLIC_IP@@"/>
     <param name="ext-sip-ip" value="@@PBX_PUBLIC_IP@@"/>
     <param name="sip-port" value="5062"/>
-    <param name="ws-binding" value="127.0.0.1:5066"/>
+    <param name="ws-binding" value="@@PBX_CARRIER_BIND_IP@@:5066"/>
+    <param name="local-network-acl" value="none"/>
     <param name="auth-calls" value="true"/>
     <param name="auth-all-packets" value="false"/>
     <param name="accept-blind-reg" value="false"/>
-    <param name="multiple-registrations" value="contact"/>
+    <param name="multiple-registrations" value="call-id"/>
     <param name="challenge-realm" value="auto_from"/>
     <param name="inbound-codec-prefs" value="opus,G722,PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="opus,G722,PCMU,PCMA"/>

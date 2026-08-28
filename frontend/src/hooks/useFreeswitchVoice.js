@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { ProxyAwareSipTransport, registerAndWait } from '../lib/sipTransport';
 
 const mediaOptions = { constraints: { audio: true, video: false } };
+const outgoingAnswerTimeoutMs = 35_000;
 
 function header(session, name) {
   try { return session?.request?.getHeader?.(name) || ''; } catch { return ''; }
@@ -174,6 +175,7 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     stopRingback();
     stopIncomingRingtone();
     for (const leg of legsRef.current.values()) {
+      if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
       removeRemoteAudio(leg);
       terminate(leg.session).catch(() => undefined);
     }
@@ -195,6 +197,8 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     setError('');
 
     const finishLeg = (leg) => {
+      if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
+      leg.noAnswerTimer = null;
       removeRemoteAudio(leg);
       legsRef.current.delete(leg.id);
       if (incomingRef.current?.id === leg.id) {
@@ -242,11 +246,13 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
     };
 
     const track = (session, direction, fallback) => {
-      const leg = { id: session.id, session, direction, identity: identityFor(session, fallback), held: false, audio: null };
+      const leg = { id: session.id, session, direction, identity: identityFor(session, fallback), held: false, audio: null, noAnswerTimer: null };
       legsRef.current.set(leg.id, leg);
       session.stateChange.addListener((nextState) => {
         if (cancelled) return;
         if (nextState === SessionState.Established) {
+          if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
+          leg.noAnswerTimer = null;
           attachRemoteAudio(leg);
           if (activeRef.current?.id === leg.id) {
             stopRingback();
@@ -295,6 +301,8 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         },
       });
       const registerer = new Registerer(userAgent, { expires: 300 });
+      let transportConnectedOnce = false;
+      let recoveryRegistration = null;
       registerer.stateChange.addListener((nextState) => {
         if (cancelled) return;
         if (nextState === RegistererState.Registered) {
@@ -311,7 +319,29 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         if (String(nextState) === 'Disconnected') {
           setReady(false);
           setStatusLabel('Reconnecting...');
+          return;
         }
+        if (String(nextState) !== 'Connected') return;
+        if (!transportConnectedOnce) {
+          transportConnectedOnce = true;
+          return;
+        }
+        setReady(false);
+        setStatusLabel('Reconnecting...');
+        recoveryRegistration ||= registerAndWait(registerer)
+          .then(() => {
+            if (cancelled) return;
+            setReady(true);
+            setStatusLabel('Ready for calls');
+            setError('');
+          })
+          .catch((registrationError) => {
+            if (cancelled) return;
+            setReady(false);
+            setStatusLabel('Unable to connect');
+            setError(registrationError.message || 'The Vocivo web phone could not reconnect.');
+          })
+          .finally(() => { recoveryRegistration = null; });
       });
       userAgentRef.current = userAgent;
       registererRef.current = registerer;
@@ -339,6 +369,11 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
       sessionDescriptionHandlerOptions: mediaOptions,
     });
     const leg = trackSessionRef.current(inviter, 'outbound', fallbackIdentity);
+    leg.noAnswerTimer = setTimeout(() => {
+      if (![SessionState.Initial, SessionState.Establishing].includes(inviter.state)) return;
+      setError('The call was not answered.');
+      terminate(inviter).catch(() => undefined);
+    }, outgoingAnswerTimeoutMs);
     activeRef.current = leg;
     setCall(publicCall(leg));
     setRemoteIdentity(leg.identity);

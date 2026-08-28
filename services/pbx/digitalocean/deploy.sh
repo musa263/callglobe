@@ -26,4 +26,4 @@ if [ -d "$source_dir/secrets" ]; then
   # container so the non-root Node process can load APNs/FCM credentials.
   rsync -az --chmod=F644 "$source_dir/secrets/" "$PBX_USER@$PBX_HOST:$PBX_PATH/secrets/"
 fi
-ssh "$PBX_USER@$PBX_HOST" "chmod 600 '$PBX_PATH/.env' && cd '$PBX_PATH' && docker compose config --quiet && docker compose up -d --build && docker compose ps"
+ssh "$PBX_USER@$PBX_HOST" "chmod 600 '$PBX_PATH/.env' && cd '$PBX_PATH' && docker compose config --quiet && docker compose up -d --build && docker compose up -d --force-recreate caddy && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile && docker compose ps"

@@ -42,6 +42,7 @@ ufw default allow outgoing
 ufw allow 22/tcp comment 'SSH'
 ufw allow 80/tcp comment 'ACME HTTP challenge'
 ufw allow 443/tcp comment 'WebRTC WSS'
+ufw allow from 172.30.0.0/24 to any port 5066 proto tcp comment 'Caddy to Sofia WS'
 for carrier_cidr in ${CARRIER_CIDRS:-}; do
   ufw allow from "$carrier_cidr" to any port 5060 proto tcp comment 'Carrier SIP TCP'
   ufw allow from "$carrier_cidr" to any port 5060 proto udp comment 'Carrier SIP UDP'

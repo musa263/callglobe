@@ -19,6 +19,7 @@ services:
       - SYS_NICE
     volumes:
       - freeswitch-db:/usr/local/freeswitch/var/lib/freeswitch/db
+      - freeswitch-certs:/usr/local/freeswitch/etc/freeswitch/tls
       - freeswitch-recordings:/var/lib/vocivo/recordings
       - freeswitch-logs:/usr/local/freeswitch/var/log/freeswitch
     healthcheck:
@@ -51,10 +52,15 @@ services:
   caddy:
     image: caddy:2.11.4-alpine
     restart: unless-stopped
-    network_mode: host
     env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      edge:
+        ipv4_address: 172.30.0.2
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
@@ -76,9 +82,16 @@ services:
 
 volumes:
   freeswitch-db:
+  freeswitch-certs:
   freeswitch-recordings:
   freeswitch-logs:
   caddy-data:
   caddy-config:
   asterisk-data:
   asterisk-logs:
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

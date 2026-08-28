@@ -4,6 +4,8 @@
       <condition field="destination_number" expression="^(\+?[0-9]{7,15})$">
         <action application="set" data="vocivo_call_id=${uuid}"/>
         <action application="set" data="domain_name=@@PBX_SIP_DOMAIN@@"/>
+        <action application="set" data="rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@"/>
+        <action application="set" data="rtp_adv_video_ip=@@PBX_PUBLIC_IP@@"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="export" data="nolocal:vocivo_call_type=external"/>
@@ -13,6 +15,8 @@
         <action application="export" data="nolocal:vocivo_push_target_extension=@@PBX_DEFAULT_EXTENSION@@"/>
         <action application="export" data="nolocal:vocivo_caller_name=${caller_id_name}"/>
         <action application="export" data="nolocal:vocivo_caller_number=${caller_id_number}"/>
+        <action application="export" data="nolocal:rtp_adv_audio_ip=@@PBX_PUBLIC_IP@@"/>
+        <action application="export" data="nolocal:rtp_adv_video_ip=@@PBX_PUBLIC_IP@@"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Call-UUID=${vocivo_call_id}"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Call-Type=external"/>
         <action application="export" data="nolocal:sip_h_X-Vocivo-Caller-Name=${caller_id_name}"/>

@@ -24,6 +24,12 @@ export async function registerAndWait(registerer: Registerer, timeoutMs = 15_000
       resolvePending();
     }
   };
+  const resolveRegistration = () => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    resolvePending();
+  };
   const pending = new Promise<void>((resolve, reject) => {
     resolvePending = resolve;
     rejectPending = reject;
@@ -37,6 +43,7 @@ export async function registerAndWait(registerer: Registerer, timeoutMs = 15_000
   try {
     const request = registerer.register({
       requestDelegate: {
+        onAccept: resolveRegistration,
         onReject: (response) => {
           if (settled) return;
           settled = true;

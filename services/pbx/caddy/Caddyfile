@@ -3,7 +3,9 @@
 }
 
 {$PBX_WSS_DOMAIN} {
-	reverse_proxy 127.0.0.1:5066
+	# Keep the proxy hop off loopback so Sofia can apply the profile's
+	# external RTP address to WebRTC SDP. UFW still blocks direct port 5066.
+	reverse_proxy {$PBX_CARRIER_BIND_IP}:5066
 	log {
 		output file /data/access-sip-wss.log
 		format json

@@ -111,8 +111,10 @@ render "$templates/autoload_configs/xml_curl.conf.xml" "$conf/autoload_configs/x
 render "$templates/sip_profiles/vocivo-internal.xml" "$conf/sip_profiles/vocivo-internal.xml"
 render "$templates/sip_profiles/vocivo-external.xml" "$conf/sip_profiles/vocivo-external.xml"
 # mod_xml_curl is authoritative for tenant users. Keep static bootstrap disabled.
-render "$templates/dialplan/default/vocivo.xml" "$conf/dialplan/default/vocivo.xml"
-render "$templates/dialplan/public/vocivo-inbound.xml" "$conf/dialplan/public/vocivo-inbound.xml"
+# These templates contain complete contexts. Install them at the dialplan root;
+# the default/ and public/ directories accept extension fragments only.
+render "$templates/dialplan/default/vocivo.xml" "$conf/dialplan/vocivo-internal.xml"
+render "$templates/dialplan/public/vocivo-inbound.xml" "$conf/dialplan/vocivo-public.xml"
 
 for module in mod_xml_curl mod_sofia mod_verto mod_event_socket mod_conference mod_voicemail mod_opus; do
   if ! grep -Eq "^[[:space:]]*<load[[:space:]]+module=\"$module\"[[:space:]]*/>" "$conf/autoload_configs/modules.conf.xml"; then
@@ -123,10 +125,16 @@ done
 # The pilot uses its own ESL and API control plane, not the vanilla connectors.
 sed -i '/module="mod_signalwire"/d; /module="mod_xml_rpc"/d' "$conf/autoload_configs/modules.conf.xml"
 
+# FreeSWITCH generates its 4096-bit WebRTC DTLS certificate on first start.
+# The certificate must survive container replacement and be writable after
+# FreeSWITCH drops privileges, otherwise SDP contains an empty fingerprint.
+mkdir -p "$conf/tls"
 chown -R freeswitch:freeswitch \
+  "$conf/tls" \
   /usr/local/freeswitch/var/lib/freeswitch \
   /usr/local/freeswitch/var/log/freeswitch \
   /usr/local/freeswitch/var/run/freeswitch \
   /usr/local/freeswitch/share/freeswitch/sounds \
   /var/lib/vocivo/recordings
+chmod 700 "$conf/tls"
 exec /usr/local/freeswitch/bin/freeswitch -u freeswitch -g freeswitch -nf -nonat
