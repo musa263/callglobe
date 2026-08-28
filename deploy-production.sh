@@ -87,7 +87,7 @@ chown 1000:1000 \
 chmod 400 \
   "$pbx_path/secrets/apns-auth-key.p8" \
   "$pbx_path/secrets/firebase-service-account.json"
-chown 65534:65534 "$pbx_path/secrets/turn-auth-secret"
+chown 0:0 "$pbx_path/secrets/turn-auth-secret"
 chmod 400 "$pbx_path/secrets/turn-auth-secret"
 
 diagnostics() {
