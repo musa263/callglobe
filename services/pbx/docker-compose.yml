@@ -38,6 +38,14 @@ services:
       ESL_HOST: 127.0.0.1
       ESL_PORT: 8021
       HEALTH_PORT: 8088
+      APNS_ENABLED: ${APNS_ENABLED:?APNS_ENABLED is required}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:?APNS_TEAM_ID is required}
+      APNS_KEY_ID: ${APNS_KEY_ID:?APNS_KEY_ID is required}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:?APNS_BUNDLE_ID is required}
+      APNS_KEY_PATH: ${APNS_KEY_PATH:?APNS_KEY_PATH is required}
+      APNS_ENVIRONMENT: ${APNS_ENVIRONMENT:-production}
+      FCM_ENABLED: ${FCM_ENABLED:?FCM_ENABLED is required}
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:?FCM_SERVICE_ACCOUNT_PATH is required}
     volumes:
       - ./secrets/apns-auth-key.p8:/run/secrets/apns-auth-key.p8:ro
       - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro

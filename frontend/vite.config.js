@@ -24,6 +24,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    // The shared telephony vendor bundle is intentionally kept together so
+    // SIP/WebRTC libraries are loaded once across the multi-page frontend.
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       input: {
         main: 'index.html',
