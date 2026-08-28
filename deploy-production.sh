@@ -114,6 +114,12 @@ docker compose config --quiet
 docker compose build --pull
 docker compose up -d --remove-orphans
 
+# Compose does not recreate containers when only a bind-mounted file changes.
+# Reload the secret and edge consumers without interrupting active FreeSWITCH
+# calls; the health gate below verifies the replacement instances.
+docker compose up -d --no-deps --force-recreate caddy esl-listener coturn
+docker compose up -d --no-deps --force-recreate edge-router
+
 deadline=$((SECONDS + health_timeout))
 while :; do
   unhealthy=0
@@ -137,6 +143,7 @@ done
 docker compose exec -T freeswitch /usr/local/freeswitch/bin/fs_cli \
   -H 127.0.0.1 -P 8021 -p "$(awk -F= '$1 == "ESL_PASSWORD" { print substr($0, index($0, "=") + 1) }' .env)" -x status
 docker compose exec -T coturn turnutils_stunclient -p 3478 127.0.0.1
+docker compose exec -T edge-router nc -z -w 3 host.docker.internal 5349
 curl --fail --silent --show-error http://127.0.0.1:8088/healthz >/dev/null
 
 docker compose ps
