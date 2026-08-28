@@ -64,7 +64,7 @@ fi
 REMOTE_PREPARE
 
 scp -q "$local_pbx/.env" "$target:$PBX_REPO_PATH/services/pbx/.env"
-rsync -az --chmod=F600 \
+scp -q \
   "$local_pbx/secrets/apns-auth-key.p8" \
   "$local_pbx/secrets/firebase-service-account.json" \
   "$local_pbx/secrets/turn-auth-secret" \
