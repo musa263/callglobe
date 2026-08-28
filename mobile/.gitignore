@@ -9,5 +9,4 @@ android/
 *.p8
 *.p12
 *.mobileprovision
-google-services.json
 GoogleService-Info.plist

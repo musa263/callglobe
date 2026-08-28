@@ -28,6 +28,7 @@
     },
     "android": {
       "package": "app.vocivo.mobile",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/vocivo-icon.png",
         "backgroundColor": "#07111F"
