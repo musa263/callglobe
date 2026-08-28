@@ -87,6 +87,8 @@ services:
         no-cli
         no-dtls
         no-multicast-peers
+        log-file=stdout
+        simple-log
         proc-user=nobody
         proc-group=nogroup
         pidfile=/tmp/turnserver.pid
@@ -165,10 +167,12 @@ services:
     tmpfs:
       - /tmp:size=16m,mode=1777
     depends_on:
-      - caddy
-      - coturn
+      caddy:
+        condition: service_healthy
+      coturn:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "haproxy -c -f /tmp/haproxy.cfg >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "haproxy -c -f /tmp/haproxy.cfg >/dev/null 2>&1 && nc -z -w 3 host.docker.internal 5349"]
       interval: 20s
       timeout: 5s
       retries: 5

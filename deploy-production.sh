@@ -103,6 +103,12 @@ trap diagnostics ERR
 
 "$pbx_path/digitalocean/validate-production-env.sh" "$pbx_path"
 
+# Reconcile the private Docker-to-host TLS path on existing droplets. Host
+# bootstrap already creates this rule for new servers.
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+  ufw allow from 172.30.0.0/24 to any port 5349 proto tcp comment 'TLS edge to TURN' >/dev/null
+fi
+
 cd "$pbx_path"
 docker compose config --quiet
 docker compose build --pull

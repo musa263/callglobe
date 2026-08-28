@@ -115,8 +115,10 @@ if ! grep -Fq 'subnet: 172.30.0.0/24' "$root/../docker-compose.yml" \
   exit 1
 fi
 
-if ! grep -Fq -- '--use-auth-secret' "$root/../docker-compose.yml" \
+if ! grep -Fq 'use-auth-secret' "$root/../docker-compose.yml" \
+  || ! grep -Fq 'static-auth-secret=$$secret' "$root/../docker-compose.yml" \
   || ! grep -Fq 'turn_auth_secret' "$root/../docker-compose.yml" \
+  || grep -Fq -- '--static-auth-secret' "$root/../docker-compose.yml" \
   || grep -Fq -- '--user=${TURN_USERNAME}:${TURN_PASSWORD}' "$root/../docker-compose.yml" \
   || ! grep -Fq 'turn-tls if { req_ssl_sni -i @@TURN_TLS_DOMAIN@@ }' "$root/../haproxy/haproxy.cfg.template"; then
   echo "TURN must use short-lived REST credentials and the TLS 443 fallback." >&2
