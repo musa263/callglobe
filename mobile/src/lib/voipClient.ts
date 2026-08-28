@@ -245,7 +245,9 @@ export class Call {
   #nativeAlreadyEnded = false;
   #peerConnectionSafetyBound = false;
   #iceDisconnectTimer?: ReturnType<typeof setTimeout>;
+  #mediaConnectTimer?: ReturnType<typeof setTimeout>;
   #remoteAudioTimer?: ReturnType<typeof setTimeout>;
+  #mediaRecoveryPending = false;
 
   constructor(client: VocivoVoipClient, session: Session, input: { incoming: boolean; callId?: string; destination?: string; callerName?: string; callerNumber?: string; headers?: Header[] }) {
     this.#client = client;
@@ -424,11 +426,14 @@ export class Call {
     if (this.#noAnswerTimer) clearTimeout(this.#noAnswerTimer);
     if (this.#durationTimer) clearInterval(this.#durationTimer);
     if (this.#iceDisconnectTimer) clearTimeout(this.#iceDisconnectTimer);
+    if (this.#mediaConnectTimer) clearTimeout(this.#mediaConnectTimer);
     if (this.#remoteAudioTimer) clearTimeout(this.#remoteAudioTimer);
     this.#noAnswerTimer = undefined;
     this.#durationTimer = undefined;
     this.#iceDisconnectTimer = undefined;
+    this.#mediaConnectTimer = undefined;
     this.#remoteAudioTimer = undefined;
+    this.#mediaRecoveryPending = false;
   }
 
   #bindPeerConnectionSafety() {
@@ -447,14 +452,22 @@ export class Call {
     if (!peerConnection?.addEventListener) return;
     this.#peerConnectionSafetyBound = true;
     const requestRecovery = () => {
-      if (this.#disposed || this.#termination.requested) return;
-      void this.#client.recoverCallMedia(this.callId);
+      if (this.#disposed || this.#termination.requested || this.#mediaRecoveryPending) return;
+      this.#mediaRecoveryPending = true;
+      void this.#client.recoverCallMedia(this.callId)
+        .catch((error) => logTelephonyError('recover-stalled-call-media', error, { callId: this.callId }))
+        .finally(() => {
+          this.#mediaRecoveryPending = false;
+          connectionChanged();
+        });
     };
     const connectionChanged = () => {
       const state = peerConnection.connectionState || peerConnection.iceConnectionState || '';
       if (state === 'connected' || state === 'completed') {
         if (this.#iceDisconnectTimer) clearTimeout(this.#iceDisconnectTimer);
+        if (this.#mediaConnectTimer) clearTimeout(this.#mediaConnectTimer);
         this.#iceDisconnectTimer = undefined;
+        this.#mediaConnectTimer = undefined;
         return;
       }
       if (state === 'failed') {
@@ -466,6 +479,13 @@ export class Call {
           this.#iceDisconnectTimer = undefined;
           requestRecovery();
         }, 2_000);
+      }
+      if (['new', 'checking', 'connecting'].includes(state) && !this.#mediaConnectTimer) {
+        this.#mediaConnectTimer = setTimeout(() => {
+          this.#mediaConnectTimer = undefined;
+          const current = peerConnection.connectionState || peerConnection.iceConnectionState || '';
+          if (!['connected', 'completed'].includes(current)) requestRecovery();
+        }, 5_000);
       }
     };
     const trackAdded = () => {

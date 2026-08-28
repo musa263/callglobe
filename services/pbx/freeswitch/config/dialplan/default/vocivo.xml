@@ -42,8 +42,6 @@
         <action application="set" data="call_timeout=35"/>
         <action application="set" data="ignore_early_media=true"/>
         <action application="set" data="bridge_answer_timeout=35"/>
-        <action application="set" data="ringback=${us-ring}"/>
-        <action application="set" data="transfer_ringback=${us-ring}"/>
         <action application="export" data="nolocal:vocivo_call_type=internal"/>
         <action application="export" data="nolocal:vocivo_call_id=${vocivo_call_id}"/>
         <action application="export" data="nolocal:vocivo_organization_id=${vocivo_organization_id}"/>
@@ -66,11 +64,11 @@
       <condition field="destination_number" expression="^(\+[1-9][0-9]{6,14})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=false"/>
+        <action application="set" data="ignore_early_media=true"/>
         <action application="set" data="effective_caller_id_number=${outbound_caller_id_number}"/>
         <action application="set" data="effective_caller_id_name=${caller_id_name}"/>
-        <action application="set" data="ringback=${us-ring}"/>
         <action application="export" data="nolocal:vocivo_call_type=external"/>
-        <action application="bridge" data="sofia/gateway/@@PSTN_GATEWAY_NAME@@/$1"/>
+        <action application="bridge" data="{ignore_early_media=true}sofia/gateway/@@PSTN_GATEWAY_NAME@@/$1"/>
       </condition>
     </extension>
 

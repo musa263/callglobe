@@ -103,10 +103,13 @@ function clearLegRuntime(leg) {
   if (!leg) return;
   if (leg.noAnswerTimer) clearTimeout(leg.noAnswerTimer);
   if (leg.mediaRecoveryTimer) clearTimeout(leg.mediaRecoveryTimer);
+  if (leg.mediaConnectTimer) clearTimeout(leg.mediaConnectTimer);
   if (leg.remoteTrackTimer) clearTimeout(leg.remoteTrackTimer);
   leg.noAnswerTimer = null;
   leg.mediaRecoveryTimer = null;
+  leg.mediaConnectTimer = null;
   leg.remoteTrackTimer = null;
+  leg.mediaRecoveryPending = false;
   if (leg.stateListener) leg.session.stateChange.removeListener(leg.stateListener);
   leg.stateListener = null;
   for (const dispose of leg.mediaDisposers || []) dispose();
@@ -137,23 +140,46 @@ function bindLegMediaSafety(leg, recover) {
   const peerConnection = leg.session?.sessionDescriptionHandler?.peerConnection;
   if (!peerConnection?.addEventListener || leg.mediaDisposers?.length) return;
   leg.mediaDisposers ||= [];
+  const requestRecovery = () => {
+    if (leg.mediaRecoveryPending || leg.session.state !== SessionState.Established) return;
+    leg.mediaRecoveryPending = true;
+    Promise.resolve(recover()).catch((recoveryError) => {
+      console.error('[VocivoVoice] Media recovery failed.', {
+        callId: leg.id,
+        message: recoveryError?.message || String(recoveryError),
+        stack: recoveryError?.stack,
+      });
+    }).finally(() => {
+      leg.mediaRecoveryPending = false;
+      connectionChanged();
+    });
+  };
   const connectionChanged = () => {
     const state = peerConnection.connectionState || peerConnection.iceConnectionState || '';
     if (state === 'connected' || state === 'completed') {
       if (leg.mediaRecoveryTimer) clearTimeout(leg.mediaRecoveryTimer);
+      if (leg.mediaConnectTimer) clearTimeout(leg.mediaConnectTimer);
       leg.mediaRecoveryTimer = null;
+      leg.mediaConnectTimer = null;
       attachRemoteAudio(leg);
       return;
     }
     if (state === 'failed') {
-      void recover();
+      requestRecovery();
       return;
     }
     if (state === 'disconnected' && !leg.mediaRecoveryTimer) {
       leg.mediaRecoveryTimer = setTimeout(() => {
         leg.mediaRecoveryTimer = null;
-        void recover();
+        requestRecovery();
       }, 2_000);
+    }
+    if (['new', 'checking', 'connecting'].includes(state) && !leg.mediaConnectTimer) {
+      leg.mediaConnectTimer = setTimeout(() => {
+        leg.mediaConnectTimer = null;
+        const current = peerConnection.connectionState || peerConnection.iceConnectionState || '';
+        if (!['connected', 'completed'].includes(current)) requestRecovery();
+      }, 5_000);
     }
   };
   const trackAdded = () => {
@@ -373,8 +399,10 @@ export function useFreeswitchVoice(token, enabled, identity = {}) {
         audio: null,
         noAnswerTimer: null,
         mediaRecoveryTimer: null,
+        mediaConnectTimer: null,
         remoteTrackTimer: null,
         mediaDisposers: [],
+        mediaRecoveryPending: false,
         iceRestartPromise: null,
         stateListener: null,
       };

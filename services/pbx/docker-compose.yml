@@ -70,6 +70,7 @@ services:
       - |
         case "$$TURN_TLS_DOMAIN" in ''|*[!A-Za-z0-9.-]*) echo "Invalid TURN_TLS_DOMAIN" >&2; exit 1;; esac
         case "$$PBX_PUBLIC_IP" in ''|*[!0-9A-Fa-f:.]*) echo "Invalid PBX_PUBLIC_IP" >&2; exit 1;; esac
+        case "$$PBX_CARRIER_BIND_IP" in ''|*[!0-9A-Fa-f:.]*) echo "Invalid PBX_CARRIER_BIND_IP" >&2; exit 1;; esac
         case "$${TURN_MIN_PORT:-30000}" in *[!0-9]*) echo "Invalid TURN_MIN_PORT" >&2; exit 1;; esac
         case "$${TURN_MAX_PORT:-39999}" in *[!0-9]*) echo "Invalid TURN_MAX_PORT" >&2; exit 1;; esac
         secret="$$(cat /run/secrets/turn_auth_secret)"
@@ -83,7 +84,10 @@ services:
         tls-listening-port=5349
         min-port=$${TURN_MIN_PORT:-30000}
         max-port=$${TURN_MAX_PORT:-39999}
-        external-ip=$$PBX_PUBLIC_IP
+        # DigitalOcean Reserved IPs are 1:1 NATed to the droplet anchor IP.
+        # Bind relay sockets only to that anchor and advertise the Reserved IP.
+        relay-ip=$$PBX_CARRIER_BIND_IP
+        external-ip=$$PBX_PUBLIC_IP/$$PBX_CARRIER_BIND_IP
         realm=$$TURN_REALM
         use-auth-secret
         static-auth-secret=$$secret

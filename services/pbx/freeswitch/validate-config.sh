@@ -117,11 +117,19 @@ fi
 
 if ! grep -Fq 'use-auth-secret' "$root/../docker-compose.yml" \
   || ! grep -Fq 'static-auth-secret=$$secret' "$root/../docker-compose.yml" \
+  || ! grep -Fq 'relay-ip=$$PBX_CARRIER_BIND_IP' "$root/../docker-compose.yml" \
+  || ! grep -Fq 'external-ip=$$PBX_PUBLIC_IP/$$PBX_CARRIER_BIND_IP' "$root/../docker-compose.yml" \
   || ! grep -Fq 'turn_auth_secret' "$root/../docker-compose.yml" \
   || grep -Fq -- '--static-auth-secret' "$root/../docker-compose.yml" \
   || grep -Fq -- '--user=${TURN_USERNAME}:${TURN_PASSWORD}' "$root/../docker-compose.yml" \
   || ! grep -Fq 'turn-tls if { req_ssl_sni -i @@TURN_TLS_DOMAIN@@ }' "$root/../haproxy/haproxy.cfg.template"; then
   echo "TURN must use short-lived REST credentials and the TLS 443 fallback." >&2
+  exit 1
+fi
+
+if grep -Fq 'data="ringback=' "$root/config/dialplan/default/vocivo.xml" \
+  || grep -Fq 'data="transfer_ringback=' "$root/config/dialplan/default/vocivo.xml"; then
+  echo "Client and FreeSWITCH ringback must not play at the same time." >&2
   exit 1
 fi
 
