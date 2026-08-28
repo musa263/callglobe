@@ -77,7 +77,18 @@ set -Eeuo pipefail
 repo_path=$1
 health_timeout=$2
 pbx_path="$repo_path/services/pbx"
-chmod 600 "$pbx_path/.env" "$pbx_path"/secrets/*
+chmod 600 "$pbx_path/.env"
+
+# Bind-mounted Compose secrets retain host ownership. Restrict each credential
+# to the unprivileged runtime UID of the one service that consumes it.
+chown 1000:1000 \
+  "$pbx_path/secrets/apns-auth-key.p8" \
+  "$pbx_path/secrets/firebase-service-account.json"
+chmod 400 \
+  "$pbx_path/secrets/apns-auth-key.p8" \
+  "$pbx_path/secrets/firebase-service-account.json"
+chown 65534:65534 "$pbx_path/secrets/turn-auth-secret"
+chmod 400 "$pbx_path/secrets/turn-auth-secret"
 
 diagnostics() {
   status=$?
