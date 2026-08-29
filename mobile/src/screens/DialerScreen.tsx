@@ -11,7 +11,6 @@ import { RatePicker } from '../components/RatePicker';
 import { flagFromCode } from '../data/fallbackRates';
 import { useAuth } from '../context/AuthContext';
 import { useVoice } from '../context/VoiceContext';
-import { api } from '../lib/api';
 import type { CallRate, NavigationTarget } from '../types';
 import { colors, shadow } from '../theme';
 
@@ -78,10 +77,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
       Keyboard.dismiss();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (internalCandidate) {
-        const result = await api.get<{ users: Array<{ extension: string; name: string; sipUsername: string; photoUrl?: string }> }>(`/api/voice/directory?extension=${encodeURIComponent(number)}`);
-        const colleague = result.users[0];
-        if (!colleague?.sipUsername) throw new Error(`Extension ${number} is not available in your organization.`);
-        await startInternalCall(colleague.sipUsername, colleague.extension, colleague.name, colleague.photoUrl);
+        await startInternalCall('', number, contactName || `Extension ${number}`, contactPhotoUrl);
       } else {
         await startCall(fullNumber, selected, selectedCaller, contactName, contactPhotoUrl);
       }

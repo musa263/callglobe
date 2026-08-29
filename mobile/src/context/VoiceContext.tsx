@@ -92,6 +92,16 @@ const toLifecycleState = (state: TelnyxCallState): CallLifecycleState => {
 
 const createRouteId = () => `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
 
+async function waitForVoiceConnection(timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED) {
+    throw new Error('Calling service is reconnecting. Please try again in a moment.');
+  }
+}
+
 const outboundHeaders = (
   destination: string,
   callerNumber: string | undefined,
@@ -535,10 +545,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         if (routePollGenerationRef.current !== generation) return;
         if (result.phase === 'connected') {
           const connectedAt = result.connectedAt ? new Date(result.connectedAt).getTime() : Date.now();
+          const elapsed = Math.max(0, Math.floor((Date.now() - connectedAt) / 1000));
           const meta = callMetaRef.current.get(callId) ?? {};
           callMetaRef.current.set(callId, { ...meta, connectedAt });
-          durationRef.current = 0;
-          setDuration(0);
+          durationRef.current = elapsed;
+          setDuration(elapsed);
           setActiveCall((current) => {
             if (current?.id !== callId) return current;
             const next = { ...current, phase: 'active' as const, connectedAt };
@@ -561,7 +572,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         lastRouteError = routeError;
         if (attempt === 9 || attempt === 39) reportVoiceError('poll extension route status', routeError);
       }
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      await new Promise((resolve) => setTimeout(resolve, attempt < 40 ? 250 : 750));
     }
     if (routePollGenerationRef.current === generation) {
       stopRingback();
@@ -660,7 +671,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 900);
       return;
     }
-    if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     const destination = `sip:${sipUsername}@sip.telnyx.com`;
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
@@ -670,7 +680,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     setActiveCall(optimisticCall);
     startingCallRef.current = true;
     try {
-      const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string; destinationName?: string; destinationExtension?: string }>('/api/voice/route', { routeId, destination, flow: 'internal' });
+      await waitForVoiceConnection();
+      const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string; destinationName?: string; destinationExtension?: string; destination: string }>('/api/voice/route', { routeId, destination, targetExtension: extension, flow: 'internal' });
       if (startAttemptRef.current !== attempt) {
         await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed internal route', failure));
         return;
@@ -679,10 +690,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       const remoteName = reservation.destinationName || displayName;
       const remoteExtension = reservation.destinationExtension || extension;
       const call = await voipClient.newCall(
-        destination,
+        reservation.destination,
         reservation.callerName || profile?.full_name || 'Vocivo',
         reservation.callerExtension || profile?.extension,
-        outboundHeaders(destination, undefined, 'internal', routeId, reservation.routeToken, { name: remoteName, extension: remoteExtension }),
+        outboundHeaders(reservation.destination, undefined, 'internal', routeId, reservation.routeToken, { name: remoteName, extension: remoteExtension }),
       );
       if (startAttemptRef.current !== attempt) {
         await Promise.all([
@@ -860,6 +871,18 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       await call.answer();
       if (Platform.OS === 'android') await VoicePnBridge.hideIncomingCallNotification();
       attachCall(call);
+      const connectedAt = Date.now();
+      lifecycleRef.current.transition(call.callId, 'ACTIVE');
+      const meta = callMetaRef.current.get(call.callId) ?? {};
+      callMetaRef.current.set(call.callId, { ...meta, connectedAt });
+      durationRef.current = 0;
+      setDuration(0);
+      setActiveCall((current) => {
+        if (current?.id !== call.callId) return current;
+        const next = { ...current, phase: 'active' as const, connectedAt };
+        activeCallRef.current = next;
+        return next;
+      });
     } catch (answerError) {
       setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'ringing' } : current);
       setError(answerError instanceof Error ? answerError.message : 'The incoming call could not be answered.');

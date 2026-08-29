@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { colors } from '../theme';
@@ -6,9 +6,18 @@ import { networkPresentation } from '../lib/networkPresentation';
 
 export function NetworkStrength({ voiceReady }: { voiceReady: boolean }) {
   const netInfo = useNetInfo();
+  const [offlineConfirmed, setOfflineConfirmed] = useState(false);
+  useEffect(() => {
+    if (netInfo.isConnected !== false) {
+      setOfflineConfirmed(false);
+      return;
+    }
+    const timer = setTimeout(() => setOfflineConfirmed(true), 2500);
+    return () => clearTimeout(timer);
+  }, [netInfo.isConnected]);
   const state = useMemo(
-    () => networkPresentation(netInfo.type, netInfo.details as Record<string, unknown> | null, netInfo.isConnected, netInfo.isInternetReachable, voiceReady),
-    [netInfo.details, netInfo.isConnected, netInfo.isInternetReachable, netInfo.type, voiceReady],
+    () => networkPresentation(netInfo.type, netInfo.details as Record<string, unknown> | null, offlineConfirmed ? false : null, netInfo.isInternetReachable, voiceReady),
+    [netInfo.details, netInfo.isInternetReachable, netInfo.type, offlineConfirmed, voiceReady],
   );
   const ready = state.status === 'Voice ready';
 

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { waitUntil } from '@vercel/functions';
 import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
-import { ensureTelnyxSipUriCalling, findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
+import { findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
 import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState, primaryVoiceCallerId } from '../voice-control.js';
 import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
@@ -572,25 +572,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(200).json({ received: true });
         }
       }
+      const destinationPreparation = Promise.all([
+        reservation.flow === 'internal'
+          ? readBusinessVoiceConfig(reservation.organizationId).then((config) => config.companyName)
+          : Promise.resolve(''),
+        reservation.flow === 'internal' && reservation.destinationExtensionId
+          ? listExtensionSipUsernames(reservation.destinationExtensionId)
+          : Promise.resolve([]),
+        reservation.flow === 'internal' ? primaryVoiceCallerId() : Promise.resolve(reservation.callerId),
+      ]).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       await callAction(callControlId, 'answer', { command_id: `${eventId}-answer-client` });
-      await callAction(callControlId, 'playback_start', {
+      background('carrier ringback', callAction(callControlId, 'playback_start', {
         audio_url: enterpriseRingbackUrl(),
         loop: 'infinity',
         command_id: `${eventId}-ringback`,
-      }).catch((error) => console.warn('Vocivo could not start carrier ringback', publicError(error)));
+      }));
       let destinationCall;
       try {
-        const businessName = reservation.flow === 'internal'
-          ? (await readBusinessVoiceConfig(reservation.organizationId)).companyName
-          : '';
-        if (reservation.flow === 'internal') await ensureTelnyxSipUriCalling();
-        const sipUsers = reservation.flow === 'internal' && reservation.destinationExtensionId
-          ? await listExtensionSipUsernames(reservation.destinationExtensionId)
-          : [];
+        const prepared = await destinationPreparation;
+        if ('error' in prepared) throw prepared.error;
+        const [businessName, sipUsers, resolvedVoiceCallerId] = prepared.value;
         const destinations = sipUsers.map(extensionSipUri);
-        const dialFrom = reservation.flow === 'internal'
-          ? await primaryVoiceCallerId()
-          : reservation.callerId;
+        const dialFrom = resolvedVoiceCallerId;
         if (!dialFrom) throw new Error('The signed call route has no authorized caller identity.');
         destinationCall = await dialCall({
           to: destinations.length > 1 ? destinations : destinations[0] || destination,
@@ -731,7 +737,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             updatedAt: connectedAt,
           });
         }
-        background('bridged route state', updateVoiceRoute(state.routeId, { phase: 'connected', connectedAt }));
+        await updateVoiceRoute(state.routeId, { phase: 'connected', connectedAt });
         return res.status(200).json({ received: true });
       }
       const pair = await readOutboundCallPairByClient(callControlId)

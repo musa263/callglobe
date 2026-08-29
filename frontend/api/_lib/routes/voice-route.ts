@@ -11,7 +11,7 @@ import { isVoiceRouteId } from '../voice-route-id.js';
 import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
-import { parseInternalSipUser } from '../internal-sip.js';
+import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 
@@ -21,7 +21,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const routeId = typeof req.body?.routeId === 'string' ? req.body.routeId.trim() : '';
-    const destination = typeof req.body?.destination === 'string' ? req.body.destination.replace(/[\s()-]/g, '') : '';
+    let destination = typeof req.body?.destination === 'string' ? req.body.destination.replace(/[\s()-]/g, '') : '';
+    const targetExtension = typeof req.body?.targetExtension === 'string' ? req.body.targetExtension.replace(/\D/g, '').slice(0, 5) : '';
     const requestedFlow = req.body?.flow === 'internal' ? 'internal' : 'outbound';
     if (!isVoiceRouteId(routeId)) return res.status(400).json({ error: 'A valid call route is required.' });
     const config = await readPbxConfig();
@@ -39,16 +40,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (requestedFlow === 'internal') {
       const organization = config.organizations.find((item) => item.id === organizationId);
       const sipUser = organization ? parseInternalSipUser(destination) : null;
-      if (!sipUser || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
+      if ((!sipUser && !/^\d{2,5}$/.test(targetExtension)) || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
-      const [directory, source, profile] = await Promise.all([
+      const [directory, profile] = await Promise.all([
         listExtensions(organizationId),
-        getExtension(session.extensionId),
         readUserProfile(`vocivo-extension:${session.extensionId}`),
       ]);
-      const target = directory.find((item) => item.sipUsername === sipUser && item.status === 'active');
+      const source = directory.find((item) => item.id === session.extensionId);
+      const target = directory.find((item) => item.status === 'active' && (targetExtension ? item.extension === targetExtension : item.sipUsername === sipUser));
       if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
-      if (source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
+      if (!source || source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
+      destination = extensionSipUri(target.sipUsername);
       callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);
       callerPhotoUrl = profile?.photoUrl && /^https:\/\//i.test(profile.photoUrl) ? profile.photoUrl.slice(0, 500) : undefined;
       callerExtension = source.extension;
@@ -120,6 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerPhotoUrl: route.callerPhotoUrl,
       destinationName: route.destinationName,
       destinationExtension: route.destinationExtension,
+      destination: route.destination,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
