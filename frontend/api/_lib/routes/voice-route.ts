@@ -11,9 +11,10 @@ import { isVoiceRouteId } from '../voice-route-id.js';
 import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
+import { parseInternalSipUser } from '../internal-sip.js';
+import { organizationSipDomain } from '../voice-provider.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
-const internalSip = /^sip:([A-Za-z0-9_.-]+)@sip\.telnyx\.com$/i;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -36,16 +37,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let destinationExtension: string | undefined;
     let destinationExtensionId: string | undefined;
     if (requestedFlow === 'internal') {
-      const match = destination.match(internalSip);
       const organization = config.organizations.find((item) => item.id === organizationId);
-      if (!match || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
+      const sipUser = organization ? parseInternalSipUser(destination, organizationSipDomain(config, organizationId)) : null;
+      if (!sipUser || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
       const [directory, source, profile] = await Promise.all([
         listExtensions(organizationId),
         getExtension(session.extensionId),
         readUserProfile(`vocivo-extension:${session.extensionId}`),
       ]);
-      const target = directory.find((item) => item.sipUsername === match[1] && item.status === 'active');
+      const target = directory.find((item) => item.sipUsername === sipUser && item.status === 'active');
       if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
       if (source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
       callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);

@@ -10,13 +10,14 @@ type StoredExtensionDirectory = {
 };
 
 export type StoredExtensionCredential = {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   syncedAt: string;
   extension: ExtensionUser;
   sipUsername: string;
   sipPassword: string;
   provider?: 'telnyx' | 'freeswitch';
   sipDomain?: string;
+  carrierCredentialId?: string;
 };
 
 const directoryPath = 'vocivo/pbx/extensions/v1/directory.bin';
@@ -73,7 +74,7 @@ export async function readExtensionCredential(id: string) {
   if (!value) return null;
   try {
     const stored = decrypt<StoredExtensionCredential>(value);
-    return [1, 2].includes(stored.version) && stored.extension?.id === id
+    return [1, 2, 3].includes(stored.version) && stored.extension?.id === id
       ? { ...stored, provider: stored.provider || 'telnyx' }
       : null;
   } catch {
@@ -83,7 +84,7 @@ export async function readExtensionCredential(id: string) {
 
 export async function saveExtensionCredential(input: Omit<StoredExtensionCredential, 'version' | 'syncedAt'>) {
   const stored: StoredExtensionCredential = {
-    version: 2,
+    version: 3,
     syncedAt: new Date().toISOString(),
     ...input,
   };

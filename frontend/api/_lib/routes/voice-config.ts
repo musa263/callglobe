@@ -1,10 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { getExtensionCredentials } from '../pbx.js';
+import { getExtension, getExtensionCredentials } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
 import { sipWebSocketUrl, voiceIceServers, voiceProvider } from '../voice-provider.js';
+import { sessionOrganizationId } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -17,10 +18,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: 'Calling is not enabled for this account.' });
     }
     if (!session.extensionId) return res.status(403).json({ error: 'This administrator account does not have a calling extension.' });
-    const [credential, config] = await Promise.all([
-      getExtensionCredentials(session.extensionId),
-      readPbxConfig(),
-    ]);
+    const config = await readPbxConfig();
+    const extension = await getExtension(session.extensionId);
+    if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
+    const credential = await getExtensionCredentials(session.extensionId);
     const provider = voiceProvider(config);
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({

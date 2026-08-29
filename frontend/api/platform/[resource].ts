@@ -6,6 +6,7 @@ import { callAction, dialCall } from '../_lib/voice-control.js';
 import { telnyx, telnyxPstnConnectionId } from '../_lib/telnyx.js';
 import { assertCallerIdForOrganization } from '../_lib/phone-number-access.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
+import { organizationExtensionSipUri } from '../_lib/internal-sip.js';
 import { assignNumberToOrganization, numberOrganizationId } from '../_lib/tenancy.js';
 import { decodeVoiceState } from '../_lib/voice-control.js';
 import { get, storageHealth } from '../_lib/object-store.js';
@@ -75,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (resource === 'calls' && method === 'POST') {
       const requested = text(req.body?.to, 200);
       const internal = /^\d{2,5}$/.test(requested) ? await findExtension(requested, apiKey.organizationId) : null;
-      const to = internal ? `sip:${internal.sipUsername}@sip.telnyx.com` : requested;
+      const to = internal ? organizationExtensionSipUri(await readPbxConfig(), apiKey.organizationId, internal.sipUsername) : requested;
       if (!internal && !e164.test(to)) return res.status(400).json({ error: 'Destination must be an organization extension or E.164 number.' });
       const from = text(req.body?.from, 24) || requiredEnv('TELNYX_SMS_FROM');
       if (from && !e164.test(from)) return res.status(400).json({ error: 'Caller ID must use E.164 format.' });

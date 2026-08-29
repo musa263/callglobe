@@ -25,6 +25,8 @@ import { normalizeE164 } from '../tenancy.js';
 import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
+import { isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
+import { organizationSipDomain } from '../voice-provider.js';
 
 type VoiceEvent = {
   data?: {
@@ -58,7 +60,6 @@ type VoiceEvent = {
 
 type VoicePayload = NonNullable<NonNullable<VoiceEvent['data']>['payload']>;
 const e164 = /^\+[1-9]\d{6,14}$/;
-const internalSip = /^sip:[A-Za-z0-9._-]+@sip\.telnyx\.com$/i;
 function callerDisplay(value: string) {
   return value.replace(/[^A-Za-z0-9 _~!.+-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 128) || 'Vocivo';
 }
@@ -160,8 +161,9 @@ async function routeToAvailableAgent(input: {
 }) {
   const config = await readBusinessVoiceConfig(input.organizationId);
   const target = await resolveOrganizationDestination(input.organizationId, input.inboundNumber, input.department, input.preferMain);
+  const pbx = await readPbxConfig();
   const destination = target?.sipUsername
-    ? `sip:${target.sipUsername}@sip.telnyx.com`
+    ? organizationExtensionSipUri(pbx, input.organizationId, target.sipUsername)
     : input.organizationId === 'primary' ? requiredEnv('TELNYX_SIP_URI') : '';
   if (destination) {
     if (target) {
@@ -231,13 +233,13 @@ async function routeToExtension(input: {
     return;
   }
 
-  const destinations = [`sip:${input.extension.sipUsername}@sip.telnyx.com`];
+  const destinations = [organizationExtensionSipUri(basePbx, input.organizationId, input.extension.sipUsername)];
   const targetExtensionIds = [input.extension.id];
   let dialFrom: string | undefined;
   const simultaneous = profile?.simultaneousRing?.trim() || '';
   const simultaneousExtension = extensions.find((item) => item.extension === simultaneous && item.id !== input.extension.id && item.status === 'active' && item.sipUsername);
   if (simultaneousExtension) {
-    destinations.push(`sip:${simultaneousExtension.sipUsername}@sip.telnyx.com`);
+    destinations.push(organizationExtensionSipUri(basePbx, input.organizationId, simultaneousExtension.sipUsername));
     targetExtensionIds.push(simultaneousExtension.id);
   } else {
     const simultaneousNumber = normalizeE164(simultaneous);
@@ -505,7 +507,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Persistent state remains a migration fallback for app builds released before signed routes.
       const reservation = signedReservation?.routeId === routeId ? signedReservation : routeId ? await readVoiceRoute(routeId) : null;
       const effectiveCallerId = selectedCallerId || reservation?.callerId || (reservation?.flow === 'outbound' ? requiredEnv('TELNYX_SMS_FROM') : '');
-      if (!reservation || reservation.destination !== destination || reservation.flow !== parkedFlow || (reservation.callerId || '') !== effectiveCallerId || (!e164.test(destination) && !internalSip.test(destination))) {
+      const pbx = reservation ? await readPbxConfig() : null;
+      const organizationSipHost = reservation && pbx?.organizations.some((item) => item.id === reservation.organizationId)
+        ? organizationSipDomain(pbx, reservation.organizationId)
+        : undefined;
+      if (!reservation || reservation.destination !== destination || reservation.flow !== parkedFlow || (reservation.callerId || '') !== effectiveCallerId || (!e164.test(destination) && !isAllowedInternalSipDestination(destination, organizationSipHost))) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch(() => undefined);
         return res.status(200).json({ received: true });
       }
@@ -691,22 +697,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.enqueued' && state?.flow === 'queue_wait' && state.queueName && state.organizationId && state.targetExtensionIds?.length) {
       const queue = await readQueueCall(state.queueName);
       if (!queue || queue.status !== 'waiting') return res.status(200).json({ received: true });
-      const [config, extensions] = await Promise.all([readBusinessVoiceConfig(state.organizationId), listExtensions(state.organizationId)]);
+      const organizationId = state.organizationId;
+      const pbx = await readPbxConfig();
+      const [config, extensions] = await Promise.all([readBusinessVoiceConfig(organizationId), listExtensions(organizationId)]);
       const members = extensions.filter((extension) => state.targetExtensionIds?.includes(extension.id) && extension.status === 'active' && extension.sipUsername);
       if (!members.length) {
         await clearQueueCall(state.queueName);
         await callAction(callControlId, 'leave_queue', { command_id: `${eventId}-empty-queue` }).catch(() => undefined);
-        await routeUnavailable(callControlId, state.organizationId, eventId, state.callerNumber, state.callerName);
+        await routeUnavailable(callControlId, organizationId, eventId, state.callerNumber, state.callerName);
         return res.status(200).json({ received: true });
       }
       await saveQueueCall({ ...queue, status: 'dialing', updatedAt: new Date().toISOString() });
       await speakPrompt(callControlId, { payload: config.waitingMessage, voice: config.voice, command_id: `${eventId}-queue-waiting` }).catch(() => undefined);
       const agentCall = await dialCall({
-        to: members.map((member) => `sip:${member.sipUsername}@sip.telnyx.com`),
+        to: members.map((member) => organizationExtensionSipUri(pbx, organizationId, member.sipUsername)),
         from: state.callerNumber && e164.test(state.callerNumber) ? state.callerNumber : undefined,
         fromDisplayName: queue.kind === 'queue' ? 'Queued business call' : 'Business group call',
-        state: { flow: 'queue_agent', queueName: state.queueName, handlingId: state.handlingId, parentCallControlId: callControlId, organizationId: state.organizationId, targetExtensionIds: members.map((member) => member.id), callerNumber: state.callerNumber, callerName: state.callerName },
-        timeoutSeconds: queue.kind === 'queue' ? 45 : Math.min(120, Math.max(10, pbxForOrganization(await readPbxConfig(), state.organizationId).callHandling.ringGroups.find((item) => item.id === queue.handlingId)?.timeout || 25)),
+        state: { flow: 'queue_agent', queueName: state.queueName, handlingId: state.handlingId, parentCallControlId: callControlId, organizationId, targetExtensionIds: members.map((member) => member.id), callerNumber: state.callerNumber, callerName: state.callerName },
+        timeoutSeconds: queue.kind === 'queue' ? 45 : Math.min(120, Math.max(10, pbxForOrganization(pbx, organizationId).callHandling.ringGroups.find((item) => item.id === queue.handlingId)?.timeout || 25)),
         commandId: `${eventId}-queue-agents`,
       });
       const agentCallControlId = agentCall.data?.call_control_id;

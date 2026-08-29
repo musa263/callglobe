@@ -77,7 +77,7 @@ export function defaultPbxConfig(): PbxConfig {
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
     ai: { enabled: false, assistantId: '', name: 'Global Heritage Receptionist', greeting: 'Welcome to Global Heritage. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '102', transferEnabled: true, summariesEnabled: true },
     system: { recordingEnabled: false, retentionDays: 30, emergencyCallingEnabled: false },
-    platform: { controlPlane: 'vocivo', mediaPlane: 'vocivo', pbxEngine: 'freeswitch', pstnProvider: 'telnyx', sipDomain: 'sip.68.183.244.215.nip.io', websocketUrl: 'wss://sip-wss.68.183.244.215.nip.io', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
+    platform: { controlPlane: 'vocivo', mediaPlane: 'telnyx', pbxEngine: 'telnyx', pstnProvider: 'telnyx', sipDomain: 'sip.telnyx.com', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
     updatedAt: new Date().toISOString(),
   };
 }

@@ -55,11 +55,14 @@
           "contactsPermission": "Vocivo uses your contacts so you can quickly call or message people you choose."
         }
       ],
-      "./plugins/withVocivoVoip",
+      "./plugins/withTelnyxVoip",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#07111F"
+          "backgroundColor": "#07111F",
+          "image": "./assets/vocivo-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
         }
       ],
       "expo-audio",

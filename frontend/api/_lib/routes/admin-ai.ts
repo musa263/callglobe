@@ -6,6 +6,7 @@ import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice } from '../voice-catalog.js';
 import { findExtension } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
+import { organizationExtensionSipUri } from '../internal-sip.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -27,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tools.unshift({
         type: 'transfer',
         transfer: {
-          targets: [{ name: `${fallback.name}, extension ${fallback.extension}`, to: `sip:${fallback.sipUsername}@sip.telnyx.com` }],
+          targets: [{ name: `${fallback.name}, extension ${fallback.extension}`, to: organizationExtensionSipUri(current, organizationId, fallback.sipUsername) }],
           from: tenant.company.defaultCallerId || requiredEnv('TELNYX_SMS_FROM'),
         },
       });

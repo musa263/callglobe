@@ -7,6 +7,7 @@ import { getExtension, listExtensions } from '../pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { sessionOrganizationId } from '../tenancy.js';
 import { dialCall } from '../voice-control.js';
+import { organizationExtensionSipUri } from '../internal-sip.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 type ConferenceParticipant = { type: 'external'; number: string } | { type: 'extension'; extensionId: string };
@@ -56,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (participant.type === 'external') return { destination: participant.number, displayName: participant.number, internal: false };
       const colleague = directory.find((candidate) => candidate.id === participant.extensionId && candidate.status === 'active');
       if (!colleague || colleague.id === extension.id || !colleague.sipUsername) throw new Error('Choose an active colleague in your organization.');
-      return { destination: `sip:${colleague.sipUsername}@sip.telnyx.com`, displayName: colleague.name, internal: true, extension: colleague.extension };
+      return { destination: organizationExtensionSipUri(config, organizationId, colleague.sipUsername), displayName: colleague.name, internal: true, extension: colleague.extension };
     });
     const uniqueDestinations = new Set(resolved.map((participant) => participant.destination.toLowerCase()));
     if (uniqueDestinations.size !== resolved.length) return res.status(400).json({ error: 'Each conference participant can only be added once.' });
@@ -77,7 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internationalAllowed: profile?.permissions?.international !== false,
       }, participant.destination, callerId!);
     }
-    const hostDestination = `sip:${extension.sipUsername}@sip.telnyx.com`;
+    const hostDestination = organizationExtensionSipUri(config, organizationId, extension.sipUsername);
     const room = `vocivo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const result = await dialCall({
       to: hostDestination,
