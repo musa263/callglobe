@@ -22,6 +22,7 @@ let extensionRequest: Promise<ExtensionUser[]> | null = null;
 let carrierDirectoryCache: { expiresAt: number; value: ExtensionUser[] } | null = null;
 let carrierDirectoryRequest: Promise<ExtensionUser[]> | null = null;
 const credentialCache = new Map<string, { expiresAt: number; parsed: ExtensionUser; data: CredentialResource }>();
+let sipUriPreflight: { connectionId: string; expiresAt: number } | null = null;
 
 export type ExtensionUser = {
   id: string;
@@ -48,6 +49,32 @@ type CredentialResource = {
   sip_password?: string;
   created_at?: string;
 };
+
+type CredentialConnectionResource = {
+  id?: string;
+  sip_uri_calling_preference?: 'disabled' | 'internal' | 'unrestricted';
+};
+
+export async function ensureTelnyxSipUriCalling() {
+  const connectionId = requiredEnv('TELNYX_CONNECTION_ID');
+  if (sipUriPreflight?.connectionId === connectionId && sipUriPreflight.expiresAt > Date.now()) return;
+  const resourcePath = `/credential_connections/${encodeURIComponent(connectionId)}`;
+  const response = await telnyx(resourcePath);
+  const payload = await response.json() as { data?: CredentialConnectionResource };
+  let preference = payload.data?.sip_uri_calling_preference;
+  if (!['internal', 'unrestricted'].includes(preference || '')) {
+    const updateResponse = await telnyx(resourcePath, {
+      method: 'PATCH',
+      body: JSON.stringify({ sip_uri_calling_preference: 'internal' }),
+    });
+    const updatePayload = await updateResponse.json() as { data?: CredentialConnectionResource };
+    preference = updatePayload.data?.sip_uri_calling_preference;
+  }
+  if (!['internal', 'unrestricted'].includes(preference || '')) {
+    throw new Error('Telnyx SIP URI calling is not enabled for the configured credential connection.');
+  }
+  sipUriPreflight = { connectionId, expiresAt: Date.now() + 5 * 60_000 };
+}
 
 function clean(value: unknown, max: number) {
   return typeof value === 'string' ? value.replace(/[|\r\n]/g, ' ').trim().slice(0, max) : '';
@@ -164,6 +191,7 @@ async function extensionForCreate(input: Partial<ExtensionUser>) {
 }
 
 export async function createExtension(input: Partial<ExtensionUser>) {
+  await ensureTelnyxSipUriCalling();
   const allocated = await extensionForCreate(input);
   const value = validateExtensionInput({ ...input, organizationId: allocated.organizationId, role: allocated.accountType === 'individual' ? 'individual' : input.role }, allocated.extension);
   if (allocated.existing.some((item) => item.extension === value.extension)) throw new Error(`Extension ${value.extension} already exists.`);
@@ -245,6 +273,7 @@ export async function getExtension(id: string) {
 }
 
 export async function listExtensionSipUsernames(id: string) {
+  await ensureTelnyxSipUriCalling();
   const target = await getExtension(id);
   try {
     return extensionSipUsernames(target, await listCarrierExtensions());

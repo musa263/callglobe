@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { outboundCallControlIds, outboundPlaybackCallControlIds } from './outbound-cancel.js';
+import { isRetryableHangupError, outboundCallControlIds, outboundPlaybackCallControlIds } from './outbound-cancel.js';
+import { mergeOutboundCallPair } from './outbound-call-store.js';
+import { TelnyxApiError } from './telnyx.js';
 
 test('returns every unique call leg in a merged outbound pair', () => {
   assert.deepEqual(outboundCallControlIds({
@@ -36,4 +38,40 @@ test('stops ringback only on answered client legs', () => {
     status: 'conference',
     updatedAt: new Date(0).toISOString(),
   }), ['client-a', 'client-b']);
+});
+
+test('does not let a stale webhook replace the claimed answer or terminal state', () => {
+  const current = {
+    clientCallControlId: 'client-a',
+    destinationCallControlId: 'destination-a',
+    forkDestinationCallControlIds: ['destination-a', 'destination-b'],
+    selectedDestinationCallControlId: 'destination-a',
+    destination: 'sip:user@sip.telnyx.com',
+    status: 'direct' as const,
+    phase: 'ended' as const,
+    termination: {
+      'destination-b': { status: 'terminated' as const, attempts: 1, updatedAt: new Date(1).toISOString() },
+    },
+    version: 4,
+    updatedAt: new Date(1).toISOString(),
+  };
+  const merged = mergeOutboundCallPair(current, {
+    ...current,
+    phase: 'ringing',
+    selectedDestinationCallControlId: 'destination-b',
+    termination: {
+      'destination-b': { status: 'pending', attempts: 0, updatedAt: new Date(0).toISOString() },
+    },
+    updatedAt: new Date(2).toISOString(),
+  });
+  assert.equal(merged.phase, 'ended');
+  assert.equal(merged.selectedDestinationCallControlId, 'destination-a');
+  assert.equal(merged.termination?.['destination-b']?.status, 'terminated');
+  assert.equal(merged.version, 5);
+});
+
+test('retries only transient or conflicting Telnyx hangup failures', () => {
+  assert.equal(isRetryableHangupError(new TelnyxApiError(503, 'busy')), true);
+  assert.equal(isRetryableHangupError(new TelnyxApiError(409, 'not ready')), true);
+  assert.equal(isRetryableHangupError(new TelnyxApiError(400, 'invalid')), false);
 });

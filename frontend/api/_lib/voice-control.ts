@@ -63,12 +63,14 @@ export function dialCallLegs(response: DialCallResponse) {
     .filter((leg): leg is DialCallLeg => Boolean(leg?.call_control_id));
 }
 
-export async function dialCall(input: { to: string | string[]; state: VoiceState; from?: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
+export async function dialCall(input: { to: string | string[]; state: VoiceState; from: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
+  const from = input.from?.trim();
+  if (!from) throw new Error('An explicit server-resolved caller identity is required.');
   const response = await telnyx('/calls', {
     method: 'POST',
     body: JSON.stringify({
       connection_id: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
-      from: input.from || requiredEnv('TELNYX_SMS_FROM'),
+      from,
       to: input.to,
       from_display_name: input.fromDisplayName || 'Vocivo',
       ...(input.customHeaders?.length ? { custom_headers: input.customHeaders } : {}),

@@ -80,10 +80,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const hostDestination = organizationExtensionSipUri(config, organizationId, extension.sipUsername);
     const room = `vocivo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const conferenceFrom = callerId || hostDestination;
     const result = await dialCall({
       to: hostDestination,
-      from: callerId,
-      state: { flow: 'conference_host', room, conferenceParticipants: resolved, callerId, organizationId, sourceExtension: extension.extension, sourceName: extension.name },
+      from: conferenceFrom,
+      state: { flow: 'conference_host', room, conferenceParticipants: resolved, callerId: conferenceFrom, organizationId, sourceExtension: extension.extension, sourceName: extension.name },
       fromDisplayName: `Conference for ${extension.name}`,
     });
     return res.status(200).json({ room, host_call_id: dialCallLegs(result)[0]?.call_control_id, participants: resolved.length, internalParticipants: resolved.filter((participant) => participant.internal).length });

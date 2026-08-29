@@ -6,9 +6,16 @@ export type PutOptions = {
   contentType?: string;
   allowOverwrite?: boolean;
   addRandomSuffix?: boolean;
+  expectedEtag?: string | null;
 };
 
 export type PutEntry = { pathname: string; value: unknown; options?: PutOptions };
+
+export type ObjectGroupMutation<T> = {
+  puts?: PutEntry[];
+  deletes?: string[];
+  result: T;
+};
 
 type ListOptions = { prefix?: string; limit?: number; cursor?: string };
 type StoredRow = { pathname: string; body: Buffer; content_type: string; access: string; uploaded_at: Date; etag: string };
@@ -565,30 +572,50 @@ export async function putMany(entries: PutEntry[]) {
       access: options.access || 'private',
       etag: createHash('sha256').update(body).digest('hex'),
       allowOverwrite: options.allowOverwrite === true,
+      expectedEtag: options.expectedEtag,
     };
   }));
   return withDatabaseRetry(async (sql) => {
-    const results = [];
-    for (const item of prepared) {
-      const rows = item.allowOverwrite
-        ? await sql<StoredRow[]>`
+    await ensureTable(sql);
+    return sql.begin(async (transaction) => {
+      const results = [];
+      const lockPaths = [...new Set(prepared.map((item) => item.storedPath))].sort();
+      for (const lockPath of lockPaths) await transaction`select pg_advisory_xact_lock(hashtext(${lockPath}))`;
+      for (const item of prepared) {
+        const rows = item.expectedEtag === null
+          ? await transaction<StoredRow[]>`
+              insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
+              values (${item.storedPath}, ${item.body}, ${item.contentType}, ${item.access}, now(), ${item.etag})
+              on conflict (pathname) do nothing
+              returning pathname, content_type, access, uploaded_at, etag
+            `
+          : typeof item.expectedEtag === 'string'
+            ? await transaction<StoredRow[]>`
+                update vocivo_objects set body = ${item.body}, content_type = ${item.contentType},
+                  access = ${item.access}, uploaded_at = now(), etag = ${item.etag}
+                where pathname = ${item.storedPath} and etag = ${item.expectedEtag}
+                returning pathname, content_type, access, uploaded_at, etag
+              `
+            : item.allowOverwrite
+              ? await transaction<StoredRow[]>`
             insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
             values (${item.storedPath}, ${item.body}, ${item.contentType}, ${item.access}, now(), ${item.etag})
             on conflict (pathname) do update set body = excluded.body, content_type = excluded.content_type,
               access = excluded.access, uploaded_at = excluded.uploaded_at, etag = excluded.etag
             returning pathname, content_type, access, uploaded_at, etag
           `
-        : await sql<StoredRow[]>`
+              : await transaction<StoredRow[]>`
             insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
             values (${item.storedPath}, ${item.body}, ${item.contentType}, ${item.access}, now(), ${item.etag})
             on conflict (pathname) do nothing
             returning pathname, content_type, access, uploaded_at, etag
           `;
-      const row = rows[0];
-      if (!row) throw new Error('Stored object already exists.');
-      results.push(blobMetadata({ ...row, size: item.body.length }));
-    }
-    return results;
+        const row = rows[0];
+        if (!row) throw new Error(item.expectedEtag === undefined ? 'Stored object already exists.' : 'Stored object compare-and-swap failed.');
+        results.push(blobMetadata({ ...row, size: item.body.length }));
+      }
+      return results;
+    });
   });
 }
 
@@ -611,12 +638,69 @@ export async function readObjects(pathnames: string[]) {
 
 export async function updateObject(pathname: string, update: (current: Buffer) => Buffer | Promise<Buffer>) {
   return withDatabaseRetry(async (sql) => {
-    const rows = await sql<Array<{ body: Buffer }>>`select body from vocivo_objects where pathname = ${pathname} limit 1`;
-    if (!rows[0]?.body) return null;
-    const body = await update(Buffer.from(rows[0].body));
-    const etag = createHash('sha256').update(body).digest('hex');
-    await sql`update vocivo_objects set body = ${body}, uploaded_at = now(), etag = ${etag} where pathname = ${pathname}`;
-    return body;
+    await ensureTable(sql);
+    return sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${pathname}))`;
+      const currentRows = await transaction<Array<{ body: Buffer; etag: string }>>`
+        select body, etag from vocivo_objects where pathname = ${pathname} for update
+      `;
+      const current = currentRows[0];
+      if (!current) return null;
+      const body = await update(Buffer.from(current.body));
+      const etag = createHash('sha256').update(body).digest('hex');
+      const rows = await transaction<StoredRow[]>`
+        update vocivo_objects
+        set body = ${body}, uploaded_at = now(), etag = ${etag}
+        where pathname = ${pathname} and etag = ${current.etag}
+        returning pathname, content_type, access, uploaded_at, etag
+      `;
+      if (!rows[0]) throw new Error('Stored object changed during the transaction.');
+      return body;
+    });
+  });
+}
+
+export async function transactObjectGroup<T>(
+  lockKey: string,
+  readPathnames: string[],
+  update: (current: Map<string, { body: Buffer; etag: string }>) => ObjectGroupMutation<T> | Promise<ObjectGroupMutation<T>>,
+) {
+  if (!lockKey) throw new Error('Object transaction lock key is required.');
+  return withDatabaseRetry(async (sql) => {
+    await ensureTable(sql);
+    return sql.begin(async (transaction) => {
+      const paths = [...new Set(readPathnames.filter(Boolean))].sort();
+      const lockKeys = [...new Set([lockKey, ...paths])].sort();
+      for (const key of lockKeys) await transaction`select pg_advisory_xact_lock(hashtext(${key}))`;
+      const rows = paths.length
+        ? await transaction<Array<{ pathname: string; body: Buffer; etag: string }>>`
+            select pathname, body, etag from vocivo_objects where pathname in ${transaction(paths)} for update
+          `
+        : [];
+      const current = new Map(rows.map((row) => [row.pathname, { body: Buffer.from(row.body), etag: row.etag }]));
+      const mutation = await update(current);
+      const prepared = await Promise.all((mutation.puts || []).map(async ({ pathname, value, options = {} }) => {
+        const body = await bodyBuffer(value);
+        return {
+          pathname,
+          body,
+          contentType: options.contentType || 'application/octet-stream',
+          access: options.access || 'private',
+          etag: createHash('sha256').update(body).digest('hex'),
+        };
+      }));
+      for (const item of prepared) {
+        await transaction`
+          insert into vocivo_objects (pathname, body, content_type, access, uploaded_at, etag)
+          values (${item.pathname}, ${item.body}, ${item.contentType}, ${item.access}, now(), ${item.etag})
+          on conflict (pathname) do update set body = excluded.body, content_type = excluded.content_type,
+            access = excluded.access, uploaded_at = excluded.uploaded_at, etag = excluded.etag
+        `;
+      }
+      const deletes = [...new Set((mutation.deletes || []).filter((pathname) => !prepared.some((item) => item.pathname === pathname)))];
+      if (deletes.length) await transaction`delete from vocivo_objects where pathname in ${transaction(deletes)}`;
+      return mutation.result;
+    });
   });
 }
 

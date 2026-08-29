@@ -32,6 +32,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let callerPhotoUrl: string | undefined;
     let callerExtension: string | undefined;
     let sourceExtensionId: string | undefined;
+    let callerSipUsername: string | undefined;
     let destinationName: string | undefined;
     let destinationExtension: string | undefined;
     let destinationExtensionId: string | undefined;
@@ -52,6 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerPhotoUrl = profile?.photoUrl && /^https:\/\//i.test(profile.photoUrl) ? profile.photoUrl.slice(0, 500) : undefined;
       callerExtension = source.extension;
       sourceExtensionId = source.id;
+      callerSipUsername = source.sipUsername;
       destinationName = target.name;
       destinationExtension = target.extension;
       destinationExtensionId = target.id;
@@ -84,6 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerPhotoUrl,
       callerExtension,
       sourceExtensionId,
+      callerSipUsername,
       destinationName,
       destinationExtension,
       destinationExtensionId,
@@ -102,6 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerPhotoUrl: route.callerPhotoUrl,
       callerExtension: route.callerExtension,
       sourceExtensionId: route.sourceExtensionId,
+      callerSipUsername: route.callerSipUsername,
       destinationName: route.destinationName,
       destinationExtension: route.destinationExtension,
       destinationExtensionId: route.destinationExtensionId,

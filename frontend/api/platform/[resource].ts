@@ -78,8 +78,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const internal = /^\d{2,5}$/.test(requested) ? await findExtension(requested, apiKey.organizationId) : null;
       const to = internal ? organizationExtensionSipUri(await readPbxConfig(), apiKey.organizationId, internal.sipUsername) : requested;
       if (!internal && !e164.test(to)) return res.status(400).json({ error: 'Destination must be an organization extension or E.164 number.' });
-      const from = text(req.body?.from, 24) || requiredEnv('TELNYX_SMS_FROM');
-      if (from && !e164.test(from)) return res.status(400).json({ error: 'Caller ID must use E.164 format.' });
+      const from = text(req.body?.from, 24);
+      if (!from || !e164.test(from)) return res.status(400).json({ error: 'An explicit caller ID in E.164 format is required.' });
       await assertCallerIdForOrganization(from, apiKey.organizationId);
       const result = await dialCall({ to, from, fromDisplayName: text(req.body?.displayName, 80) || 'Vocivo API', state: { flow: 'api_outbound', organizationId: apiKey.organizationId }, commandId: text(req.body?.commandId, 80) || crypto.randomUUID(), timeoutSeconds: Number(req.body?.timeoutSeconds) || 45 });
       return res.status(201).json({ data: { ...result.data, destination: requested, internal: Boolean(internal) } });

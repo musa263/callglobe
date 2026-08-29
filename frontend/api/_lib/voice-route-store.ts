@@ -13,6 +13,7 @@ export type ReservedVoiceRoute = {
   callerPhotoUrl?: string;
   callerExtension?: string;
   sourceExtensionId?: string;
+  callerSipUsername?: string;
   destinationName?: string;
   destinationExtension?: string;
   destinationExtensionId?: string;
@@ -22,6 +23,7 @@ export type ReservedVoiceRoute = {
   connectedAt?: string;
   createdAt: string;
   expiresAt: string;
+  revision?: number;
 };
 
 function key() { return createHash('sha256').update(`${requiredEnv('AUTH_SECRET')}:voice-routes`).digest(); }
@@ -48,8 +50,9 @@ export async function readVoiceRoute(routeId: string) {
 }
 
 export async function saveVoiceRoute(route: ReservedVoiceRoute) {
-  await put(pathname(route.routeId), encrypt(route), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
-  return route;
+  const normalized = { ...route, revision: route.revision || 1 };
+  await put(pathname(route.routeId), encrypt(normalized), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: false });
+  return normalized;
 }
 
 export async function updateVoiceRoute(routeId: string, patch: Partial<ReservedVoiceRoute>): Promise<ReservedVoiceRoute | null> {
@@ -63,7 +66,7 @@ export async function updateVoiceRoute(routeId: string, patch: Partial<ReservedV
     const nextPatch = (terminal || regresses) && patch.phase && patch.phase !== current.phase
       ? { ...patch, phase: current.phase }
       : patch;
-    updated = { ...current, ...nextPatch, routeId: current.routeId };
+    updated = { ...current, ...nextPatch, routeId: current.routeId, revision: (current.revision || 0) + 1 };
     return encrypt(updated);
   });
   return updated;
