@@ -27,6 +27,8 @@ import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js
 import { accessForOrganization } from '../saas-access.js';
 import { activeOrganizationExtensionTargets, extensionSipUri, isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
+import { claimReplayKey, releaseReplayKey } from '../object-store.js';
+import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools, inboundAiCommandId, inboundAiRoutingKey } from '../ai-transfer.js';
 
 type VoiceEvent = {
   data?: {
@@ -993,6 +995,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (isInboundAnswered) {
       const organizationId = state?.organizationId || await organizationForNumber(payload?.to || '');
+      if (!organizationId) {
+        await quarantineSecurityEvent({
+          source: 'telnyx-voice',
+          reason: 'unresolved_inbound_answer_tenant',
+          eventId,
+          details: { callControlId, from: payload?.from || '', to: payload?.to || '' },
+        });
+        return res.status(200).json({ received: true, quarantined: true });
+      }
+      const routingKey = inboundAiRoutingKey(callControlId);
+      const claimed = await claimReplayKey(routingKey, new Date(Date.now() + 4 * 60 * 60 * 1000));
+      if (!claimed) return res.status(200).json({ received: true, ignored: 'duplicate_inbound_answer' });
+      try {
       const inboundNumber = state?.inboundNumber || payload?.to || '';
       const callerNumber = state?.callerNumber || payload?.from;
       const callerName = state?.callerName || payload?.caller_id_name;
@@ -1017,7 +1032,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       if (organizationPbx.ai.enabled && organizationPbx.ai.assistantId) {
         try {
-          await callAction(callControlId, 'ai_assistant_start', { assistant: { id: organizationPbx.ai.assistantId }, command_id: `${eventId}-ai` });
+          const extensions = await listExtensions(organizationId);
+          const targets = activeAiTransferTargets(pbx, organizationId, extensions);
+          const assignedInboundNumber = normalizeE164(inboundNumber);
+          const configuredCallerId = normalizeE164(organizationPbx.company.defaultCallerId);
+          const transferFrom = e164.test(assignedInboundNumber)
+            ? assignedInboundNumber
+            : e164.test(configuredCallerId)
+              ? configuredCallerId
+              : await primaryVoiceCallerId();
+          await callAction(callControlId, 'ai_assistant_start', {
+            assistant: {
+              id: organizationPbx.ai.assistantId,
+              instructions: aiAssistantInstructions(organizationPbx.ai, targets),
+              tools: aiAssistantTools(organizationPbx.ai.transferEnabled, targets, transferFrom),
+            },
+            command_id: inboundAiCommandId(callControlId),
+          });
           return res.status(200).json({ received: true });
         } catch (aiError) {
           console.error('Vocivo AI receptionist could not start; using configured voice fallback', publicError(aiError));
@@ -1043,6 +1074,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           client_state: encodeVoiceState({ flow: 'ivr', callerNumber, callerName, organizationId, inboundNumber }),
           command_id: `${eventId}-ivr`,
         });
+      }
+      } catch (routingError) {
+        await releaseReplayKey(routingKey).catch((releaseError) => logWebhookFailure('release failed inbound routing claim', releaseError));
+        throw routingError;
       }
     }
 

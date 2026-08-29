@@ -857,6 +857,19 @@ export async function claimReplayKey(replayKey: string, expiresAt: Date) {
   });
 }
 
+export async function releaseReplayKey(replayKey: string) {
+  if (!/^[a-z0-9:_-]{16,200}$/i.test(replayKey)) throw new Error('Invalid replay key.');
+  return withDatabaseRetry(async (sql) => {
+    await ensureReplayTable(sql);
+    const rows = await sql<Array<{ replay_key: string }>>`
+      delete from vocivo_replay_ledger
+      where replay_key = ${replayKey}
+      returning replay_key
+    `;
+    return rows.length === 1;
+  });
+}
+
 export async function storageHealth() {
   if (storageHealthCache && storageHealthCache.expiresAt > Date.now()) return storageHealthCache.value;
   if (storageHealthRequest) return storageHealthRequest;
