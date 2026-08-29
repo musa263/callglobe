@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { telnyx, telnyxPstnConnectionPath } from '../telnyx.js';
+import { telnyx, telnyxCredentialConnectionPath } from '../telnyx.js';
 import { deleteTrunkPolicy, normalizeTrunkPolicy, readTrunkPolicies, saveTrunkPolicy, type TrunkPolicy } from '../trunk-policy-store.js';
 import { requireFeature } from '../saas-access.js';
 
@@ -31,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await requireFeature(access.session, 'sipTrunks');
     if (req.method === 'GET') {
       const [connectionResponse, uacResponse, policies] = await Promise.all([
-        access.superadmin ? telnyx(telnyxPstnConnectionPath()) : Promise.resolve(null),
+        access.superadmin ? telnyx(telnyxCredentialConnectionPath()) : Promise.resolve(null),
         telnyx('/uac_connections?page[size]=100'),
         readTrunkPolicies(),
       ]);

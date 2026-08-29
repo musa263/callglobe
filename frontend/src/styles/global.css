@@ -110,6 +110,8 @@ audio { display: none; }
 .keypad strong { font-size:21px; line-height:1; }
 .keypad small { min-height:9px; margin-top:4px; color:#87918c; font-size:8px; font-weight:700; letter-spacing:.8px; }
 .call-button { width:100%; height:55px; display:flex; align-items:center; justify-content:center; gap:10px; border:0; border-radius:6px; color:white; background:var(--green); font-weight:750; box-shadow:0 10px 24px rgba(23,107,186,.18); }
+.call-button:not(:disabled):active { transform:translateY(1px); box-shadow:0 5px 14px rgba(23,107,186,.2); }
+.call-button.starting { opacity:.8; }
 .inline-error { margin:0 0 12px; }
 .route-warning { margin:-8px 0 15px; padding:12px; display:grid; grid-template-columns:22px 1fr auto; align-items:center; gap:9px; border:1px solid #ead49e; border-radius:6px; color:#674b18; background:#fff7df; }
 .route-warning>svg { align-self:start; margin-top:2px; }

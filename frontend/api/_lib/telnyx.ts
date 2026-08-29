@@ -8,6 +8,10 @@ export function telnyxPstnConnectionPath() {
   return `/call_control_applications/${encodeURIComponent(requiredEnv('TELNYX_CALL_CONTROL_APP_ID'))}`;
 }
 
+export function telnyxCredentialConnectionPath() {
+  return `/credential_connections/${encodeURIComponent(requiredEnv('TELNYX_CONNECTION_ID'))}`;
+}
+
 export class TelnyxApiError extends Error {
   status: number;
   code?: string;

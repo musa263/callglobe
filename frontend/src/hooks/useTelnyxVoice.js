@@ -56,6 +56,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const heldCallRef = useRef(null);
   const conferenceRef = useRef(null);
   const callActionBusyRef = useRef(false);
+  const callSetupGenerationRef = useRef(0);
   const [ready, setReady] = useState(false);
   const [statusLabel, setStatusLabel] = useState('Connecting...');
   const [error, setError] = useState('');
@@ -72,6 +73,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const [remoteIdentity, setRemoteIdentity] = useState({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [loginGeneration, setLoginGeneration] = useState(0);
+  const [callStarting, setCallStarting] = useState(false);
 
   const resumeAudio = useCallback(async () => {
     const media = document.getElementById('remoteMedia');
@@ -143,6 +145,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   }, [enabled, token]);
 
   const disconnect = useCallback(() => {
+    callSetupGenerationRef.current += 1;
+    callActionBusyRef.current = false;
     if (tokenRefreshRef.current) {
       clearTimeout(tokenRefreshRef.current);
       tokenRefreshRef.current = null;
@@ -172,6 +176,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     setConference(null);
     setState(null);
     setRoutePhase(null);
+    setCallStarting(false);
   }, [stopIncomingRingtone, stopRingback]);
 
   useEffect(() => {
@@ -391,7 +396,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         lastRouteError = routeError;
         if (attempt === 9 || attempt === 39) reportWebVoiceError('poll extension route status', routeError);
       }
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      await new Promise((resolve) => setTimeout(resolve, attempt < 25 ? 200 : 500));
     }
     if (routePollRef.current === generation) {
       stopRingback();
@@ -401,12 +406,23 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   }, [resumeAudio, stopRingback]);
 
   const startCall = useCallback(async (destinationNumber, callerNumber) => {
+    if (callActionBusyRef.current) throw new Error('A call is already being started.');
+    callActionBusyRef.current = true;
+    setCallStarting(true);
     setError('');
     setDialedNumber(destinationNumber);
+    setRemoteIdentity({ name: 'Outbound call', number: destinationNumber, internal: false, photoUrl: '' });
+    setRoutePhase('requesting');
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
+    const setupGeneration = ++callSetupGenerationRef.current;
+    routeIdRef.current = routeId;
     startRingback();
     try {
       const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination: destinationNumber, callerId: callerNumber, flow: 'outbound' } });
+      if (callSetupGenerationRef.current !== setupGeneration) {
+        api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel superseded outbound route', failure));
+        return;
+      }
       const newCall = clientRef.current?.newCall({
         destinationNumber,
         callerNumber: reservation.callerId,
@@ -433,18 +449,40 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       followRoute(routeId);
     } catch (callError) {
       stopRingback();
+      if (routeIdRef.current === routeId) routeIdRef.current = null;
+      setRoutePhase(null);
+      api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel failed outbound route', failure));
       setError(callError.message || 'The call could not be started. Check microphone permission.');
       throw callError;
+    } finally {
+      callActionBusyRef.current = false;
+      setCallStarting(false);
     }
   }, [followRoute, identity.name, startRingback, stopRingback]);
 
   const startInternalCall = useCallback(async (sipUsername, extension, displayName) => {
-    const destination = `sip:${sipUsername}@sip.telnyx.com`;
+    if (callActionBusyRef.current) throw new Error('A call is already being started.');
+    callActionBusyRef.current = true;
+    setCallStarting(true);
+    const requestedDestination = sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '';
     setDialedNumber(extension);
+    setError('');
+    setRemoteIdentity({ name: displayName || `Extension ${extension}`, number: `Extension ${extension}`, internal: true, photoUrl: '' });
+    setRoutePhase('requesting');
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
+    const setupGeneration = ++callSetupGenerationRef.current;
+    routeIdRef.current = routeId;
     startRingback();
     try {
-      const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination, flow: 'internal' } });
+      const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination: requestedDestination, targetExtension: extension, flow: 'internal' } });
+      if (callSetupGenerationRef.current !== setupGeneration) {
+        api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel superseded internal route', failure));
+        return;
+      }
+      const destination = reservation.destination;
+      const resolvedName = reservation.destinationName || displayName || `Extension ${extension}`;
+      const resolvedExtension = reservation.destinationExtension || extension;
+      if (!destination) throw new Error('The extension route did not return a destination.');
       const newCall = clientRef.current?.newCall({
         destinationNumber: destination,
         callerName: reservation.callerName || identity.name || 'Vocivo',
@@ -454,8 +492,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           { name: 'X-Vocivo-Destination', value: destination },
           { name: 'X-Vocivo-Route-ID', value: routeId },
           { name: 'X-Vocivo-Route-Token', value: reservation.routeToken },
-          { name: 'X-Vocivo-Destination-Name', value: reservation.destinationName || displayName },
-          { name: 'X-Vocivo-Destination-Extension', value: reservation.destinationExtension || extension },
+          { name: 'X-Vocivo-Destination-Name', value: resolvedName },
+          { name: 'X-Vocivo-Destination-Extension', value: resolvedExtension },
         ],
         remoteElement: 'remoteMedia',
         ...(iceServersRef.current ? { iceServers: iceServersRef.current } : {}),
@@ -465,15 +503,21 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       if (!newCall) throw new Error('The web phone is not ready yet.');
       callRef.current = newCall;
       incomingCallRef.current = null;
-      callIdentityRef.current.set(newCall.id || newCall.callId, { name: displayName, number: `Extension ${extension}`, internal: true });
+      callIdentityRef.current.set(newCall.id || newCall.callId, { name: resolvedName, number: `Extension ${resolvedExtension}`, internal: true });
       setCall(newCall);
-      setRemoteIdentity({ name: displayName, number: `Extension ${extension}`, internal: true, photoUrl: '' });
+      setRemoteIdentity({ name: resolvedName, number: `Extension ${resolvedExtension}`, internal: true, photoUrl: '' });
       setState(String(newCall.state || 'requesting').toLowerCase());
       followRoute(routeId);
     } catch (callError) {
       stopRingback();
+      if (routeIdRef.current === routeId) routeIdRef.current = null;
+      setRoutePhase(null);
+      api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel failed internal route', failure));
       setError(callError.message || 'The extension call could not be started.');
       throw callError;
+    } finally {
+      callActionBusyRef.current = false;
+      setCallStarting(false);
     }
   }, [followRoute, identity.extension, identity.name, startRingback, stopRingback]);
 
@@ -514,6 +558,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     }
   }, [incomingCall, stopIncomingRingtone]);
   const hangup = useCallback(() => {
+    callSetupGenerationRef.current += 1;
+    callActionBusyRef.current = false;
+    setCallStarting(false);
     const routeId = routeIdRef.current;
     const current = callRef.current;
     const held = heldCallRef.current;
@@ -663,9 +710,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const sendDtmf = useCallback((digit) => callRef.current?.dtmf?.(digit), []);
 
   return {
-    ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state: routePhase === 'connected' ? 'active' : routePhase || state, muted, dialedNumber, endedCall,
+    ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state: routePhase === 'connected' ? 'active' : routePhase || state, muted, dialedNumber, endedCall, callStarting,
     connected: routePhase ? routePhase === 'connected' : state === 'active',
-    active: (routePhase ? ['ringing', 'connected'].includes(routePhase) : ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state)) && !incomingCall,
+    active: (routePhase ? ['requesting', 'ringing', 'connected'].includes(routePhase) : ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state)) && !incomingCall,
     notificationPermission, enableBrowserAlerts, audioBlocked, resumeAudio,
     startCall, startInternalCall, startSecondCall, startSecondInternalCall, swapCalls, mergeCalls, removeConferenceParticipant, transferCall, sendDtmf, answer, decline, hangup, toggleMute, toggleHold, disconnect,
   };

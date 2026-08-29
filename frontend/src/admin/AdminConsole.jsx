@@ -39,9 +39,16 @@ function Empty({ icon: Icon, title, copy }) { return <div className="empty"><Ico
 function Dashboard({ overview, extensions, config, events, setSection, customer }) {
   const metrics = overview?.metrics || {};
   const organization = config.organizations.find((item) => item.id === config.activeOrganizationId) || config.organizations[0];
+  const missingPushPlatforms = [
+    !overview?.connection?.iosPushConfigured && 'iOS PushKit',
+    !overview?.connection?.androidPushConfigured && 'Android FCM',
+  ].filter(Boolean);
+  const platformReadiness = overview?.connection ? [
+    ['Credential connection', overview.connection.active, overview.connection.name || 'Vocivo Mobile'],
+    ['Mobile incoming push', overview.connection.pushConfigured, overview.connection.pushConfigured ? 'iOS and Android configured' : `${missingPushPlatforms.join(' and ') || 'Mobile push'} not assigned in Telnyx`],
+  ] : [];
   const readiness = [
-    ['Credential connection', overview?.connection?.active, overview?.connection?.name || 'Vocivo Mobile'],
-    ['Mobile incoming push', overview?.connection?.pushConfigured, overview?.connection?.pushConfigured ? 'Configured' : 'Apple VoIP certificate required'],
+    ...platformReadiness,
     ['AI receptionist', config.ai.enabled && config.ai.assistantId, config.ai.enabled ? (config.ai.assistantId ? 'Active' : 'Needs synchronization') : 'Disabled'],
     [`Extension range ${organization?.extensionStart || ''}-${organization?.extensionEnd || ''}`, organization?.internalCallingEnabled, `${extensions.length} of ${organization ? organization.extensionEnd - organization.extensionStart + 1 : 0} slots assigned`],
   ];

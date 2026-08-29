@@ -3,7 +3,7 @@ import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { listExtensions } from '../pbx.js';
-import { telnyx, telnyxPstnConnectionPath } from '../telnyx.js';
+import { telnyx, telnyxCredentialConnectionPath } from '../telnyx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 
 async function data(path: string) {
@@ -21,7 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [balance, numbers, connection, extensions, business] = await Promise.all([
       access.superadmin ? data('/balance') as Promise<{ balance?: string; currency?: string }> : Promise.resolve(null),
       data('/phone_numbers?page[size]=250&filter[status]=active') as Promise<Array<{ id: string; phone_number: string; status?: string }>>,
-      access.superadmin ? data(telnyxPstnConnectionPath()) as Promise<{ active?: boolean; registration_status?: string; connection_name?: string; ios_push_credential_id?: string | null; record_type?: string }> : Promise.resolve(null),
+      access.superadmin ? data(telnyxCredentialConnectionPath()) as Promise<{ active?: boolean; registration_status?: string; connection_name?: string; ios_push_credential_id?: string | null; android_push_credential_id?: string | null; record_type?: string }> : Promise.resolve(null),
       listExtensions(organizationId),
       readBusinessVoiceConfig(organizationId),
     ]);
@@ -34,7 +34,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         activeExtensions: extensions.filter((item) => item.status === 'active').length,
       },
       phoneNumbers: Array.isArray(numbers) ? numbers.filter((item) => config.numberAssignments[item.phone_number]?.organizationId === organizationId).map(({ id, phone_number, status }) => ({ id, phone_number, status })) : [],
-      connection: access.superadmin ? { name: connection?.connection_name || 'Vocivo Dedicated PBX', active: Boolean(connection?.active), registrationStatus: connection?.record_type === 'ip_connection' ? 'IP authenticated' : connection?.registration_status || 'Unknown', pushConfigured: Boolean(connection?.ios_push_credential_id) } : null,
+      connection: access.superadmin ? {
+        name: connection?.connection_name || 'Vocivo Mobile',
+        active: Boolean(connection?.active),
+        registrationStatus: connection?.registration_status || 'Managed WebRTC',
+        iosPushConfigured: Boolean(connection?.ios_push_credential_id),
+        androidPushConfigured: Boolean(connection?.android_push_credential_id),
+        pushConfigured: Boolean(connection?.ios_push_credential_id && connection?.android_push_credential_id),
+      } : null,
       business,
     });
   } catch (error) {

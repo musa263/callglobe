@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { TelnyxApiError, telnyx, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
+import { TelnyxApiError, telnyx, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.TELNYX_API_KEY;
@@ -29,6 +29,7 @@ test('always routes managed PSTN calls through the Telnyx Call Control applicati
   process.env.TELNYX_CONNECTION_ID = 'legacy-credential';
   assert.equal(telnyxPstnConnectionId(), 'managed-call-control');
   assert.equal(telnyxPstnConnectionPath(), '/call_control_applications/managed-call-control');
+  assert.equal(telnyxCredentialConnectionPath(), '/credential_connections/legacy-credential');
 });
 
 test('retries one transient Telnyx GET failure', async () => {
