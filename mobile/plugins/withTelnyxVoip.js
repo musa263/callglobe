@@ -122,6 +122,9 @@ function patchTelnyxAndroidSdk(projectRoot) {
   fs.writeFileSync(activityPath, activity);
 
   let bridge = fs.readFileSync(bridgePath, 'utf8');
+  if (!bridge.includes('com.google.firebase.messaging.FirebaseMessaging')) {
+    bridge = bridge.replace('import android.content.Context', 'import android.content.Context\nimport com.google.firebase.messaging.FirebaseMessaging');
+  }
   if (!bridge.includes('fun setVocivoVoiceSignedIn')) {
     bridge = bridge.replace(
       '    @ReactMethod\n    fun setIncomingCallRingtone',
@@ -147,6 +150,29 @@ function patchTelnyxAndroidSdk(projectRoot) {
 
     @ReactMethod
     fun setIncomingCallRingtone`
+    );
+  }
+  if (!bridge.includes('fun getFirebaseToken')) {
+    bridge = bridge.replace(
+      '    @ReactMethod\n    fun setVocivoVoiceSignedIn',
+      `    @ReactMethod
+    fun getFirebaseToken(promise: Promise) {
+        val preferences = reactApplicationContext.getSharedPreferences("vocivo_push", Context.MODE_PRIVATE)
+        val stored = preferences.getString("fcm_token", null)
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (!task.isSuccessful) {
+                if (!stored.isNullOrBlank()) promise.resolve(stored)
+                else promise.reject("GET_FCM_TOKEN_ERROR", task.exception?.message, task.exception)
+                return@addOnCompleteListener
+            }
+            val token = task.result
+            preferences.edit().putString("fcm_token", token).apply()
+            promise.resolve(token)
+        }
+    }
+
+    @ReactMethod
+    fun setVocivoVoiceSignedIn`
     );
   }
   fs.writeFileSync(bridgePath, bridge);
@@ -283,7 +309,7 @@ function withTelnyxAndroidComponents(config) {
     const packagePath = packageName.replaceAll('.', path.sep);
     const sourceRoot = path.join(appConfig.modRequest.platformProjectRoot, 'app', 'src', 'main', 'java', packagePath);
     fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.writeFileSync(path.join(sourceRoot, 'AppFirebaseMessagingService.kt'), `package ${packageName}\n\nimport android.content.Context\nimport com.google.firebase.messaging.RemoteMessage\nimport com.telnyx.react_voice_commons.TelnyxFirebaseMessagingService\n\nclass AppFirebaseMessagingService : TelnyxFirebaseMessagingService() {\n    override fun onMessageReceived(remoteMessage: RemoteMessage) {\n        val signedIn = getSharedPreferences("vocivo_auth", Context.MODE_PRIVATE)\n            .getBoolean("voice_signed_in", false)\n        if (!signedIn) return\n        super.onMessageReceived(remoteMessage)\n    }\n}\n`);
+    fs.writeFileSync(path.join(sourceRoot, 'AppFirebaseMessagingService.kt'), `package ${packageName}\n\nimport android.content.Context\nimport com.google.firebase.messaging.RemoteMessage\nimport com.telnyx.react_voice_commons.TelnyxFirebaseMessagingService\n\nclass AppFirebaseMessagingService : TelnyxFirebaseMessagingService() {\n    override fun onMessageReceived(remoteMessage: RemoteMessage) {\n        val signedIn = getSharedPreferences("vocivo_auth", Context.MODE_PRIVATE)\n            .getBoolean("voice_signed_in", false)\n        if (!signedIn) return\n        super.onMessageReceived(remoteMessage)\n    }\n\n    override fun handleTokenRefresh(token: String) {\n        super.handleTokenRefresh(token)\n        getSharedPreferences("vocivo_push", Context.MODE_PRIVATE)\n            .edit()\n            .putString("fcm_token", token)\n            .apply()\n    }\n}\n`);
     fs.writeFileSync(path.join(sourceRoot, 'AppNotificationActionReceiver.kt'), `package ${packageName}\n\nimport com.telnyx.react_voice_commons.TelnyxNotificationActionReceiver\n\nclass AppNotificationActionReceiver : TelnyxNotificationActionReceiver()\n`);
     return appConfig;
   }]);

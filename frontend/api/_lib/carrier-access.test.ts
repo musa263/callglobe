@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSession, createTenantAdminSession, requireOwner } from './auth.js';
+import { createExtensionSession, createSession, createTenantAdminSession, requireOwner, requireSession } from './auth.js';
 
 test('platform carrier credentials reject a company extension session', async () => {
   const previous = process.env.AUTH_SECRET;
@@ -23,6 +23,23 @@ test('platform carrier credentials reject a company extension session', async ()
     });
     await requireOwner({ headers: { authorization: `Bearer ${owner}` } } as never);
     await assert.rejects(() => requireOwner({ headers: { authorization: `Bearer ${employee}` } } as never), /Forbidden/);
+  } finally {
+    if (previous === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = previous;
+  }
+});
+
+test('extension sessions without an organization claim fail before tenant lookup', async () => {
+  const previous = process.env.AUTH_SECRET;
+  process.env.AUTH_SECRET = 'carrier-access-test-secret-that-is-long-enough';
+  try {
+    const token = await createExtensionSession({
+      id: 'extension-a', email: 'user@company.test', name: 'User', role: 'user',
+      extension: '2000', organizationId: '', accountType: 'business',
+    });
+    await assert.rejects(
+      () => requireSession({ headers: { authorization: `Bearer ${token}` } } as never),
+      /Unauthorized/,
+    );
   } finally {
     if (previous === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = previous;
   }

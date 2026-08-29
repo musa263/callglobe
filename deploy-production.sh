@@ -1,152 +1,70 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PBX_HOST=${PBX_HOST:-68.183.244.215}
-PBX_USER=${PBX_USER:-root}
-PBX_REPOSITORY=${PBX_REPOSITORY:-https://github.com/musa263/vocivo.git}
-PBX_BRANCH=${PBX_BRANCH:-main}
-PBX_REPO_PATH=${PBX_REPO_PATH:-/opt/vocivo}
-PBX_LEGACY_PATH=${PBX_LEGACY_PATH:-/opt/vocivo-pbx}
-HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS:-420}
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-local_pbx="$script_dir/services/pbx"
+root_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+frontend_dir="$root_dir/frontend"
+mobile_dir="$root_dir/mobile"
+deploy_branch=${DEPLOY_BRANCH:-main}
+deploy_environment=${DEPLOY_ENVIRONMENT:-production}
+run_mobile_checks=${RUN_MOBILE_CHECKS:-true}
 
-case "$PBX_HOST" in ''|*[!A-Za-z0-9.:-]*) echo "Invalid PBX_HOST" >&2; exit 2;; esac
-case "$PBX_USER" in ''|*[!A-Za-z0-9._-]*) echo "Invalid PBX_USER" >&2; exit 2;; esac
-case "$PBX_BRANCH" in ''|*[!A-Za-z0-9._/-]*) echo "Invalid PBX_BRANCH" >&2; exit 2;; esac
-case "$PBX_REPO_PATH" in /*) ;; *) echo "PBX_REPO_PATH must be absolute" >&2; exit 2;; esac
-
-target="$PBX_USER@$PBX_HOST"
-
-if [ -n "$(git -C "$script_dir" status --short --untracked-files=no)" ]; then
-  echo "Tracked local files are modified; commit them before production deployment." >&2
+fail() {
+  printf 'Production deployment blocked: %s\n' "$1" >&2
   exit 1
-fi
-
-"$local_pbx/digitalocean/validate-production-env.sh" "$local_pbx"
-
-ssh -o BatchMode=yes "$target" bash -s -- \
-  "$PBX_REPOSITORY" "$PBX_BRANCH" "$PBX_REPO_PATH" "$PBX_LEGACY_PATH" <<'REMOTE_PREPARE'
-set -Eeuo pipefail
-
-repository=$1
-branch=$2
-repo_path=$3
-legacy_path=$4
-pbx_path="$repo_path/services/pbx"
-
-command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
-docker compose version >/dev/null || { echo "Docker Compose v2 is required" >&2; exit 1; }
-
-if [ ! -d "$repo_path/.git" ]; then
-  [ ! -e "$repo_path" ] || { echo "$repo_path exists but is not a Git checkout" >&2; exit 1; }
-  git clone --branch "$branch" --single-branch "$repository" "$repo_path"
-fi
-
-cd "$repo_path"
-[ -z "$(git status --short --untracked-files=no)" ] \
-  || { echo "Tracked files on the droplet are modified; refusing to overwrite them" >&2; exit 1; }
-git fetch --prune origin "$branch"
-git checkout "$branch"
-git pull --ff-only origin "$branch"
-
-install -d -m 700 "$pbx_path/secrets"
-if [ ! -f "$pbx_path/.env" ] && [ -f "$legacy_path/.env" ]; then
-  install -m 600 "$legacy_path/.env" "$pbx_path/.env"
-fi
-if [ -d "$legacy_path/secrets" ]; then
-  for source in "$legacy_path"/secrets/*; do
-    [ -f "$source" ] || continue
-    destination="$pbx_path/secrets/$(basename "$source")"
-    [ -e "$destination" ] || install -m 600 "$source" "$destination"
-  done
-fi
-REMOTE_PREPARE
-
-scp -q "$local_pbx/.env" "$target:$PBX_REPO_PATH/services/pbx/.env"
-scp -q \
-  "$local_pbx/secrets/apns-auth-key.p8" \
-  "$local_pbx/secrets/firebase-service-account.json" \
-  "$local_pbx/secrets/turn-auth-secret" \
-  "$target:$PBX_REPO_PATH/services/pbx/secrets/"
-
-ssh -o BatchMode=yes "$target" bash -s -- \
-  "$PBX_REPO_PATH" "$HEALTH_TIMEOUT_SECONDS" <<'REMOTE_DEPLOY'
-set -Eeuo pipefail
-
-repo_path=$1
-health_timeout=$2
-pbx_path="$repo_path/services/pbx"
-chmod 600 "$pbx_path/.env"
-
-# Bind-mounted Compose secrets retain host ownership. Restrict each credential
-# to the unprivileged runtime UID of the one service that consumes it.
-chown 1000:1000 \
-  "$pbx_path/secrets/apns-auth-key.p8" \
-  "$pbx_path/secrets/firebase-service-account.json"
-chmod 400 \
-  "$pbx_path/secrets/apns-auth-key.p8" \
-  "$pbx_path/secrets/firebase-service-account.json"
-chown 0:0 "$pbx_path/secrets/turn-auth-secret"
-chmod 400 "$pbx_path/secrets/turn-auth-secret"
-
-diagnostics() {
-  status=$?
-  if [ -f "$pbx_path/docker-compose.yml" ]; then
-    cd "$pbx_path"
-    docker compose ps || true
-    docker compose logs --since=10m --tail=120 || true
-  fi
-  exit "$status"
 }
-trap diagnostics ERR
 
-"$pbx_path/digitalocean/validate-production-env.sh" "$pbx_path"
+command -v git >/dev/null 2>&1 || fail 'git is required.'
+command -v npm >/dev/null 2>&1 || fail 'npm is required.'
+[ -f "$frontend_dir/package-lock.json" ] || fail 'frontend/package-lock.json is missing.'
+[ -f "$frontend_dir/.vercel/project.json" ] || fail 'The frontend is not linked to the Vocivo Vercel project.'
 
-# Reconcile the private Docker-to-host TLS path on existing droplets. Host
-# bootstrap already creates this rule for new servers.
-if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
-  ufw allow from 172.30.0.0/24 to any port 5349 proto tcp comment 'TLS edge to TURN' >/dev/null
+current_branch=$(git -C "$root_dir" branch --show-current)
+[ "$current_branch" = "$deploy_branch" ] || fail "Expected branch $deploy_branch, found $current_branch."
+[ -z "$(git -C "$root_dir" status --short --untracked-files=no)" ] \
+  || fail 'Tracked files are modified. Commit the release before deployment.'
+
+printf 'Installing locked frontend dependencies...\n'
+npm --prefix "$frontend_dir" ci
+npm --prefix "$frontend_dir" run check:api
+npm --prefix "$frontend_dir" test
+npm --prefix "$frontend_dir" run build
+
+if [ "$run_mobile_checks" = true ]; then
+  printf 'Validating the Telnyx mobile clients...\n'
+  npm --prefix "$mobile_dir" ci
+  npm --prefix "$mobile_dir" run typecheck
+  npm --prefix "$mobile_dir" test
 fi
 
-cd "$pbx_path"
-docker compose config --quiet
-docker compose build --pull
-docker compose up -d --remove-orphans
+if [ "${DRY_RUN:-false}" = true ]; then
+  printf 'Dry run complete at commit %s.\n' "$(git -C "$root_dir" rev-parse --short HEAD)"
+  exit 0
+fi
 
-# Compose does not recreate containers when only a bind-mounted file changes.
-# Reload the secret and edge consumers without interrupting active FreeSWITCH
-# calls; the health gate below verifies the replacement instances.
-docker compose up -d --no-deps --force-recreate caddy esl-listener coturn
-docker compose up -d --no-deps --force-recreate edge-router
+printf 'Deploying the Node.js API and web client to Vercel %s...\n' "$deploy_environment"
+vercel_args=(deploy --yes --cwd "$frontend_dir")
+if [ "$deploy_environment" = production ]; then
+  vercel_args+=(--prod)
+fi
+if [ -n "${VERCEL_TOKEN:-}" ]; then
+  vercel_args+=(--token "$VERCEL_TOKEN")
+fi
 
-deadline=$((SECONDS + health_timeout))
-while :; do
-  unhealthy=0
-  pending=0
-  for service in $(docker compose config --services); do
-    container=$(docker compose ps -q "$service")
-    [ -n "$container" ] || { unhealthy=1; continue; }
-    state=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")
-    case "$state" in
-      'running healthy'|'running none') ;;
-      'running starting') pending=1 ;;
-      *) unhealthy=1 ;;
-    esac
-  done
-  [ "$unhealthy" -eq 0 ] || { echo "A production container failed during startup" >&2; exit 1; }
-  [ "$pending" -eq 0 ] && break
-  [ "$SECONDS" -lt "$deadline" ] || { echo "Timed out waiting for healthy containers" >&2; exit 1; }
-  sleep 5
+deployment_url=$(npx --yes vercel "${vercel_args[@]}" | tail -n 1)
+case "$deployment_url" in
+  https://*) ;;
+  *) fail 'Vercel did not return a deployment URL.' ;;
+esac
+
+health_url="${VOCIVO_HEALTH_URL:-${deployment_url%/}/api/health}"
+for attempt in 1 2 3 4 5 6; do
+  if curl --fail --silent --show-error --max-time 10 "$health_url"; then
+    printf '\nVocivo production deployment is healthy.\nCommit: %s\nURL: %s\n' \
+      "$(git -C "$root_dir" rev-parse --short HEAD)" "$deployment_url"
+    exit 0
+  fi
+  [ "$attempt" -lt 6 ] || break
+  sleep $((attempt * 5))
 done
 
-docker compose exec -T freeswitch /usr/local/freeswitch/bin/fs_cli \
-  -H 127.0.0.1 -P 8021 -p "$(awk -F= '$1 == "ESL_PASSWORD" { print substr($0, index($0, "=") + 1) }' .env)" -x status
-docker compose exec -T coturn turnutils_stunclient -p 3478 127.0.0.1
-docker compose exec -T edge-router nc -z -w 3 host.docker.internal 5349
-curl --fail --silent --show-error http://127.0.0.1:8088/healthz >/dev/null
-
-docker compose ps
-docker compose logs --since=5m --tail=80 freeswitch esl-listener coturn caddy edge-router
-echo "Vocivo production PBX deployment completed from $(git rev-parse --short HEAD)."
-REMOTE_DEPLOY
+fail "The deployment completed, but $health_url did not become healthy."

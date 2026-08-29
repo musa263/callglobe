@@ -31,6 +31,9 @@ function getCallId(call) {
 
 export function useTelnyxVoice(token, enabled, identity = {}) {
   const clientRef = useRef(null);
+  const clientListenerCleanupRef = useRef(null);
+  const iceServersRef = useRef(undefined);
+  const tokenRefreshRef = useRef(null);
   const callRef = useRef(null);
   const endedIdRef = useRef(null);
   const routeIdRef = useRef(null);
@@ -58,6 +61,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const [remoteIdentity, setRemoteIdentity] = useState({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [loginGeneration, setLoginGeneration] = useState(0);
 
   const resumeAudio = useCallback(async () => {
     const media = document.getElementById('remoteMedia');
@@ -123,13 +127,20 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   }, []);
 
   const disconnect = useCallback(() => {
+    if (tokenRefreshRef.current) {
+      clearTimeout(tokenRefreshRef.current);
+      tokenRefreshRef.current = null;
+    }
     const routeId = routeIdRef.current;
     const extraRoutes = [heldCallRef.current?.routeId, ...(conferenceRef.current?.participants || []).map((item) => item.routeId)].filter(Boolean);
     [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch(() => undefined));
     try { callRef.current?.hangup?.(); } catch { /* already closed */ }
     try { heldCallRef.current?.call?.hangup?.(); } catch { /* already closed */ }
+    clientListenerCleanupRef.current?.();
+    clientListenerCleanupRef.current = null;
     try { clientRef.current?.disconnect?.(); } catch { /* already disconnected */ }
     clientRef.current = null;
+    iceServersRef.current = undefined;
     callRef.current = null;
     incomingCallRef.current = null;
     heldCallRef.current = null;
@@ -152,22 +163,42 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     let cancelled = false;
     setStatusLabel('Connecting...');
     setError('');
-    api('/api/telnyx/config').then(({ sip_user: login, sip_password: password }) => {
+    api('/api/telnyx/token', { method: 'POST', body: {} }).then(({ token: loginToken, expires_in: expiresIn = 3600, ice_servers: iceServers = [] }) => {
       if (cancelled) return;
-      const client = new TelnyxRTC({ login, password });
+      if (!loginToken) throw new Error('The calling service did not return a session token.');
+      const refreshWhenIdle = () => {
+        if (cancelled) return;
+        if (callRef.current || incomingCallRef.current || heldCallRef.current) {
+          tokenRefreshRef.current = setTimeout(refreshWhenIdle, 60_000);
+          return;
+        }
+        setLoginGeneration((generation) => generation + 1);
+      };
+      const lifetimeSeconds = Number.isFinite(Number(expiresIn)) ? Number(expiresIn) : 3600;
+      tokenRefreshRef.current = setTimeout(refreshWhenIdle, Math.max(30, lifetimeSeconds - 120) * 1000);
+      iceServersRef.current = Array.isArray(iceServers) && iceServers.length ? iceServers : undefined;
+      const client = new TelnyxRTC({ login_token: loginToken, iceServers: iceServersRef.current, trickleIce: true });
       clientRef.current = client;
       client.remoteElement = 'remoteMedia';
-      client.on('telnyx.ready', () => {
+      const listeners = [];
+      const on = (event, listener) => {
+        client.on(event, listener);
+        listeners.push([event, listener]);
+      };
+      clientListenerCleanupRef.current = () => {
+        listeners.splice(0).forEach(([event, listener]) => client.off(event, listener));
+      };
+      on('telnyx.ready', () => {
         if (cancelled) return;
         setReady(true);
         setStatusLabel('Ready for calls');
       });
-      client.on('telnyx.error', (event) => {
+      on('telnyx.error', (event) => {
         if (cancelled) return;
         setError(event?.message || 'The web phone could not connect.');
         setStatusLabel('Connection problem');
       });
-      client.on('telnyx.socket.close', () => {
+      on('telnyx.socket.close', () => {
         if (cancelled) return;
         const routeIds = [
           routeIdRef.current,
@@ -197,7 +228,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         setReady(false);
         setStatusLabel('Reconnecting...');
       });
-      client.on('telnyx.notification', (notification) => {
+      on('telnyx.notification', (notification) => {
         if (cancelled || notification?.type !== 'callUpdate' || !notification.call) return;
         const updatedCall = notification.call;
         const nextState = String(updatedCall.state || '').toLowerCase();
@@ -300,7 +331,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setStatusLabel('Unable to connect');
     });
     return () => { cancelled = true; disconnect(); };
-  }, [disconnect, enabled, resumeAudio, startIncomingRingtone, stopIncomingRingtone, stopRingback, token]);
+  }, [disconnect, enabled, loginGeneration, resumeAudio, startIncomingRingtone, stopIncomingRingtone, stopRingback, token]);
 
   const followRoute = useCallback(async (routeId) => {
     const generation = ++routePollRef.current;
@@ -359,6 +390,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           ...(reservation.callerId ? [{ name: 'X-Vocivo-Caller-ID', value: reservation.callerId }] : []),
         ],
         remoteElement: 'remoteMedia',
+        ...(iceServersRef.current ? { iceServers: iceServersRef.current } : {}),
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         trickleIce: true,
       });
@@ -395,6 +427,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           { name: 'X-Vocivo-Route-Token', value: reservation.routeToken },
         ],
         remoteElement: 'remoteMedia',
+        ...(iceServersRef.current ? { iceServers: iceServersRef.current } : {}),
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         trickleIce: true,
       });
@@ -425,7 +458,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         setHeldCall(snapshot);
         await current.hold?.();
       }
-      await incoming.answer?.({ remoteElement: 'remoteMedia', audio: true });
+      await incoming.answer?.({ remoteElement: 'remoteMedia', ...(iceServersRef.current ? { iceServers: iceServersRef.current } : {}), audio: true });
       callRef.current = incoming;
       incomingCallRef.current = null;
       routeIdRef.current = null;

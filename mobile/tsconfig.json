@@ -10,6 +10,5 @@
       "@telnyx/react-native-voice-sdk": ["src/types/telnyx-native-voice-sdk.d.ts"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
-  "exclude": ["src/lib/sipTransport.ts", "src/lib/voipRuntime.ts", "tests/voip"]
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
 }

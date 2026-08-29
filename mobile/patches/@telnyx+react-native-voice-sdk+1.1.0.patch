@@ -1,0 +1,48 @@
+diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
+index edab35e..fe1fa99 100644
+--- a/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
++++ b/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
+@@ -29,6 +29,8 @@ export interface ClientOptions {
+    * @default false
+    */
+   useTrickleIce?: boolean;
++  /** ICE servers used by inbound calls and as the default for outbound calls. */
++  iceServers?: RTCIceServer[];
+   /**
+    * The push notification device token, used for receiving push notifications on a specific device.
+    * This is typically used for mobile applications to receive incoming call notifications.
+diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
+index 74f800d..6566451 100644
+--- a/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
++++ b/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
+@@ -431,7 +431,13 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+       telnyxSessionId: null,
+       telnyxLegId: null,
+       callId: null,
+-      options,
++      options: {
++        ...options,
++        peerConnectionOptions: {
++          ...options.peerConnectionOptions,
++          iceServers: options.peerConnectionOptions?.iceServers ?? this.options.iceServers,
++        },
++      },
+       debug: this.options.debug,
+       callReportConfig: this.getCallReportConfig(),
+       pushWhenActive: this.options.pushWhenActive,
+@@ -1125,6 +1131,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+           destinationNumber: msg.params.caller_id_number,
+           peerConnectionOptions: {
+             useTrickleIce: this.options.useTrickleIce,
++            iceServers: this.options.iceServers,
+           },
+         },
+         inviteCustomHeaders: msg.params.dialogParams?.custom_headers || null,
+@@ -1276,6 +1283,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+         destinationNumber: msg.params.caller_id_number,
+         peerConnectionOptions: {
+           useTrickleIce: this.options.useTrickleIce,
++          iceServers: this.options.iceServers,
+         },
+       },
+       inviteCustomHeaders: msg.params.dialogParams?.custom_headers || null,

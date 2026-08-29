@@ -1,10 +1,11 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put, readObject } from './object-store.js';
+import { del, put, readObject, transactObject } from './object-store.js';
 import { requiredEnv } from './http.js';
 import type { ExtensionUser } from './pbx.js';
 
 type StoredExtensionDirectory = {
-  version: 1;
+  version: 1 | 2;
+  revision?: number;
   syncedAt: string;
   extensions: ExtensionUser[];
 };
@@ -15,7 +16,7 @@ export type StoredExtensionCredential = {
   extension: ExtensionUser;
   sipUsername: string;
   sipPassword: string;
-  provider?: 'telnyx' | 'freeswitch';
+  provider: 'telnyx';
   sipDomain?: string;
   carrierCredentialId?: string;
 };
@@ -50,23 +51,42 @@ export async function readExtensionDirectory() {
   if (!value) return null;
   try {
     const stored = decrypt<StoredExtensionDirectory>(value);
-    return stored.version === 1 && Array.isArray(stored.extensions) ? stored.extensions : null;
+    return [1, 2].includes(stored.version) && Array.isArray(stored.extensions) ? stored.extensions : null;
   } catch {
     return null;
   }
 }
 
 export async function saveExtensionDirectory(extensions: ExtensionUser[]) {
-  const stored: StoredExtensionDirectory = {
-    version: 1,
-    syncedAt: new Date().toISOString(),
-    extensions: extensions.map((extension) => ({ ...extension })),
-  };
-  await put(directoryPath, encrypt(stored), {
-    access: 'private',
-    contentType: 'application/octet-stream',
-    allowOverwrite: true,
-  });
+  await updateExtensionDirectory(() => extensions);
+}
+
+export async function updateExtensionDirectory(update: (extensions: ExtensionUser[]) => ExtensionUser[] | Promise<ExtensionUser[]>) {
+  const result = await transactObject(directoryPath, async (current) => {
+    let extensions: ExtensionUser[] = [];
+    let revision = 0;
+    if (current) {
+      try {
+        const stored = decrypt<StoredExtensionDirectory>(current);
+        if ([1, 2].includes(stored.version) && Array.isArray(stored.extensions)) {
+          extensions = stored.extensions;
+          revision = Number(stored.revision || 0);
+        }
+      } catch {
+        extensions = [];
+      }
+    }
+    const next: StoredExtensionDirectory = {
+      version: 2,
+      revision: revision + 1,
+      syncedAt: new Date().toISOString(),
+      extensions: (await update(extensions)).map((extension) => ({ ...extension })),
+    };
+    return encrypt(next);
+  }, { access: 'private', contentType: 'application/octet-stream' });
+  const stored = decrypt<StoredExtensionDirectory>(result.body);
+  if (stored.version !== 2 || !stored.revision) throw new Error('Extension directory compare-and-swap failed.');
+  return stored.extensions;
 }
 
 export async function readExtensionCredential(id: string) {
@@ -74,9 +94,14 @@ export async function readExtensionCredential(id: string) {
   if (!value) return null;
   try {
     const stored = decrypt<StoredExtensionCredential>(value);
-    return [1, 2, 3].includes(stored.version) && stored.extension?.id === id
-      ? { ...stored, provider: stored.provider || 'telnyx' }
-      : null;
+    if (![1, 2, 3].includes(stored.version) || stored.extension?.id !== id) return null;
+    if (stored.provider && stored.provider !== 'telnyx') return null;
+    if (stored.extension.sipProvider && stored.extension.sipProvider !== 'telnyx') return null;
+    return {
+      ...stored,
+      provider: 'telnyx' as const,
+      extension: { ...stored.extension, sipProvider: 'telnyx' as const },
+    };
   } catch {
     return null;
   }

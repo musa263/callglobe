@@ -47,6 +47,29 @@ test('verifies the exact raw request stream used by the Vercel Node runtime', as
   }
 });
 
+test('verifies a body already parsed by the Vercel runtime', async () => {
+  const previous = process.env.TELNYX_PUBLIC_KEY;
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  process.env.TELNYX_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const body = { data: { event_type: 'call.initiated', id: 'event-parsed' } };
+  const serialized = JSON.stringify(body);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const request = {
+    headers: {
+      'telnyx-signature-ed25519': sign(null, Buffer.from(`${timestamp}|${serialized}`), privateKey).toString('base64'),
+      'telnyx-timestamp': timestamp,
+    },
+    query: {},
+    body,
+  } as any;
+  try {
+    assert.equal(await verifyTelnyxWebhook(request), true);
+    assert.deepEqual(request.body, body);
+  } finally {
+    if (previous === undefined) delete process.env.TELNYX_PUBLIC_KEY; else process.env.TELNYX_PUBLIC_KEY = previous;
+  }
+});
+
 test('rejects query-string secrets, stale signatures, and tampered bodies', async () => {
   const previous = process.env.TELNYX_PUBLIC_KEY;
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');

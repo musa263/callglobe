@@ -16,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const changed = session.sub === 'vocivo-owner'
       ? await changePassword(currentPassword, newPassword)
       : session.accountId
-        ? await changeTenantAdminPassword(session.accountId, currentPassword, newPassword, await readPbxConfig())
+        ? await changeTenantAdminPassword(session.accountId, session.organizationId || '', currentPassword, newPassword, await readPbxConfig())
         : false;
     if (!changed) return res.status(400).json({ error: 'Current password is incorrect.' });
     return res.status(200).json({ success: true });

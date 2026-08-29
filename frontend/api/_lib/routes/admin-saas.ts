@@ -5,8 +5,10 @@ import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
 import { PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import {
-  createSubscription, effectiveEntitlements, featureCatalog, publicTenantAdmin, readSaasState,
-  saveSaasState, saveTenantAdmin, type FeatureKey, type SaasPlan, type SaasSubscription,
+  createSubscription, effectiveEntitlements, featureCatalog, publicTenantAdmin,
+  readPlatformSaasState, readTenantSaasState, removeAllTenantAdmins, removeTenantAdmin,
+  saveSaasFeatureOverrides, saveSaasPlan, saveSaasSubscription, saveTenantAdmin,
+  type FeatureKey, type SaasPlan, type SaasSubscription,
 } from '../saas-store.js';
 
 function text(value: unknown, max = 100) {
@@ -19,7 +21,9 @@ function slug(value: unknown) {
 
 async function responseFor(superadmin: boolean, organizationId?: string) {
   const config = await readPbxConfig();
-  const state = await readSaasState(config);
+  const state = superadmin
+    ? await readPlatformSaasState(config)
+    : await readTenantSaasState(organizationId || '', config);
   const extensions = await listExtensions(superadmin ? undefined : organizationId);
   const organizations = config.organizations
     .filter((organization) => superadmin || organization.id === organizationId)
@@ -63,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!access.superadmin) return res.status(403).json({ error: 'Only a Vocivo superadmin can manage customer subscriptions and feature access.' });
 
     let config = await readPbxConfig();
-    let state = await readSaasState(config);
+    let state = await readPlatformSaasState(config);
     const action = text(req.body?.action, 40);
 
     if (action === 'save_company') {
@@ -99,24 +103,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         status: input.status === 'suspended' ? 'suspended' as const : 'active' as const,
       };
       config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization] }, { expectedUpdatedAt: config.updatedAt });
-      state = await readSaasState(config);
+      state = await readPlatformSaasState(config);
       const planId = text(req.body?.subscription?.planId, 50) || (accountType === 'business' ? 'business' : 'starter');
       const subscription = createSubscription(id, planId, state, req.body?.subscription || {});
-      state = await saveSaasState({
-        subscriptions: { ...state.subscriptions, [id]: subscription },
-        tenantAdmins: accountType === 'individual' ? state.tenantAdmins.filter((account) => account.organizationId !== id) : state.tenantAdmins,
-      }, config);
+      await saveSaasSubscription(id, subscription, config);
+      if (accountType === 'individual') await removeAllTenantAdmins(id, config);
       if (accountType === 'business' && incomingAdmin.email) await saveTenantAdmin({ ...incomingAdmin, organizationId: id }, config);
     } else if (action === 'save_subscription') {
       const organizationId = text(req.body?.organizationId, 60);
       if (!config.organizations.some((organization) => organization.id === organizationId)) return res.status(404).json({ error: 'Company not found.' });
       const subscription = createSubscription(organizationId, text(req.body?.subscription?.planId, 50), state, req.body?.subscription as Partial<SaasSubscription>);
-      await saveSaasState({ subscriptions: { ...state.subscriptions, [organizationId]: subscription } }, config);
+      await saveSaasSubscription(organizationId, subscription, config);
     } else if (action === 'save_entitlements') {
       const organizationId = text(req.body?.organizationId, 60);
       if (!config.organizations.some((organization) => organization.id === organizationId)) return res.status(404).json({ error: 'Company not found.' });
       const overrides = Object.fromEntries(featureCatalog.filter((feature) => typeof req.body?.features?.[feature.id] === 'boolean').map((feature) => [feature.id, req.body.features[feature.id]])) as Partial<Record<FeatureKey, boolean>>;
-      await saveSaasState({ featureOverrides: { ...state.featureOverrides, [organizationId]: overrides } }, config);
+      await saveSaasFeatureOverrides(organizationId, overrides, config);
     } else if (action === 'save_admin') {
       await saveTenantAdmin(req.body?.admin || {}, config);
     } else if (action === 'save_plan') {
@@ -125,14 +127,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!id || !text(input?.name, 80)) return res.status(400).json({ error: 'Plan name is required.' });
       const current = state.plans.find((plan) => plan.id === id);
       const plan = { ...current, ...input, id, name: text(input.name, 80) } as SaasPlan;
-      await saveSaasState({ plans: [...state.plans.filter((item) => item.id !== id), plan] }, config);
+      await saveSaasPlan(plan, config);
     } else if (req.method === 'DELETE' && action === 'delete_admin') {
       const id = text(req.body?.id || req.query.id, 80);
       const account = state.tenantAdmins.find((item) => item.id === id);
       const organization = account ? config.organizations.find((item) => item.id === account.organizationId) : undefined;
       const remainingAdmins = account ? state.tenantAdmins.filter((item) => item.organizationId === account.organizationId && item.status === 'active' && item.id !== id) : [];
       if (account && organization?.accountType === 'business' && !remainingAdmins.length) return res.status(409).json({ error: 'Assign another company administrator before deleting this account.' });
-      await saveSaasState({ tenantAdmins: state.tenantAdmins.filter((account) => account.id !== id) }, config);
+      if (account) await removeTenantAdmin(id, account.organizationId, config);
     } else {
       return res.status(400).json({ error: 'Choose a valid SaaS administration action.' });
     }

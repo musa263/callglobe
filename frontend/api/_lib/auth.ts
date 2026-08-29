@@ -4,6 +4,7 @@ import { jwtVerify, SignJWT, type JWTPayload } from 'jose';
 import { requiredEnv } from './http.js';
 import { isExtensionSessionRevoked } from './extension-session-store.js';
 import { activeTenantAdmin, type TenantAdminAccount } from './saas-store.js';
+import { readPbxConfig } from './pbx-config-store.js';
 
 const issuer = 'vocivo-vercel';
 const audience = 'vocivo-mobile';
@@ -85,14 +86,25 @@ export async function verifyEnrollmentToken(token: string) {
   return { extensionId: payload.extensionId, jti: payload.jti };
 }
 
-export async function requireSession(req: VercelRequest) {
+async function verifySessionToken(req: VercelRequest) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) throw new Error('Unauthorized');
   const token = header.slice(7);
   const { payload } = await jwtVerify(token, key(), { issuer, audience });
-  if (payload.sub !== 'vocivo-owner' && !payload.sub?.startsWith('vocivo-extension:') && !payload.sub?.startsWith('vocivo-account:')) throw new Error('Unauthorized');
+  if (typeof payload.sub !== 'string' || payload.sub !== 'vocivo-owner' && !payload.sub.startsWith('vocivo-extension:') && !payload.sub.startsWith('vocivo-account:')) throw new Error('Unauthorized');
+  return payload as JWTPayload & { sub: string };
+}
+
+export async function requireSession(req: VercelRequest) {
+  const payload = await verifySessionToken(req);
+  const tenantSession = payload.sub.startsWith('vocivo-extension:') || payload.sub.startsWith('vocivo-account:');
+  if (tenantSession) {
+    if (typeof payload.organizationId !== 'string' || !payload.organizationId.trim()) throw new Error('Unauthorized');
+    const config = await readPbxConfig();
+    if (!config.organizations.some((organization) => organization.id === payload.organizationId && organization.status === 'active')) throw new Error('Unauthorized');
+  }
   if (payload.sub.startsWith('vocivo-extension:')) {
-    if (typeof payload.extensionId !== 'string' || typeof payload.iat !== 'number') throw new Error('Unauthorized');
+    if (typeof payload.extensionId !== 'string' || typeof payload.extension !== 'string' || typeof payload.iat !== 'number') throw new Error('Unauthorized');
     if (await isExtensionSessionRevoked(payload.extensionId, payload.iat)) throw new Error('Unauthorized');
   }
   if (payload.sub.startsWith('vocivo-account:')) {
@@ -102,7 +114,7 @@ export async function requireSession(req: VercelRequest) {
 }
 
 export async function requireOwner(req: VercelRequest) {
-  const session = await requireSession(req);
+  const session = await verifySessionToken(req) as VocivoSession;
   if (session.sub !== 'vocivo-owner' || !['owner', 'superadmin'].includes(session.role || '')) throw new Error('Forbidden');
   return session;
 }
@@ -110,7 +122,9 @@ export async function requireOwner(req: VercelRequest) {
 export async function requireAdmin(req: VercelRequest) {
   let session = await requireSession(req);
   if (session.sub?.startsWith('vocivo-account:')) {
-    const account = session.accountId ? await activeTenantAdmin(session.accountId) : null;
+    const account = session.accountId && session.organizationId
+      ? await activeTenantAdmin(session.accountId, session.organizationId, await readPbxConfig())
+      : null;
     if (!account) throw new Error('Unauthorized');
     session = {
       ...session,

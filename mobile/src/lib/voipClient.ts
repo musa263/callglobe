@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createTelnyxVoipClient, VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
-import { NativeModules } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 
 export { VoicePnBridge };
 
@@ -10,6 +10,11 @@ export const voipClient = createTelnyxVoipClient({
   useTrickleIce: true,
 });
 
+export async function getVoicePushToken() {
+  if (Platform.OS === 'ios') return (await VoicePnBridge.getVoipToken())?.trim() || undefined;
+  return (await VoicePnBridge.getFirebaseToken())?.trim() || undefined;
+}
+
 const telnyxStorageKeys = [
   '@telnyx_username',
   '@telnyx_password',
@@ -17,6 +22,7 @@ const telnyxStorageKeys = [
   '@push_token',
   '@push_when_active',
   '@use_trickle_ice',
+  '@ice_servers',
   '@enable_missed_call_notifications',
 ];
 

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed } from '../http.js';
 import { readPbxConfig } from '../pbx-config-store.js';
-import { effectiveEntitlements, readSaasState } from '../saas-store.js';
+import { effectiveEntitlements, readTenantSaasState } from '../saas-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -12,7 +12,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const isOwner = session.sub === 'vocivo-owner';
     const config = await readPbxConfig();
     const organization = session.organizationId ? config.organizations.find((item) => item.id === session.organizationId) : undefined;
-    const access = organization ? effectiveEntitlements(await readSaasState(config), organization.id, organization.accountType) : undefined;
+    const access = organization ? effectiveEntitlements(await readTenantSaasState(organization.id, config), organization.id, organization.accountType) : undefined;
     return res.status(200).json({
       profile: {
         id: session.sub,

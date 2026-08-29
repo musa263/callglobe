@@ -15,7 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const current = await readPbxConfig();
     await requireFeature(access.session, 'aiReceptionist', current);
-    const organizationId = access.organizationId || current.activeOrganizationId;
+    const organizationId = access.superadmin ? current.activeOrganizationId : access.organizationId!;
     const tenant = pbxForOrganization(current, organizationId);
     const ai = { ...tenant.ai, ...(req.body ?? {}) };
     if (ai.voice === 'Telnyx.KokoroTTS.af') ai.voice = 'Telnyx.Bayan.Amanda';
@@ -23,6 +23,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const fallback = ai.transferEnabled && ai.fallbackExtension
       ? await findExtension(ai.fallbackExtension, organizationId)
       : null;
+    if (ai.enabled && ai.transferEnabled && !fallback) {
+      return res.status(400).json({ error: 'Choose an active company extension for AI transfers before enabling the receptionist.' });
+    }
     const tools: Array<Record<string, unknown>> = [{ type: 'hangup', hangup: {} }];
     if (fallback?.sipUsername) {
       tools.unshift({

@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { getExtension, getExtensionCredentials } from '../pbx.js';
+import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
-import { sipWebSocketUrl, voiceIceServers, voiceProvider } from '../voice-provider.js';
+import { voiceIceServers, voiceProvider } from '../voice-provider.js';
 import { sessionOrganizationId } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -21,19 +21,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const config = await readPbxConfig();
     const extension = await getExtension(session.extensionId);
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
-    const credential = await getExtensionCredentials(session.extensionId);
     const provider = voiceProvider(config);
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({
       provider,
       pbx_engine: provider,
-      sip_user: credential.sipUsername,
-      sip_password: credential.sipPassword,
-      sip_domain: credential.sipDomain,
-      websocket_url: provider === 'freeswitch' ? sipWebSocketUrl(config) : '',
-      ice_servers: voiceIceServers(`${credential.extension.organizationId}:${credential.extension.id}`),
-      extension: credential.extension.extension,
-      organization_id: credential.extension.organizationId,
+      authentication: 'token',
+      token_endpoint: '/api/telnyx/token',
+      sip_domain: 'sip.telnyx.com',
+      ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
+      extension: extension.extension,
+      organization_id: extension.organizationId,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });

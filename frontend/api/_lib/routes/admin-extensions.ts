@@ -4,7 +4,10 @@ import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
-import { findTenantAdminForExtension, readSaasState, removeTenantAdminForExtension, saveTenantAdmin } from '../saas-store.js';
+import {
+  findTenantAdminByEmail, findTenantAdminForExtension, readTenantSaasState,
+  removeTenantAdminForExtension, saveTenantAdmin,
+} from '../saas-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -34,8 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const password = typeof req.body?.loginPassword === 'string' ? req.body.loginPassword : '';
         if (!email) return res.status(400).json({ error: 'Company administrators require an email address.' });
         if (password.length < 10 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) return res.status(400).json({ error: 'Set a temporary password with 10 characters, upper and lowercase letters, and a number.' });
-        const state = await readSaasState(config);
-        if (state.tenantAdmins.some((account) => account.email === email.toLowerCase())) return res.status(409).json({ error: 'This email already belongs to a company administrator.' });
+        if (await findTenantAdminByEmail(email, config)) return res.status(409).json({ error: 'This email already belongs to a company administrator.' });
       }
       if (subscriptionAccess.superadmin === false) {
         const used = (await listExtensions(organizationId)).filter((item) => item.status === 'active').length;
@@ -60,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!existing) return res.status(404).json({ error: 'Extension not found in this organization.' });
     if (req.method === 'PATCH') {
       const requestedRole = req.body?.role;
-      const state = await readSaasState(config);
+      const state = await readTenantSaasState(organizationId, config);
       const linkedAdmin = state.tenantAdmins.find((account) => account.extensionId === id);
       if (!access.superadmin && ['company_owner', 'company_admin'].includes(requestedRole) && access.session.role !== 'company_owner') return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
       if (['company_owner', 'company_admin'].includes(requestedRole)) {
@@ -78,21 +80,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const extension = await updateExtension(id, { ...(req.body ?? {}), organizationId });
       if (extension && ['company_owner', 'company_admin'].includes(extension.role)) {
         if (!extension.email) return res.status(400).json({ error: 'Company administrators require an email address.' });
-        const existingAdmin = await findTenantAdminForExtension(id, config);
+        const existingAdmin = await findTenantAdminForExtension(id, organizationId, config);
         const password = typeof req.body?.loginPassword === 'string' ? req.body.loginPassword : '';
         if (!existingAdmin && !password) return res.status(400).json({ error: 'Set a temporary password to enable this administrator login.' });
         await saveTenantAdmin({ ...existingAdmin, organizationId, email: extension.email, name: extension.name, role: extension.role as 'company_owner' | 'company_admin', password: password || undefined, extensionId: extension.id, extension: extension.extension, status: 'active', forcePasswordChange: password ? true : existingAdmin?.forcePasswordChange }, config);
       } else {
-        await removeTenantAdminForExtension(id, config);
+        await removeTenantAdminForExtension(id, organizationId, config);
       }
       return res.status(200).json({ extension });
     }
-    const state = await readSaasState(config);
+    const state = await readTenantSaasState(organizationId, config);
     const linkedAdmin = state.tenantAdmins.find((account) => account.extensionId === id);
     const remainingAdmins = state.tenantAdmins.filter((account) => account.organizationId === organizationId && account.status === 'active' && account.id !== linkedAdmin?.id);
     if (linkedAdmin && organization.accountType === 'business' && !remainingAdmins.length) return res.status(409).json({ error: 'Assign another company administrator before deleting this user.' });
     await deleteExtension(id);
-    await removeTenantAdminForExtension(id, config);
+    await removeTenantAdminForExtension(id, organizationId, config);
     return res.status(200).json({ success: true });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });

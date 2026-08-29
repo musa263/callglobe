@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const connection = connectionResponse ? (await connectionResponse.json() as { data?: Record<string, any> }).data ?? {} : null;
       const uac = (await uacResponse.json() as { data?: UacConnection[] }).data ?? [];
       return res.status(200).json({
-        vocivoTrunk: access.superadmin && connection ? { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.record_type === 'ip_connection' ? '68.183.244.215' : connection.user_name, registrationStatus: connection.record_type === 'ip_connection' ? 'IP authenticated' : connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: connection.transport_protocol || 'UDP' } : null,
+        vocivoTrunk: access.superadmin && connection ? { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.record_type === 'ip_connection' ? '' : connection.user_name, registrationStatus: connection.record_type === 'ip_connection' ? 'IP authenticated' : connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: connection.transport_protocol || 'UDP' } : null,
         externalTrunks: uac.filter((item) => access.superadmin || policies[item.id]?.organizationId === access.organizationId).map((item) => safeUac(item, policies[item.id])),
       });
     }

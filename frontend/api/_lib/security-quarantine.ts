@@ -5,7 +5,7 @@ import { put } from './object-store.js';
 type QuarantineValue = string | number | boolean | null;
 
 export type SecurityQuarantineEvent = {
-  source: 'telnyx-messaging' | 'telnyx-voice' | 'freeswitch-esl';
+  source: 'telnyx-messaging' | 'telnyx-voice';
   reason: string;
   eventId?: string;
   details?: Record<string, QuarantineValue>;

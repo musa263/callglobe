@@ -5,12 +5,12 @@ export function normalizeE164(value: unknown) {
   return typeof value === 'string' ? value.replace(/[\s()-]/g, '') : '';
 }
 
-export function primaryOrganizationId(config: PbxConfig) {
-  return config.organizations[0]?.id || 'primary';
-}
-
 export function sessionOrganizationId(session: VocivoSession, config: PbxConfig) {
-  return session.organizationId || config.activeOrganizationId || primaryOrganizationId(config);
+  const organizationId = session.organizationId?.trim();
+  if (!organizationId || !config.organizations.some((organization) => organization.id === organizationId && organization.status === 'active')) {
+    throw new Error('Unauthorized');
+  }
+  return organizationId;
 }
 
 export function numberOrganizationId(phoneNumber: string, config: PbxConfig) {

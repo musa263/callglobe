@@ -1,6 +1,6 @@
 import type { VocivoSession } from './auth.js';
 import { readPbxConfig, type PbxConfig } from './pbx-config-store.js';
-import { effectiveEntitlements, readSaasState, type FeatureKey } from './saas-store.js';
+import { effectiveEntitlements, readTenantSaasState, type FeatureKey } from './saas-store.js';
 
 type PlatformAccess = { superadmin: true };
 type TenantAccess = ReturnType<typeof effectiveEntitlements> & {
@@ -19,7 +19,7 @@ export async function accessForOrganization(organizationId: string, config?: Pbx
   const pbx = config || await readPbxConfig();
   const organization = pbx.organizations.find((item) => item.id === organizationId);
   if (!organization || organization.status !== 'active') throw new Error('Organization inactive');
-  const access = effectiveEntitlements(await readSaasState(pbx), organization.id, organization.accountType);
+  const access = effectiveEntitlements(await readTenantSaasState(organization.id, pbx), organization.id, organization.accountType);
   if (!access.serviceActive) throw new Error('Subscription inactive');
   return { superadmin: false as const, organization, ...access };
 }

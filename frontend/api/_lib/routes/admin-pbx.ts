@@ -27,12 +27,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } = body;
       const requestedOrganizationId = access.superadmin && typeof editable.activeOrganizationId === 'string'
         ? editable.activeOrganizationId
-        : access.organizationId || current.activeOrganizationId;
+        : access.organizationId!;
       const organizationId = current.organizations.some((item) => item.id === requestedOrganizationId)
         || Array.isArray(editable.organizations) && editable.organizations.some((item: { id?: string }) => item.id === requestedOrganizationId)
         ? requestedOrganizationId
         : current.activeOrganizationId;
-      const currentTenant = pbxForOrganization(current, access.superadmin && organizationId !== current.activeOrganizationId ? organizationId : access.organizationId || current.activeOrganizationId);
+      const currentTenant = pbxForOrganization(current, access.superadmin ? organizationId : access.organizationId!);
       if (!access.superadmin) {
         if (editable.outboundRules) await requireFeature(access.session, 'outboundCalling', current);
         if (editable.callHandling?.ringGroups?.length || editable.callHandling?.queues?.length) await requireFeature(access.session, 'queues', current);
@@ -104,7 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else {
       config = await readPbxConfig();
     }
-    const organizationId = access.organizationId || config.activeOrganizationId;
+    const organizationId = access.superadmin ? config.activeOrganizationId : access.organizationId!;
     const organization = config.organizations.find((item) => item.id === organizationId);
     config = pbxForOrganization(config, organizationId);
     config.company = { ...config.company, name: organization?.name || config.company.name };

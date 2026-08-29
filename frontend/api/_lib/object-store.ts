@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import postgres, { type Sql } from 'postgres';
+import postgres, { type Sql, type TransactionSql } from 'postgres';
 
 export type PutOptions = {
   access?: 'public' | 'private';
@@ -17,6 +17,56 @@ let storageHealthCache: { expiresAt: number; value: { provider: 'postgres'; stat
 let storageHealthRequest: Promise<{ provider: 'postgres'; status: 'available' }> | null = null;
 let replayTableReady = false;
 let replayTableRequest: Promise<void> | null = null;
+let saasTablesReady = false;
+let saasTablesRequest: Promise<void> | null = null;
+
+export type SaasPlanRow = {
+  plan_id: string;
+  name: string;
+  description: string;
+  monthly_price: number;
+  annual_price: number;
+  currency: string;
+  seat_limit: number;
+  phone_number_limit: number;
+  concurrent_call_limit: number;
+  storage_days: number;
+  features: Record<string, boolean>;
+  active: boolean;
+};
+
+export type SaasTenantRow = {
+  organization_id: string;
+  plan_id: string;
+  status: string;
+  billing_cycle: string;
+  amount: number;
+  currency: string;
+  starts_at: Date | string;
+  trial_ends_at: Date | string | null;
+  renews_at: Date | string | null;
+  cancel_at_period_end: boolean;
+  external_customer_id: string;
+  notes: string;
+  feature_overrides: Record<string, boolean>;
+};
+
+export type SaasAdminRow = {
+  id: string;
+  organization_id: string;
+  email: string;
+  name: string;
+  role: string;
+  password_hash: string;
+  status: string;
+  force_password_change: boolean;
+  extension_id: string | null;
+  extension: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+export type SaasRows = { plans: SaasPlanRow[]; tenants: SaasTenantRow[]; admins: SaasAdminRow[] };
 
 function databaseUrl() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -109,6 +159,339 @@ async function ensureReplayTable(sql: Sql) {
     )
   `.then(() => { replayTableReady = true; }).finally(() => { replayTableRequest = null; });
   await replayTableRequest;
+}
+
+async function ensureSaasTables(sql: Sql) {
+  if (saasTablesReady) return;
+  saasTablesRequest ||= (async () => {
+    await sql`
+      create table if not exists vocivo_saas_plans (
+        plan_id text primary key,
+        name text not null,
+        description text not null default '',
+        monthly_price numeric(12,2) not null,
+        annual_price numeric(12,2) not null,
+        currency varchar(3) not null,
+        seat_limit integer not null,
+        phone_number_limit integer not null,
+        concurrent_call_limit integer not null,
+        storage_days integer not null,
+        features jsonb not null default '{}'::jsonb,
+        active boolean not null default true,
+        updated_at timestamptz not null default now()
+      )
+    `;
+    await sql`
+      create table if not exists vocivo_saas_tenants (
+        organization_id text primary key,
+        plan_id text not null,
+        status text not null,
+        billing_cycle text not null,
+        amount numeric(12,2) not null,
+        currency varchar(3) not null,
+        starts_at timestamptz not null,
+        trial_ends_at timestamptz,
+        renews_at timestamptz,
+        cancel_at_period_end boolean not null default false,
+        external_customer_id text not null default '',
+        notes text not null default '',
+        version bigint not null default 1,
+        updated_at timestamptz not null default now()
+      )
+    `;
+    await sql`
+      create table if not exists vocivo_saas_admins (
+        id text primary key,
+        organization_id text not null,
+        email text not null,
+        name text not null,
+        role text not null,
+        password_hash text not null,
+        status text not null,
+        force_password_change boolean not null default true,
+        extension_id text,
+        extension text,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        version bigint not null default 1
+      )
+    `;
+    await sql`
+      create table if not exists vocivo_saas_entitlements (
+        organization_id text primary key,
+        feature_overrides jsonb not null default '{}'::jsonb,
+        version bigint not null default 1,
+        updated_at timestamptz not null default now()
+      )
+    `;
+    await sql`create unique index if not exists vocivo_saas_admins_email_uq on vocivo_saas_admins (lower(email))`;
+    await sql`create index if not exists vocivo_saas_admins_tenant_idx on vocivo_saas_admins (organization_id)`;
+    await sql`create index if not exists vocivo_saas_admins_extension_idx on vocivo_saas_admins (organization_id, extension_id)`;
+    saasTablesReady = true;
+  })().finally(() => { saasTablesRequest = null; });
+  await saasTablesRequest;
+}
+
+export function assertTenantRowOwnership(expectedOrganizationId: string, actualOrganizationId: string) {
+  if (!expectedOrganizationId || actualOrganizationId !== expectedOrganizationId) {
+    throw new Error('Tenant row isolation violation.');
+  }
+}
+
+function assertTenantRows<T extends { organization_id: string }>(organizationId: string, rows: T[]) {
+  for (const row of rows) assertTenantRowOwnership(organizationId, row.organization_id);
+  return rows;
+}
+
+async function selectSaasPlans(sql: Sql) {
+  return sql<SaasPlanRow[]>`
+    select plan_id, name, description, monthly_price::float8 as monthly_price,
+      annual_price::float8 as annual_price, currency, seat_limit, phone_number_limit,
+      concurrent_call_limit, storage_days, features, active
+    from vocivo_saas_plans order by monthly_price asc, plan_id asc
+  `;
+}
+
+async function insertPlan(transaction: Sql | TransactionSql, row: SaasPlanRow) {
+  await transaction`
+    insert into vocivo_saas_plans (
+      plan_id, name, description, monthly_price, annual_price, currency, seat_limit,
+      phone_number_limit, concurrent_call_limit, storage_days, features, active, updated_at
+    ) values (
+      ${row.plan_id}, ${row.name}, ${row.description}, ${row.monthly_price}, ${row.annual_price},
+      ${row.currency}, ${row.seat_limit}, ${row.phone_number_limit}, ${row.concurrent_call_limit},
+      ${row.storage_days}, ${transaction.json(row.features)}, ${row.active}, now()
+    )
+    on conflict (plan_id) do update set name = excluded.name, description = excluded.description,
+      monthly_price = excluded.monthly_price, annual_price = excluded.annual_price,
+      currency = excluded.currency, seat_limit = excluded.seat_limit,
+      phone_number_limit = excluded.phone_number_limit,
+      concurrent_call_limit = excluded.concurrent_call_limit, storage_days = excluded.storage_days,
+      features = excluded.features, active = excluded.active, updated_at = now()
+  `;
+}
+
+async function insertTenant(transaction: Sql | TransactionSql, row: SaasTenantRow) {
+  if (!row.organization_id) throw new Error('Tenant organization is required.');
+  await transaction`
+    insert into vocivo_saas_tenants (
+      organization_id, plan_id, status, billing_cycle, amount, currency, starts_at,
+      trial_ends_at, renews_at, cancel_at_period_end, external_customer_id, notes,
+      version, updated_at
+    ) values (
+      ${row.organization_id}, ${row.plan_id}, ${row.status}, ${row.billing_cycle}, ${row.amount},
+      ${row.currency}, ${row.starts_at}, ${row.trial_ends_at}, ${row.renews_at},
+      ${row.cancel_at_period_end}, ${row.external_customer_id}, ${row.notes},
+      1, now()
+    )
+    on conflict (organization_id) do update set plan_id = excluded.plan_id,
+      status = excluded.status, billing_cycle = excluded.billing_cycle, amount = excluded.amount,
+      currency = excluded.currency, starts_at = excluded.starts_at,
+      trial_ends_at = excluded.trial_ends_at, renews_at = excluded.renews_at,
+      cancel_at_period_end = excluded.cancel_at_period_end,
+      external_customer_id = excluded.external_customer_id, notes = excluded.notes,
+      version = vocivo_saas_tenants.version + 1, updated_at = now()
+  `;
+}
+
+async function insertEntitlements(transaction: Sql | TransactionSql, organizationId: string, overrides: Record<string, boolean>) {
+  if (!organizationId) throw new Error('Tenant organization is required.');
+  await transaction`
+    insert into vocivo_saas_entitlements (organization_id, feature_overrides, version, updated_at)
+    values (${organizationId}, ${transaction.json(overrides)}, 1, now())
+    on conflict (organization_id) do update set feature_overrides = excluded.feature_overrides,
+      version = vocivo_saas_entitlements.version + 1, updated_at = now()
+  `;
+}
+
+async function insertAdmin(transaction: Sql | TransactionSql, row: SaasAdminRow) {
+  if (!row.organization_id) throw new Error('Administrator organization is required.');
+  await transaction`
+    insert into vocivo_saas_admins (
+      id, organization_id, email, name, role, password_hash, status,
+      force_password_change, extension_id, extension, created_at, updated_at, version
+    ) values (
+      ${row.id}, ${row.organization_id}, ${row.email}, ${row.name}, ${row.role},
+      ${row.password_hash}, ${row.status}, ${row.force_password_change},
+      ${row.extension_id}, ${row.extension}, ${row.created_at}, ${row.updated_at}, 1
+    )
+    on conflict (id) do update set organization_id = excluded.organization_id,
+      email = excluded.email, name = excluded.name, role = excluded.role,
+      password_hash = excluded.password_hash, status = excluded.status,
+      force_password_change = excluded.force_password_change,
+      extension_id = excluded.extension_id, extension = excluded.extension,
+      updated_at = excluded.updated_at, version = vocivo_saas_admins.version + 1
+  `;
+}
+
+export async function initializeSaasRows(seed: SaasRows) {
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    return sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext('vocivo:saas:bootstrap:v2'))`;
+      const planIds = await transaction<Array<{ plan_id: string }>>`select plan_id from vocivo_saas_plans`;
+      const tenantIds = await transaction<Array<{ organization_id: string }>>`select organization_id from vocivo_saas_tenants`;
+      const adminIds = await transaction<Array<{ id: string }>>`select id from vocivo_saas_admins`;
+      const entitlementIds = await transaction<Array<{ organization_id: string }>>`select organization_id from vocivo_saas_entitlements`;
+      const existingPlans = new Set(planIds.map((row) => row.plan_id));
+      const existingTenants = new Set(tenantIds.map((row) => row.organization_id));
+      const existingAdmins = new Set(adminIds.map((row) => row.id));
+      const existingEntitlements = new Set(entitlementIds.map((row) => row.organization_id));
+      for (const row of seed.plans) if (!existingPlans.has(row.plan_id)) await insertPlan(transaction, row);
+      for (const row of seed.tenants) {
+        if (!existingTenants.has(row.organization_id)) await insertTenant(transaction, row);
+        if (!existingEntitlements.has(row.organization_id)) await insertEntitlements(transaction, row.organization_id, row.feature_overrides);
+      }
+      for (const row of seed.admins) if (!existingAdmins.has(row.id)) await insertAdmin(transaction, row);
+      return true;
+    });
+  });
+}
+
+export async function readPlatformSaasRows(): Promise<SaasRows> {
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    const [plans, tenants, admins] = await Promise.all([
+      selectSaasPlans(sql),
+      sql<SaasTenantRow[]>`
+        select t.organization_id, plan_id, status, billing_cycle, amount::float8 as amount,
+          currency, starts_at, trial_ends_at, renews_at, cancel_at_period_end,
+          external_customer_id, notes, coalesce(e.feature_overrides, '{}'::jsonb) as feature_overrides
+        from vocivo_saas_tenants t
+        left join vocivo_saas_entitlements e using (organization_id)
+        order by t.organization_id asc
+      `,
+      sql<SaasAdminRow[]>`
+        select id, organization_id, email, name, role, password_hash, status,
+          force_password_change, extension_id, extension, created_at, updated_at
+        from vocivo_saas_admins order by organization_id asc, created_at asc
+      `,
+    ]);
+    return { plans, tenants, admins };
+  });
+}
+
+export async function readTenantSaasRows(organizationId: string): Promise<SaasRows> {
+  if (!organizationId) throw new Error('Tenant organization is required.');
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    const [plans, tenants, admins] = await Promise.all([
+      selectSaasPlans(sql),
+      sql<SaasTenantRow[]>`
+        select t.organization_id, plan_id, status, billing_cycle, amount::float8 as amount,
+          currency, starts_at, trial_ends_at, renews_at, cancel_at_period_end,
+          external_customer_id, notes, coalesce(e.feature_overrides, '{}'::jsonb) as feature_overrides
+        from vocivo_saas_tenants t
+        left join vocivo_saas_entitlements e using (organization_id)
+        where t.organization_id = ${organizationId}
+      `,
+      sql<SaasAdminRow[]>`
+        select id, organization_id, email, name, role, password_hash, status,
+          force_password_change, extension_id, extension, created_at, updated_at
+        from vocivo_saas_admins where organization_id = ${organizationId} order by created_at asc
+      `,
+    ]);
+    return { plans, tenants: assertTenantRows(organizationId, tenants), admins: assertTenantRows(organizationId, admins) };
+  });
+}
+
+export async function findSaasAdminByEmailForAuthentication(email: string) {
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    const rows = await sql<SaasAdminRow[]>`
+      select id, organization_id, email, name, role, password_hash, status,
+        force_password_change, extension_id, extension, created_at, updated_at
+      from vocivo_saas_admins where lower(email) = ${email.trim().toLowerCase()} limit 1
+    `;
+    if (rows[0] && !rows[0].organization_id) throw new Error('Tenant row isolation violation.');
+    return rows[0] || null;
+  });
+}
+
+export async function upsertSaasPlan(row: SaasPlanRow) {
+  await withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:plan:${row.plan_id}`}))`;
+      await insertPlan(transaction, row);
+    });
+  });
+}
+
+export async function upsertTenantSaasRow(organizationId: string, row: SaasTenantRow) {
+  assertTenantRowOwnership(organizationId, row.organization_id);
+  await withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
+      await insertTenant(transaction, row);
+    });
+  });
+}
+
+export async function upsertTenantSaasOverrides(organizationId: string, overrides: Record<string, boolean>) {
+  if (!organizationId) throw new Error('Tenant organization is required.');
+  await withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
+      await insertEntitlements(transaction, organizationId, overrides);
+    });
+  });
+}
+
+export async function upsertTenantSaasAdmin(organizationId: string, row: SaasAdminRow) {
+  assertTenantRowOwnership(organizationId, row.organization_id);
+  await withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
+      const existing = await transaction<Array<{ organization_id: string }>>`
+        select organization_id from vocivo_saas_admins where id = ${row.id} for update
+      `;
+      if (existing[0]) assertTenantRowOwnership(organizationId, existing[0].organization_id);
+      await insertAdmin(transaction, row);
+    });
+  });
+}
+
+export async function deleteTenantSaasAdmin(organizationId: string, id: string) {
+  if (!id) return false;
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    return sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
+      const rows = await transaction<Array<{ id: string }>>`
+        delete from vocivo_saas_admins where id = ${id} and organization_id = ${organizationId} returning id
+      `;
+      return rows.length === 1;
+    });
+  });
+}
+
+export async function deleteTenantSaasAdminsForExtension(organizationId: string, extensionId: string) {
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    return sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
+      const rows = await transaction<Array<{ id: string }>>`
+        delete from vocivo_saas_admins
+        where organization_id = ${organizationId} and extension_id = ${extensionId}
+        returning id
+      `;
+      return rows.length;
+    });
+  });
+}
+
+export async function deleteAllTenantSaasAdmins(organizationId: string) {
+  await withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
+      await transaction`delete from vocivo_saas_admins where organization_id = ${organizationId}`;
+    });
+  });
 }
 
 async function bodyBuffer(value: unknown) {

@@ -12,7 +12,6 @@ import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
 import { parseInternalSipUser } from '../internal-sip.js';
-import { organizationSipDomain } from '../voice-provider.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 
@@ -38,7 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let destinationExtensionId: string | undefined;
     if (requestedFlow === 'internal') {
       const organization = config.organizations.find((item) => item.id === organizationId);
-      const sipUser = organization ? parseInternalSipUser(destination, organizationSipDomain(config, organizationId)) : null;
+      const sipUser = organization ? parseInternalSipUser(destination) : null;
       if (!sipUser || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
       const [directory, source, profile] = await Promise.all([

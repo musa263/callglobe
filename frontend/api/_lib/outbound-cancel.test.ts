@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { outboundCallControlIds } from './outbound-cancel.js';
+import { outboundCallControlIds, outboundPlaybackCallControlIds } from './outbound-cancel.js';
 
 test('returns every unique call leg in a merged outbound pair', () => {
   assert.deepEqual(outboundCallControlIds({
@@ -23,4 +23,16 @@ test('does not send duplicate hangup commands for the same call leg', () => {
     status: 'direct',
     updatedAt: new Date(0).toISOString(),
   }), ['client-a', 'destination-a']);
+});
+
+test('stops ringback only on answered client legs', () => {
+  assert.deepEqual(outboundPlaybackCallControlIds({
+    clientCallControlId: 'client-a',
+    destinationCallControlId: 'destination-a',
+    peerClientCallControlId: 'client-b',
+    peerDestinationCallControlId: 'destination-b',
+    destination: '+15550000000',
+    status: 'conference',
+    updatedAt: new Date(0).toISOString(),
+  }), ['client-a', 'client-b']);
 });

@@ -23,12 +23,12 @@ afterEach(() => {
   else process.env.TELNYX_CONNECTION_ID = originalConnectionId;
 });
 
-test('uses the dedicated PSTN connection when configured', () => {
+test('always routes managed PSTN calls through the Telnyx Call Control application', () => {
   process.env.TELNYX_PSTN_CONNECTION_ID = 'ip-connection';
-  process.env.TELNYX_CALL_CONTROL_APP_ID = 'legacy-call-control';
+  process.env.TELNYX_CALL_CONTROL_APP_ID = 'managed-call-control';
   process.env.TELNYX_CONNECTION_ID = 'legacy-credential';
-  assert.equal(telnyxPstnConnectionId(), 'ip-connection');
-  assert.equal(telnyxPstnConnectionPath(), '/ip_connections/ip-connection');
+  assert.equal(telnyxPstnConnectionId(), 'managed-call-control');
+  assert.equal(telnyxPstnConnectionPath(), '/call_control_applications/managed-call-control');
 });
 
 test('retries one transient Telnyx GET failure', async () => {

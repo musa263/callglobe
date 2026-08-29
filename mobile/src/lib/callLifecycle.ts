@@ -44,3 +44,49 @@ export class SerialTaskQueue {
     return result;
   }
 }
+
+type LifecycleEntry = {
+  state: CallLifecycleState;
+  termination: SingleFlightTermination;
+};
+
+export class CallLifecycleRegistry {
+  #calls = new Map<string, LifecycleEntry>();
+
+  #entry(callId: string) {
+    let entry = this.#calls.get(callId);
+    if (!entry) {
+      entry = { state: 'NEW', termination: new SingleFlightTermination() };
+      this.#calls.set(callId, entry);
+    }
+    return entry;
+  }
+
+  state(callId: string) {
+    return this.#entry(callId).state;
+  }
+
+  isTerminating(callId: string) {
+    return this.#entry(callId).termination.requested;
+  }
+
+  transition(callId: string, next: CallLifecycleState) {
+    const entry = this.#entry(callId);
+    if (!canTransitionCallState(entry.state, next, entry.termination.requested)) return false;
+    entry.state = next;
+    if (isTerminalCallState(next)) entry.termination.finish();
+    return true;
+  }
+
+  terminate(callId: string, operation: () => Promise<void>) {
+    return this.#entry(callId).termination.run(operation);
+  }
+
+  release(callId: string) {
+    this.#calls.delete(callId);
+  }
+
+  clear() {
+    this.#calls.clear();
+  }
+}

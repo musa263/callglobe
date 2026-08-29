@@ -25,8 +25,7 @@ import { normalizeE164 } from '../tenancy.js';
 import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
-import { isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
-import { organizationSipDomain } from '../voice-provider.js';
+import { activeOrganizationExtensionTargets, isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
 
 type VoiceEvent = {
   data?: {
@@ -121,7 +120,7 @@ type AgentRouteOptions = {
   dialFrom?: string;
 };
 
-async function routeToAgent(callControlId: string, department: string, waitingMessage: string, voice: string, eventId: string, destination: string | string[] = requiredEnv('TELNYX_SIP_URI'), targetExtensionId?: string, timeoutSeconds = 45, callerNumber?: string, callerName?: string, organizationId?: string, options: AgentRouteOptions = {}) {
+async function routeToAgent(callControlId: string, department: string, waitingMessage: string, voice: string, eventId: string, destination: string | string[], targetExtensionId?: string, timeoutSeconds = 45, callerNumber?: string, callerName?: string, organizationId?: string, options: AgentRouteOptions = {}) {
   if (options.announceWaiting !== false) {
     await speakPrompt(callControlId, { payload: waitingMessage, voice, command_id: `${eventId}-wait` });
   } else {
@@ -162,14 +161,23 @@ async function routeToAvailableAgent(input: {
   const config = await readBusinessVoiceConfig(input.organizationId);
   const target = await resolveOrganizationDestination(input.organizationId, input.inboundNumber, input.department, input.preferMain);
   const pbx = await readPbxConfig();
-  const destination = target?.sipUsername
-    ? organizationExtensionSipUri(pbx, input.organizationId, target.sipUsername)
-    : input.organizationId === 'primary' ? requiredEnv('TELNYX_SIP_URI') : '';
-  if (destination) {
+  const mainTargets = !target && input.preferMain
+    ? activeOrganizationExtensionTargets(pbx, input.organizationId, await listExtensions(input.organizationId))
+    : [];
+  const destinations = target?.sipUsername
+    ? [organizationExtensionSipUri(pbx, input.organizationId, target.sipUsername)]
+    : mainTargets.map((item) => item.destination);
+  const destination = destinations.length === 1 ? destinations[0] : destinations;
+  if (destinations.length) {
     if (target) {
       await routeToExtension({ ...input, extension: target, announceWaiting: !input.preferMain });
     } else {
-      await routeToAgent(input.callControlId, input.department, config.waitingMessage, config.voice, input.eventId, destination, undefined, config.voicemailDelaySeconds, input.callerNumber, input.callerName, input.organizationId, { announceWaiting: !input.preferMain, voicemailEnabled: config.voicemailEnabled, inboundNumber: input.inboundNumber });
+      await routeToAgent(input.callControlId, input.department, config.waitingMessage, config.voice, input.eventId, destination, undefined, config.voicemailDelaySeconds, input.callerNumber, input.callerName, input.organizationId, {
+        announceWaiting: !input.preferMain,
+        voicemailEnabled: config.voicemailEnabled,
+        inboundNumber: input.inboundNumber,
+        targetExtensionIds: mainTargets.map((item) => item.extensionId),
+      });
     }
     return;
   }
@@ -507,11 +515,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Persistent state remains a migration fallback for app builds released before signed routes.
       const reservation = signedReservation?.routeId === routeId ? signedReservation : routeId ? await readVoiceRoute(routeId) : null;
       const effectiveCallerId = selectedCallerId || reservation?.callerId || (reservation?.flow === 'outbound' ? requiredEnv('TELNYX_SMS_FROM') : '');
-      const pbx = reservation ? await readPbxConfig() : null;
-      const organizationSipHost = reservation && pbx?.organizations.some((item) => item.id === reservation.organizationId)
-        ? organizationSipDomain(pbx, reservation.organizationId)
-        : undefined;
-      if (!reservation || reservation.destination !== destination || reservation.flow !== parkedFlow || (reservation.callerId || '') !== effectiveCallerId || (!e164.test(destination) && !isAllowedInternalSipDestination(destination, organizationSipHost))) {
+      if (!reservation || reservation.destination !== destination || reservation.flow !== parkedFlow || (reservation.callerId || '') !== effectiveCallerId || (!e164.test(destination) && !isAllowedInternalSipDestination(destination))) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch(() => undefined);
         return res.status(200).json({ received: true });
       }

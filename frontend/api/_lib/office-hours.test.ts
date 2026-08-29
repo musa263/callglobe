@@ -6,8 +6,14 @@ import { officeHoursDecision, userAvailableBySchedule, validOfficeTime, validTim
 const config = defaultPbxConfig();
 
 test('evaluates weekly hours in the configured timezone', () => {
-  assert.equal(officeHoursDecision(config.officeHours, new Date('2026-08-24T07:00:00Z')).open, true);
-  assert.equal(officeHoursDecision(config.officeHours, new Date('2026-08-24T18:00:00Z')).open, false);
+  const hours = structuredClone(config.officeHours);
+  hours.weekdays.Monday = { enabled: true, start: '09:00', end: '17:00' };
+  assert.equal(officeHoursDecision(hours, new Date('2026-08-24T07:00:00Z')).open, true);
+  assert.equal(officeHoursDecision(hours, new Date('2026-08-24T18:00:00Z')).open, false);
+});
+
+test('new company phone systems accept calls every day by default', () => {
+  assert.equal(officeHoursDecision(config.officeHours, new Date('2026-08-29T10:00:00Z')).open, true);
 });
 
 test('supports overnight office windows', () => {

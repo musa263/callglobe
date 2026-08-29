@@ -10,7 +10,13 @@ async function rawBody(req: VercelRequest, maximum = 1024 * 1024) {
   const explicit = (req as VercelRequest & { rawBody?: Buffer | string }).rawBody;
   if (Buffer.isBuffer(explicit)) return explicit.length <= maximum ? explicit : null;
   if (typeof explicit === 'string') return Buffer.byteLength(explicit) <= maximum ? Buffer.from(explicit) : null;
-  if (!(Symbol.asyncIterator in req)) return null;
+  const parsed = (req as VercelRequest & { body?: unknown }).body;
+  const parsedBody = () => {
+    if (parsed === undefined) return null;
+    const serialized = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+    return Buffer.byteLength(serialized) <= maximum ? Buffer.from(serialized) : null;
+  };
+  if (!(Symbol.asyncIterator in req)) return parsedBody();
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -19,7 +25,7 @@ async function rawBody(req: VercelRequest, maximum = 1024 * 1024) {
     if (size > maximum) return null;
     chunks.push(value);
   }
-  return Buffer.concat(chunks);
+  return chunks.length ? Buffer.concat(chunks) : parsedBody();
 }
 
 function ed25519Key(value: string) {

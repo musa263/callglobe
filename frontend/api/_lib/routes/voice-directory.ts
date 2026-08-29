@@ -5,6 +5,7 @@ import { listExtensions } from '../pbx.js';
 import { readUserProfiles } from '../profile-store.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { requireFeature } from '../saas-access.js';
+import { sessionOrganizationId } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -13,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = await requireSession(req);
     const config = await readPbxConfig();
     await requireFeature(session, 'internalCalling', config);
-    const organizationId = session.organizationId || config.activeOrganizationId;
+    const organizationId = sessionOrganizationId(session, config);
     const organization = config.organizations.find((item) => item.id === organizationId);
     if (organization?.accountType !== 'business' || !organization.internalCallingEnabled || organization.status !== 'active') return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
     const requestedExtension = typeof req.query.extension === 'string' ? req.query.extension.replace(/\D/g, '').slice(0, 5) : '';

@@ -29,7 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const config = await readPbxConfig();
     const subscriptionAccess = await requireFeature(access.session, 'phoneNumbers', config);
-    const activeOrganizationId = access.organizationId || config.activeOrganizationId;
+    const activeOrganizationId = access.superadmin ? config.activeOrganizationId : access.organizationId!;
     if (req.method === 'GET' && req.query.mode === 'search') {
       const country = text(req.query.country, 2).toUpperCase();
       if (!/^[A-Z]{2}$/.test(country)) return res.status(400).json({ error: 'Choose a two-letter country code.' });

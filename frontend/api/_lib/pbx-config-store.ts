@@ -46,8 +46,8 @@ export type PbxConfig = {
   };
   system: { recordingEnabled: boolean; retentionDays: number; emergencyCallingEnabled: boolean };
   platform: {
-    controlPlane: 'vocivo'; mediaPlane: 'telnyx' | 'vocivo'; pbxEngine: 'telnyx' | 'asterisk' | 'freeswitch'; pstnProvider: 'telnyx' | 'go_telecom' | 'custom';
-    sipDomain: string; websocketUrl?: string; ttsProvider: 'vocivo' | 'telnyx'; carrierFallbackEnabled: boolean;
+    controlPlane: 'vocivo'; voiceProvider: 'telnyx'; pstnProvider: 'telnyx' | 'go_telecom' | 'custom';
+    sipDomain: 'sip.telnyx.com'; ttsProvider: 'vocivo' | 'telnyx'; carrierFallbackEnabled: boolean;
   };
   updatedAt: string;
 };
@@ -59,7 +59,7 @@ const cacheTtlMs = 15_000;
 let cachedConfig: { expiresAt: number; value: PbxConfig } | null = null;
 let configRequest: Promise<PbxConfig> | null = null;
 
-const weekdays = Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, { enabled: !['Saturday', 'Sunday'].includes(day), start: '09:00', end: '17:00' }]));
+const weekdays = Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, { enabled: true, start: '00:00', end: '23:59' }]));
 
 export function defaultPbxConfig(): PbxConfig {
   return {
@@ -75,9 +75,9 @@ export function defaultPbxConfig(): PbxConfig {
     outboundRules: [{ id: 'international', name: 'International calling', prefix: '+', extensionRange: '', numberLength: '', department: 'All', routes: ['Vocivo Managed'], enabled: true }],
     officeHours: { timezone: 'Asia/Riyadh', weekdays, holidays: [] },
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
-    ai: { enabled: false, assistantId: '', name: 'Global Heritage Receptionist', greeting: 'Welcome to Global Heritage. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '102', transferEnabled: true, summariesEnabled: true },
+    ai: { enabled: false, assistantId: '', name: 'Global Heritage Receptionist', greeting: 'Welcome to Global Heritage. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '2000', transferEnabled: true, summariesEnabled: true },
     system: { recordingEnabled: false, retentionDays: 30, emergencyCallingEnabled: false },
-    platform: { controlPlane: 'vocivo', mediaPlane: 'telnyx', pbxEngine: 'telnyx', pstnProvider: 'telnyx', sipDomain: 'sip.telnyx.com', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
+    platform: { controlPlane: 'vocivo', voiceProvider: 'telnyx', pstnProvider: 'telnyx', sipDomain: 'sip.telnyx.com', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
     updatedAt: new Date().toISOString(),
   };
 }
@@ -103,7 +103,12 @@ function mergeConfig(stored?: Partial<PbxConfig>): PbxConfig {
     officeHours: { ...base.officeHours, ...(stored.officeHours || {}), weekdays: { ...base.officeHours.weekdays, ...(stored.officeHours?.weekdays || {}) } },
     callHandling: { ...base.callHandling, ...(stored.callHandling || {}) },
     ai: { ...base.ai, ...(stored.ai || {}) }, system: { ...base.system, ...(stored.system || {}) },
-    platform: { ...base.platform, ...(stored.platform || {}) },
+    platform: {
+      ...base.platform,
+      pstnProvider: stored.platform?.pstnProvider || base.platform.pstnProvider,
+      ttsProvider: stored.platform?.ttsProvider || base.platform.ttsProvider,
+      carrierFallbackEnabled: stored.platform?.carrierFallbackEnabled ?? base.platform.carrierFallbackEnabled,
+    },
     organizations: stored.organizations?.length ? stored.organizations.map((organization) => ({
       ...organization,
       accountType: organization.accountType || 'business',

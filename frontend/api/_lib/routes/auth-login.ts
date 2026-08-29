@@ -4,7 +4,7 @@ import { createSession, createTenantAdminSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readPasswordHash } from '../number-config.js';
 import { readPbxConfig } from '../pbx-config-store.js';
-import { authenticateTenantAdmin, effectiveEntitlements, readSaasState } from '../saas-store.js';
+import { authenticateTenantAdmin, effectiveEntitlements, readTenantSaasState } from '../saas-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -32,7 +32,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const account = password.length >= 8 ? await authenticateTenantAdmin(email, password, config) : null;
     const organization = account ? config.organizations.find((item) => item.id === account.organizationId && item.status === 'active') : undefined;
     if (!account || !organization) return res.status(401).json({ error: 'Email or password is incorrect.' });
-    const access = effectiveEntitlements(await readSaasState(config), organization.id, organization.accountType);
+    const access = effectiveEntitlements(await readTenantSaasState(organization.id, config), organization.id, organization.accountType);
     if (!access.serviceActive) return res.status(403).json({ error: 'This company subscription is not active. Contact Vocivo support.' });
     const token = await createTenantAdminSession(account);
     return res.status(200).json({

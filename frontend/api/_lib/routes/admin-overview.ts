@@ -17,7 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const access = await requireAdmin(req);
     const config = await readPbxConfig();
-    const organizationId = access.organizationId || config.activeOrganizationId;
+    const organizationId = access.superadmin ? config.activeOrganizationId : access.organizationId!;
     const [balance, numbers, connection, extensions, business] = await Promise.all([
       access.superadmin ? data('/balance') as Promise<{ balance?: string; currency?: string }> : Promise.resolve(null),
       data('/phone_numbers?page[size]=250&filter[status]=active') as Promise<Array<{ id: string; phone_number: string; status?: string }>>,

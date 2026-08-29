@@ -1,34 +1,17 @@
-# Vocivo SIP Trunk Connectivity
+# Production Voice Architecture
 
-## Current production topology
+Vocivo uses Telnyx as its managed signaling, media, ICE/TURN, native push, PSTN, and DID provider. The production control plane consists of the Vercel Node.js API and the Postgres-backed multi-tenant data layer.
 
-- Web application and HTTPS control API: `https://vocivo.vercel.app`
-- Control-plane hosting: Vercel Functions
-- Media plane: Vocivo FreeSWITCH on DigitalOcean
-- PSTN/DID/SMS carrier: Telnyx or GO Telecom; FreeSWITCH does not replace a licensed carrier
-- Data store: PostgreSQL through `DATABASE_URL` or `POSTGRES_URL`
-- Dedicated Vocivo SIP ingress IP: `68.183.244.215`
+There is no Vocivo-hosted registrar, event listener, relay, SBC, or media node in this release. Do not publish retired deployment ports or use a legacy tenant SIP domain.
 
-`vocivo.vercel.app` is an HTTPS application endpoint, not a SIP proxy. Do not give it to a carrier as a SIP signaling or RTP destination. Vercel's standard addresses are dynamic, and Vercel Static IPs are outbound egress addresses rather than a public SIP listener.
+## Internal Calling
 
-## Production SIP edge
+Every active company extension owns a tenant-bound Telnyx telephony credential. Internal destinations are accepted only in the form `sip:<credential-user>@sip.telnyx.com`, and the route API verifies that both extensions belong to the authenticated organization before issuing a route authorization.
 
-`services/pbx` is deployed on a DigitalOcean Reserved IP with FreeSWITCH `mod_sofia`, optional `mod_verto`, a local ESL worker, and Caddy WSS termination. The current trunk details are:
+## External Trunks
 
-- SIP FQDN: `sip.68.183.244.215.nip.io`
-- Signaling IP: `68.183.244.215`
-- DigitalOcean anchor bind IP: `10.47.0.7` (private to the Droplet)
-- Signaling: UDP/TCP `5060`, opened only to the carrier's published CIDRs
-- Media: SRTP/RTP on UDP 20000-29999
-- Authentication: IP allowlist and mutual credentials; TLS certificates where supported
-- Codecs: Opus for app extensions; PCMU/PCMA for carrier interoperability
-- DTMF: RFC 2833 / RFC 4733
-- Number format: E.164
+Customer trunk settings are control-plane records and do not make Vocivo a carrier. Public numbers and PSTN routes must remain attached to a licensed provider such as Telnyx or an approved regional carrier. Carrier credentials must stay server-side and tenant-scoped.
 
-The Telnyx IP-authenticated trunk uses the reserved signaling IP for inbound and outbound traffic. The carrier-facing Sofia profile binds to the Droplet anchor address so DigitalOcean translates egress to the reserved IP.
+## Deployment
 
-## Recommended split
-
-Keep the React application and ordinary API routes on Vercel. Run the long-lived FreeSWITCH registrar/media plane, ESL worker and call-recording workers on DigitalOcean. Add Kamailio/OpenSIPS as the public SBC when the second PBX node is introduced. This preserves the SaaS control plane while giving SIP trunks a stable network edge.
-
-Before accepting commercial traffic, add a second PBX node, health-based IP failover, SIP firewall rules, TLS/SRTP, encrypted backups, metrics, log retention, and carrier failover. Validate emergency-calling and lawful-intercept obligations for every sales country.
+Use the root `deploy-production.sh` script. It validates the API, web client, and mobile TypeScript, then deploys only the web/API project to Vercel. `services/pbx/docker-compose.yml` is intentionally empty so legacy media containers cannot be started accidentally.
