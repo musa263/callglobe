@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { waitUntil } from '@vercel/functions';
 import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
-import { findExtension, getExtension, listExtensions } from '../pbx.js';
+import { findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
 import { callAction, decodeVoiceState, dialCall, encodeVoiceState } from '../voice-control.js';
 import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
@@ -25,7 +25,7 @@ import { normalizeE164 } from '../tenancy.js';
 import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
-import { activeOrganizationExtensionTargets, isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
+import { activeOrganizationExtensionTargets, extensionSipUri, isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
 
 type VoiceEvent = {
   data?: {
@@ -65,6 +65,10 @@ function callerDisplay(value: string) {
 function customHeader(payload: VoicePayload | undefined, name: string) {
   const match = payload?.custom_headers?.find((header) => (header.name || header.header_name || '').toLowerCase() === name.toLowerCase());
   return (match?.value || match?.header_value || '').trim();
+}
+
+function enterpriseRingbackUrl() {
+  return `${requiredEnv('VITE_APP_URL').replace(/\/+$/, '')}/audio/ringback.wav?v=enterprise-2`;
 }
 
 async function completeOutboundBridge(parentCallControlId: string, destinationCallControlId: string, eventId: string, routeId?: string) {
@@ -124,8 +128,7 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
   if (options.announceWaiting !== false) {
     await speakPrompt(callControlId, { payload: waitingMessage, voice, command_id: `${eventId}-wait` });
   } else {
-    const appUrl = requiredEnv('VITE_APP_URL').replace(/\/+$/, '');
-    await callAction(callControlId, 'playback_start', { audio_url: `${appUrl}/audio/ringback.wav`, loop: 'infinity', command_id: `${eventId}-ringback` }).catch(() => undefined);
+    await callAction(callControlId, 'playback_start', { audio_url: enterpriseRingbackUrl(), loop: 'infinity', command_id: `${eventId}-ringback` }).catch(() => undefined);
   }
   const businessName = organizationId
     ? (await readBusinessVoiceConfig(organizationId)).companyName
@@ -241,13 +244,15 @@ async function routeToExtension(input: {
     return;
   }
 
-  const destinations = [organizationExtensionSipUri(basePbx, input.organizationId, input.extension.sipUsername)];
+  const primarySipUsers = await listExtensionSipUsernames(input.extension.id);
+  const destinations = (primarySipUsers.length ? primarySipUsers : [input.extension.sipUsername]).map(extensionSipUri);
   const targetExtensionIds = [input.extension.id];
   let dialFrom: string | undefined;
   const simultaneous = profile?.simultaneousRing?.trim() || '';
   const simultaneousExtension = extensions.find((item) => item.extension === simultaneous && item.id !== input.extension.id && item.status === 'active' && item.sipUsername);
   if (simultaneousExtension) {
-    destinations.push(organizationExtensionSipUri(basePbx, input.organizationId, simultaneousExtension.sipUsername));
+    const simultaneousSipUsers = await listExtensionSipUsernames(simultaneousExtension.id);
+    destinations.push(...(simultaneousSipUsers.length ? simultaneousSipUsers : [simultaneousExtension.sipUsername]).map(extensionSipUri));
     targetExtensionIds.push(simultaneousExtension.id);
   } else {
     const simultaneousNumber = normalizeE164(simultaneous);
@@ -445,7 +450,7 @@ async function extensionForAgentState(state: NonNullable<ReturnType<typeof decod
   const sipUsername = String(destination || '').match(/^sip:([^@]+)@/i)?.[1];
   if (!sipUsername) return state.targetExtensionId || '';
   const target = (await listExtensions(state.organizationId)).find((item) => state.targetExtensionIds?.includes(item.id) && item.sipUsername === sipUsername);
-  return target?.id || '';
+  return target?.id || state.targetExtensionId || '';
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -530,9 +535,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
       await callAction(callControlId, 'answer', { command_id: `${eventId}-answer-client` });
-      const appUrl = requiredEnv('VITE_APP_URL').replace(/\/+$/, '');
       await callAction(callControlId, 'playback_start', {
-        audio_url: `${appUrl}/audio/ringback.wav`,
+        audio_url: enterpriseRingbackUrl(),
         loop: 'infinity',
         command_id: `${eventId}-ringback`,
       }).catch((error) => console.warn('Vocivo could not start carrier ringback', publicError(error)));
@@ -541,8 +545,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const businessName = reservation.flow === 'internal'
           ? (await readBusinessVoiceConfig(reservation.organizationId)).companyName
           : '';
+        const sipUsers = reservation.flow === 'internal' && reservation.destinationExtensionId
+          ? await listExtensionSipUsernames(reservation.destinationExtensionId)
+          : [];
+        const destinations = sipUsers.map(extensionSipUri);
         destinationCall = await dialCall({
-          to: destination,
+          to: destinations.length > 1 ? destinations : destinations[0] || destination,
           from: reservation.callerId,
           state: {
             flow: 'outbound_destination', parentCallControlId: callControlId, organizationId: reservation.organizationId, routeId,

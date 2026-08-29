@@ -2,6 +2,7 @@ import { requiredEnv } from './http.js';
 import { telnyx } from './telnyx.js';
 import { readPbxConfig } from './pbx-config-store.js';
 import { revokeExtensionSessions } from './extension-session-store.js';
+import { extensionSipUsernames } from './internal-sip.js';
 import {
   deleteExtensionCredential,
   readExtensionCredential,
@@ -18,6 +19,8 @@ const connectionResource = () => `connection:${requiredEnv('TELNYX_CONNECTION_ID
 const extensionCacheTtlMs = 15_000;
 let extensionCache: { expiresAt: number; value: ExtensionUser[] } | null = null;
 let extensionRequest: Promise<ExtensionUser[]> | null = null;
+let carrierDirectoryCache: { expiresAt: number; value: ExtensionUser[] } | null = null;
+let carrierDirectoryRequest: Promise<ExtensionUser[]> | null = null;
 const credentialCache = new Map<string, { expiresAt: number; parsed: ExtensionUser; data: CredentialResource }>();
 
 export type ExtensionUser = {
@@ -81,6 +84,21 @@ function parseCredential(item: CredentialResource): ExtensionUser | null {
     status: item.expired ? 'expired' : 'active',
     createdAt: item.created_at,
   };
+}
+
+async function listCarrierExtensions() {
+  if (carrierDirectoryCache && carrierDirectoryCache.expiresAt > Date.now()) return carrierDirectoryCache.value;
+  carrierDirectoryRequest ||= (async () => {
+    const query = new URLSearchParams({ 'page[size]': '250', 'filter[resource_id]': connectionResource() });
+    const response = await telnyx(`/telephony_credentials?${query}`);
+    const payload = await response.json() as { data?: CredentialResource[] };
+    const value = (payload.data ?? [])
+      .map(parseCredential)
+      .filter((item): item is ExtensionUser => Boolean(item));
+    carrierDirectoryCache = { expiresAt: Date.now() + extensionCacheTtlMs, value };
+    return value;
+  })().finally(() => { carrierDirectoryRequest = null; });
+  return carrierDirectoryRequest;
 }
 
 export async function listExtensions(organizationId?: string): Promise<ExtensionUser[]> {
@@ -224,6 +242,16 @@ async function ensureTelnyxDirectory(extensions: ExtensionUser[]) {
 export async function getExtension(id: string) {
   await listExtensions();
   return requireManagedCredential(id);
+}
+
+export async function listExtensionSipUsernames(id: string) {
+  const target = await getExtension(id);
+  try {
+    return extensionSipUsernames(target, await listCarrierExtensions());
+  } catch (error) {
+    console.warn(`Vocivo could not refresh SIP aliases for extension ${target.extension}`, error);
+    return target.status === 'active' && target.sipUsername ? [target.sipUsername] : [];
+  }
 }
 
 export async function getExtensionCredentials(id: string) {

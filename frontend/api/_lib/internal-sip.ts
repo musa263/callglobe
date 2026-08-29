@@ -19,6 +19,26 @@ export function extensionSipUri(sipUsername: string) {
   return `sip:${sipUsername}@${telnyxSipHost}`;
 }
 
+type ExtensionSipIdentity = {
+  organizationId: string;
+  extension: string;
+  sipUsername: string;
+  status: string;
+};
+
+export function extensionSipUsernames(
+  target: ExtensionSipIdentity,
+  candidates: ExtensionSipIdentity[],
+) {
+  return [...new Set([target, ...candidates]
+    .filter((candidate) => candidate.organizationId === target.organizationId
+      && candidate.extension === target.extension
+      && candidate.status === 'active'
+      && candidate.sipUsername)
+    .map((candidate) => candidate.sipUsername.trim())
+    .filter(Boolean))];
+}
+
 export function organizationExtensionSipUri(_config: PbxConfig, _organizationId: string, sipUsername: string) {
   return extensionSipUri(sipUsername);
 }
