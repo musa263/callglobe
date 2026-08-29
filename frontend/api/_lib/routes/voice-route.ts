@@ -111,7 +111,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destinationExtensionId: route.destinationExtensionId,
       flow: route.flow,
     });
-    return res.status(201).json({ routeId: route.routeId, routeToken, callerId: route.callerId, callerName: route.callerName, callerExtension: route.callerExtension, callerPhotoUrl: route.callerPhotoUrl });
+    return res.status(201).json({
+      routeId: route.routeId,
+      routeToken,
+      callerId: route.callerId,
+      callerName: route.callerName,
+      callerExtension: route.callerExtension,
+      callerPhotoUrl: route.callerPhotoUrl,
+      destinationName: route.destinationName,
+      destinationExtension: route.destinationExtension,
+    });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });

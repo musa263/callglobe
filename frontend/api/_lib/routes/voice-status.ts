@@ -16,7 +16,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       phase: route.phase,
       connectedAt: route.connectedAt,
-      failureCause: route.failureCause,
+      // A normal carrier release is a completed call lifecycle, not a UI error.
+      failureCause: route.phase === 'failed' ? route.failureCause : undefined,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });

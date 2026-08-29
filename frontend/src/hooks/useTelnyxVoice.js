@@ -377,7 +377,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         if (['failed', 'ended'].includes(result.phase)) {
           setRoutePhase(result.phase);
           stopRingback();
-          if (result.failureCause) setError(`Call ended: ${String(result.failureCause).replaceAll('_', ' ')}.`);
+          if (result.phase === 'failed' && result.failureCause) setError(`Call failed: ${String(result.failureCause).replaceAll('_', ' ')}.`);
           try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up failed route', failure); }
           return;
         }
@@ -452,6 +452,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           { name: 'X-Vocivo-Destination', value: destination },
           { name: 'X-Vocivo-Route-ID', value: routeId },
           { name: 'X-Vocivo-Route-Token', value: reservation.routeToken },
+          { name: 'X-Vocivo-Destination-Name', value: reservation.destinationName || displayName },
+          { name: 'X-Vocivo-Destination-Extension', value: reservation.destinationExtension || extension },
         ],
         remoteElement: 'remoteMedia',
         ...(iceServersRef.current ? { iceServers: iceServersRef.current } : {}),

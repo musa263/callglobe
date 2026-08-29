@@ -5,7 +5,7 @@ index c96c06f..237689e 100644
 @@ -27,7 +27,7 @@ abstract class TelnyxMainActivity : ReactActivity() {
          handleIntent(intent)
      }
- 
+
 -    override fun onNewIntent(intent: Intent?) {
 +    override fun onNewIntent(intent: Intent) {
          super.onNewIntent(intent)
@@ -20,13 +20,13 @@ index 888e7d0..7a16f9b 100644
  import com.facebook.react.module.annotations.ReactModule
  import com.facebook.react.modules.core.DeviceEventManagerModule
 +import com.google.firebase.messaging.FirebaseMessaging
- 
+
  @ReactModule(name = VoicePnBridgeModule.NAME)
  class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 @@ -226,6 +227,42 @@ class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextB
          }
      }
- 
+
 +    @ReactMethod
 +    fun getFirebaseToken(promise: Promise) {
 +        val preferences = reactApplicationContext.getSharedPreferences("vocivo_push", Context.MODE_PRIVATE)
@@ -67,13 +67,90 @@ index 888e7d0..7a16f9b 100644
      fun setIncomingCallRingtone(resourceName: String?, promise: Promise) {
          try {
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift b/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift
-index 8fc2564..ec5fb5b 100644
+index 8fc2564..85a748a 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift
-@@ -839,6 +839,24 @@ import React
+@@ -9,6 +9,36 @@ import React
+     import UserNotifications
+     import WebRTC
+
++    private enum VocivoCallKitIdentity {
++        static func resolve(displayName: String, address: String) -> (handle: CXHandle, name: String, address: String) {
++            let cleanName = cleanLabel(displayName)
++            let cleanAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
++            let phoneAddress = cleanAddress.replacingOccurrences(of: " ", with: "")
++            let isPhone = phoneAddress.range(of: #"^\+?[0-9*#]{3,20}$"#, options: .regularExpression) != nil
++            let fallback = cleanLabel(cleanAddress)
++            let label = cleanName.isEmpty ? (fallback.isEmpty ? "Vocivo caller" : fallback) : cleanName
++            let handle = isPhone
++                ? CXHandle(type: .phoneNumber, value: phoneAddress)
++                : CXHandle(type: .generic, value: label)
++            return (handle, label, isPhone ? phoneAddress : label)
++        }
++
++        private static func cleanLabel(_ raw: String) -> String {
++            var value = raw.replacingOccurrences(of: "[\\r\\n\\t]", with: " ", options: .regularExpression)
++                .trimmingCharacters(in: .whitespacesAndNewlines)
++            if let quoted = value.range(of: #"^\s*\"([^\"]+)\""#, options: .regularExpression) {
++                value = String(value[quoted]).replacingOccurrences(of: "\"", with: "")
++            } else if let bracket = value.firstIndex(of: "<") {
++                value = String(value[..<bracket]).trimmingCharacters(in: .whitespacesAndNewlines)
++            }
++            if value.lowercased().hasPrefix("sip:") || value.contains("@") {
++                return ""
++            }
++            value = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
++            return String(value.prefix(80))
++        }
++    }
++
+     /// Small synchronized dictionary used because React Native module methods
+     /// and CXProvider delegate callbacks are not guaranteed to share a queue.
+     public final class LockedDictionary<Key: Hashable, Value> {
+@@ -147,13 +177,13 @@ import React
+                 return
+             }
+
+-            let callHandle = CXHandle(type: .phoneNumber, value: handle)
+-            let startCallAction = CXStartCallAction(call: uuid, handle: callHandle)
++            let identity = VocivoCallKitIdentity.resolve(displayName: displayName, address: handle)
++            let startCallAction = CXStartCallAction(call: uuid, handle: identity.handle)
+             let transaction = CXTransaction(action: startCallAction)
+
+             manager.activeCalls[uuid] = [
+-                "caller": displayName,
+-                "handle": handle,
++                "caller": identity.name,
++                "handle": identity.address,
+                 "uuid": uuid.uuidString,
+                 "direction": "outgoing",
+                 "source": "react_native",
+@@ -185,16 +215,16 @@ import React
+                 return
+             }
+
+-            let callHandle = CXHandle(type: .phoneNumber, value: handle)
++            let identity = VocivoCallKitIdentity.resolve(displayName: displayName, address: handle)
+             let callUpdate = CXCallUpdate()
+-            callUpdate.remoteHandle = callHandle
++            callUpdate.remoteHandle = identity.handle
+             callUpdate.hasVideo = false
+-            callUpdate.localizedCallerName = displayName
++            callUpdate.localizedCallerName = identity.name
+             callUpdate.supportsHolding = true
+
+             manager.activeCalls[uuid] = [
+-                "caller": displayName,
+-                "handle": handle,
++                "caller": identity.name,
++                "handle": identity.address,
+                 "uuid": uuid.uuidString,
+                 "direction": "incoming",
+                 "source": "react_native",
+@@ -839,6 +869,24 @@ import React
              _ = installCallKitProvider()
          }
- 
+
 +        public func updateIncomingRingtone(_ resourceName: String?) {
 +            let storedRingtone = UserDefaults.standard.string(forKey: "vocivo_incoming_ringtone")
 +            if storedRingtone == resourceName {
@@ -95,16 +172,61 @@ index 8fc2564..ec5fb5b 100644
          private func installCallKitProvider() -> CXProvider {
              // Use the localizedName from the app's bundle display name or fallback
              let appName =
-@@ -852,6 +870,9 @@ import React
+@@ -852,6 +900,9 @@ import React
              configuration.maximumCallsPerCallGroup = 1
              configuration.supportedHandleTypes = [.phoneNumber, .generic]
              configuration.includesCallsInRecents = true
 +            if let ringtone = UserDefaults.standard.string(forKey: "vocivo_incoming_ringtone"), !ringtone.isEmpty {
 +                configuration.ringtoneSound = "\(ringtone).wav"
 +            }
- 
+
              let provider = CXProvider(configuration: configuration)
              provider.setDelegate(self, queue: nil)
+@@ -1340,9 +1391,11 @@ import React
+                 }
+             }
+
+-            // Defer action.fulfill() until reportCallConnected when peer connection is ready
+-            NSLog("TelnyxVoice: Deferring CXAnswerCallAction.fulfill() until peer connection is ready")
+-            self.pendingAnswerActions[action.callUUID] = action
++            // CallKit must be acknowledged immediately. Holding this action until
++            // WebRTC becomes active delays AVAudioSession activation and can form
++            // a signaling/audio deadlock on a cold-started app.
++            NSLog("TelnyxVoice: Fulfilling CXAnswerCallAction before WebRTC negotiation")
++            action.fulfill()
+         }
+
+         public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
+@@ -1657,9 +1710,10 @@ import React
+
+             // Store call data manually and report to CallKit
+             let isAppRunning = CallKitBridge.shared != nil
++            let identity = VocivoCallKitIdentity.resolve(displayName: callerName, address: callerNumber)
+             callKitManager.activeCalls[callUUID] = [
+-                "caller": callerName,
+-                "handle": callerNumber,
++                "caller": identity.name,
++                "handle": identity.address,
+                 "payload": payload.dictionaryPayload,
+                 "uuid": callUUID.uuidString,
+                 "direction": "incoming",
+@@ -1667,12 +1721,12 @@ import React
+                 "isCallKitRegistered": false,
+             ]
+
+-            // Report to CallKit immediately
+-            let handle = CXHandle(type: .phoneNumber, value: callerNumber)
++            // Report to CallKit immediately with a human identity. Never expose a
++            // SIP URI or generated credential as the native call handle.
+             let callUpdate = CXCallUpdate()
+-            callUpdate.remoteHandle = handle
++            callUpdate.remoteHandle = identity.handle
+             callUpdate.hasVideo = false
+-            callUpdate.localizedCallerName = callerName
++            callUpdate.localizedCallerName = identity.name
+             callUpdate.supportsHolding = true
+
+             callKitProvider.reportNewIncomingCall(with: callUUID, update: callUpdate) { error in
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m b/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m
 index 7e311a1..55293ff 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m
@@ -112,7 +234,7 @@ index 7e311a1..55293ff 100644
 @@ -34,6 +34,14 @@ @interface RCT_EXTERN_MODULE(VoicePnBridge, NSObject)
  RCT_EXTERN_METHOD(clearPendingVoipAction:(RCTPromiseResolveBlock)resolve
                    rejecter:(RCTPromiseRejectBlock)reject)
- 
+
 +RCT_EXTERN_METHOD(setVocivoVoiceSignedIn:(BOOL)signedIn
 +                  resolver:(RCTPromiseResolveBlock)resolve
 +                  rejecter:(RCTPromiseRejectBlock)reject)
@@ -131,7 +253,7 @@ index f15ea17..ceb3c71 100644
 @@ -101,6 +101,25 @@ class VoicePnBridge: NSObject {
          resolve(true)
      }
- 
+
 +    @objc
 +    func setVocivoVoiceSignedIn(_ signedIn: Bool, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
 +        UserDefaults.standard.set(signedIn, forKey: "vocivo_voice_signed_in")
@@ -155,10 +277,10 @@ index f15ea17..ceb3c71 100644
      func setMissedCallNotificationsEnabled(_ enabled: Bool, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
          UserDefaults.standard.set(enabled, forKey: TelnyxVoiceUserDefaultsKey.missedCallNotificationsEnabled)
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
-index 993ecf6..2331359 100644
+index 993ecf6..a96df57 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
-@@ -6,6 +6,15 @@ const operators_1 = require('rxjs/operators');
+@@ -6,6 +6,18 @@ const operators_1 = require('rxjs/operators');
  const call_1 = require('../../models/call');
  const call_state_1 = require('../../models/call-state');
  const callkit_coordinator_1 = require('../../callkit/callkit-coordinator');
@@ -171,10 +293,41 @@ index 993ecf6..2331359 100644
 +  );
 +  return String(match?.value || match?.header_value || '').trim();
 +}
++function customHeader(headers, name) {
++  return headers?.find((header) => String(header?.name || '').toLowerCase() === name.toLowerCase())?.value?.trim() || '';
++}
  /**
   * Central state machine for call management.
   *
-@@ -385,6 +394,10 @@ class CallStateController {
+@@ -202,11 +214,15 @@ class CallStateController {
+     }
+     try {
+       // Create the call using the Telnyx SDK
++      const normalizedHeaders = this._normalizeCustomHeaders(customHeaders);
++      const remoteName = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Name') || destination;
++      const remoteExtension = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Extension');
++      const remoteNumber = remoteExtension ? `Extension ${remoteExtension}` : destination;
+       const callOptions = {
+         destinationNumber: destination,
+         callerIdName: callerName,
+         callerIdNumber: callerNumber,
+-        customHeaders: this._normalizeCustomHeaders(customHeaders),
++        customHeaders: normalizedHeaders,
+         peerConnectionOptions: {
+           useTrickleIce: this._sessionManager.useTrickleIce,
+         },
+@@ -219,8 +235,8 @@ class CallStateController {
+         destination,
+         false, // outgoing call
+         false, // not reattached
+-        callerName || destination, // use destination as fallback for caller name
+-        callerNumber // original caller number
++        remoteName,
++        remoteNumber
+       );
+       // Add to our call tracking
+       this._addCall(call);
+@@ -385,6 +401,10 @@ class CallStateController {
          callerName
        );
      }
@@ -185,6 +338,17 @@ index 993ecf6..2331359 100644
      // Use smart fallbacks - prefer caller number over "Unknown"
      const finalCallerNumber = callerNumber || 'Unknown Number';
      const finalCallerName = callerName || callerNumber || 'Unknown Caller';
+@@ -442,8 +462,8 @@ class CallStateController {
+         console.log('CallStateController: Starting outgoing call with CallKitCoordinator');
+         callkit_coordinator_1.callKitCoordinator.startOutgoingCall(
+           telnyxCall,
+-          call.destination,
+-          call.destination
++          call.callerNumber || call.destination,
++          call.callerName || call.destination
+         );
+       }
+     }
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js
 index 30f162f..1ec33d7 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js
@@ -399,6 +563,83 @@ index 975ef71..ca83384 100644
        await AsyncStorage.setItem(
          PUSH_WHEN_ACTIVE_STORAGE_KEY,
          String(config.pushWhenActive ?? false)
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts
+index 803daa9..7c56a33 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts
++++ b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts
+@@ -9,6 +9,19 @@ import { callKitCoordinator } from '../../callkit/callkit-coordinator';
+ export type CustomHeader = { name: string; value: string };
+ export type CustomHeaders = Record<string, string> | CustomHeader[];
+
++function customHeader(headers: CustomHeader[] | undefined, name: string): string {
++  return headers?.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value?.trim() || '';
++}
++
++function inviteHeader(telnyxCall: TelnyxCall, name: string): string {
++  const headers = (telnyxCall as any)?.inviteCustomHeaders;
++  if (!Array.isArray(headers)) return '';
++  const match = headers.find(
++    (header: any) => String(header?.name || header?.header_name || '').toLowerCase() === name.toLowerCase()
++  );
++  return String(match?.value || match?.header_value || '').trim();
++}
++
+ /**
+  * Central state machine for call management.
+  *
+@@ -205,11 +218,15 @@ export class CallStateController {
+
+     try {
+       // Create the call using the Telnyx SDK
++      const normalizedHeaders = this._normalizeCustomHeaders(customHeaders);
++      const remoteName = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Name') || destination;
++      const remoteExtension = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Extension');
++      const remoteNumber = remoteExtension ? `Extension ${remoteExtension}` : destination;
+       const callOptions: CallOptions = {
+         destinationNumber: destination,
+         callerIdName: callerName,
+         callerIdNumber: callerNumber,
+-        customHeaders: this._normalizeCustomHeaders(customHeaders),
++        customHeaders: normalizedHeaders,
+         peerConnectionOptions: {
+           useTrickleIce: this._sessionManager.useTrickleIce,
+         },
+@@ -223,8 +240,8 @@ export class CallStateController {
+         destination,
+         false, // outgoing call
+         false, // not reattached
+-        callerName || destination, // use destination as fallback for caller name
+-        callerNumber // original caller number
++        remoteName,
++        remoteNumber
+       );
+
+       // Add to our call tracking
+@@ -461,6 +478,11 @@ export class CallStateController {
+       );
+     }
+
++    const internalCallerName = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Name');
++    const internalCallerExtension = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Extension');
++    if (internalCallerName) callerName = internalCallerName;
++    if (internalCallerExtension) callerNumber = `Extension ${internalCallerExtension}`;
++
+     // Use smart fallbacks - prefer caller number over "Unknown"
+     const finalCallerNumber = callerNumber || 'Unknown Number';
+     const finalCallerName = callerName || callerNumber || 'Unknown Caller';
+@@ -516,7 +538,11 @@ export class CallStateController {
+       } else {
+         // Handle outgoing call with CallKit
+         console.log('CallStateController: Starting outgoing call with CallKitCoordinator');
+-        callKitCoordinator.startOutgoingCall(telnyxCall, call.destination, call.destination);
++        callKitCoordinator.startOutgoingCall(
++          telnyxCall,
++          call.callerNumber || call.destination,
++          call.callerName || call.destination
++        );
+       }
+     }
+
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts
 index e5cde0c..44e1e48 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts
@@ -415,12 +656,12 @@ index e5cde0c..44e1e48 100644
    CredentialConfig,
 @@ -12,6 +14,7 @@ import {
  } from '../../models/config';
- 
+
  const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
 +const ICE_SERVERS_STORAGE_KEY = '@ice_servers';
  const PUSH_WHEN_ACTIVE_STORAGE_KEY = '@push_when_active';
  const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications';
- 
+
 @@ -239,13 +242,23 @@ export class SessionManager {
          const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
          const storedPushToken = await AsyncStorage.getItem('@push_token');
@@ -442,7 +683,7 @@ index e5cde0c..44e1e48 100644
 +        if (nativePushToken && nativePushToken !== storedPushToken) {
 +          await AsyncStorage.setItem('@push_token', nativePushToken);
 +        }
- 
+
          if (this._isTeardownActive()) {
            return;
 @@ -256,8 +269,9 @@ export class SessionManager {
@@ -488,7 +729,7 @@ index e5d2fe0..1a458c8 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/voice-pn-bridge.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/voice-pn-bridge.ts
 @@ -39,6 +39,7 @@ export interface VoicePnBridgeInterface {
- 
+
    // Additional UserDefaults methods
    getVoipToken(): Promise<string | null>;
 +  getFirebaseToken(): Promise<string | null>;
@@ -540,7 +781,7 @@ index 5a26cc7..4e08e9d 100644
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/telnyx-voip-client.ts
 @@ -9,6 +9,7 @@ import { CallStateController, type CustomHeaders } from './internal/calls/call-s
  import { VoicePnBridge } from './internal/voice-pn-bridge';
- 
+
  const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
 +const ICE_SERVERS_STORAGE_KEY = '@ice_servers';
  const PUSH_WHEN_ACTIVE_STORAGE_KEY = '@push_when_active';
@@ -566,7 +807,7 @@ index 5a26cc7..4e08e9d 100644
 +          ? (await VoicePnBridge.getVoipToken())?.trim()
 +          : (await VoicePnBridge.getFirebaseToken())?.trim();
        const pushNotificationDeviceToken = nativePushToken || storedPushToken;
- 
+
        if (nativePushToken && nativePushToken !== storedPushToken) {
 @@ -413,6 +418,7 @@ export class TelnyxVoipClient {
          const config = createCredentialConfig(storedUsername, storedPassword, {

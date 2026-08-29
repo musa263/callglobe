@@ -12,7 +12,7 @@ import {
 } from '@telnyx/react-voice-commons-sdk';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
-import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
+import { getVoicePushToken, loadVoiceSession, persistVoiceSession, voipClient } from '../lib/voipClient';
 import { CallLifecycleRegistry, isTerminalCallState, type CallLifecycleState } from '../lib/callLifecycle';
 import { attachIceFailureListener, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator } from '../lib/voiceRecovery';
 import type { ActiveCall, CallerNumber, CallPhase, CallRate, MergedConference } from '../types';
@@ -92,12 +92,21 @@ const toLifecycleState = (state: TelnyxCallState): CallLifecycleState => {
 
 const createRouteId = () => `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
 
-const outboundHeaders = (destination: string, callerNumber: string | undefined, flow: string, routeId: string, routeToken: string) => [
+const outboundHeaders = (
+  destination: string,
+  callerNumber: string | undefined,
+  flow: string,
+  routeId: string,
+  routeToken: string,
+  remoteIdentity?: { name?: string; extension?: string },
+) => [
   { name: 'X-Vocivo-Flow', value: flow },
   { name: 'X-Vocivo-Destination', value: destination },
   { name: 'X-Vocivo-Route-ID', value: routeId },
   { name: 'X-Vocivo-Route-Token', value: routeToken },
   ...(callerNumber ? [{ name: 'X-Vocivo-Caller-ID', value: callerNumber }] : []),
+  ...(remoteIdentity?.name ? [{ name: 'X-Vocivo-Destination-Name', value: remoteIdentity.name }] : []),
+  ...(remoteIdentity?.extension ? [{ name: 'X-Vocivo-Destination-Extension', value: remoteIdentity.extension }] : []),
 ];
 
 function inviteHeader(call: Call, name: string) {
@@ -108,7 +117,7 @@ function visibleCallAddress(value: string) {
   return /^sip:/i.test(value) ? 'Internal call' : value;
 }
 
-export function VoiceProvider({ children }: { children: React.ReactNode }) {
+export function VoiceProvider({ children, bootstrapSession }: { children: React.ReactNode; bootstrapSession?: VoiceLoginConfig | null }) {
   const { loading, isAuthenticated, isPreview, addHistory, profile } = useAuth();
   const [connection, setConnection] = useState(voipClient.currentConnectionState);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -376,10 +385,13 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       try {
         const launchedFromPush = await TelnyxVoipClient.isLaunchedFromPushNotification();
         if (canceled) return;
-        const response = await api.post<VoiceTokenResponse>('/api/telnyx/token', {});
         const ringtone = await loadIncomingRingtone();
         await applyIncomingRingtone(ringtone);
-        const initialSession = voiceLoginConfig(response, ringtone);
+        const pushBootstrap = launchedFromPush && bootstrapSession && isVoiceSessionFresh(bootstrapSession, 30_000)
+          ? bootstrapSession
+          : null;
+        const initialSession: VoiceLoginConfig = pushBootstrap
+          || voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone);
         loginConfigRef.current = initialSession;
         await persistVoiceSession(initialSession);
         const pushNotificationDeviceToken = await getVoicePushToken();
@@ -491,7 +503,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
       appStateSubscription?.remove();
     };
-  }, [isAuthenticated, isPreview, loading, reportVoiceError]);
+  }, [bootstrapSession, isAuthenticated, isPreview, loading, reportVoiceError]);
 
   const refreshIncomingCalls = useCallback(async () => {
     setPushRegistration('registering');
@@ -538,7 +550,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         }
         if (result.phase === 'failed' || result.phase === 'ended') {
           stopRingback();
-          if (result.failureCause) setError(`Call ended: ${result.failureCause.replaceAll('_', ' ')}.`);
+          if (result.phase === 'failed' && result.failureCause) setError(`Call failed: ${result.failureCause.replaceAll('_', ' ')}.`);
           await terminateCall(callId, routeId);
           return;
         }
@@ -659,13 +671,20 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setActiveCall(optimisticCall);
     startingCallRef.current = true;
     try {
-      const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string }>('/api/voice/route', { routeId, destination, flow: 'internal' });
+      const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string; destinationName?: string; destinationExtension?: string }>('/api/voice/route', { routeId, destination, flow: 'internal' });
       if (startAttemptRef.current !== attempt) {
         await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed internal route', failure));
         return;
       }
       startRingback();
-      const call = await voipClient.newCall(destination, reservation.callerName || profile?.full_name || 'Vocivo', reservation.callerExtension || profile?.extension, outboundHeaders(destination, undefined, 'internal', routeId, reservation.routeToken));
+      const remoteName = reservation.destinationName || displayName;
+      const remoteExtension = reservation.destinationExtension || extension;
+      const call = await voipClient.newCall(
+        destination,
+        reservation.callerName || profile?.full_name || 'Vocivo',
+        reservation.callerExtension || profile?.extension,
+        outboundHeaders(destination, undefined, 'internal', routeId, reservation.routeToken, { name: remoteName, extension: remoteExtension }),
+      );
       if (startAttemptRef.current !== attempt) {
         await Promise.all([
           call.hangup().catch((failure) => reportVoiceError('hang up failed internal call', failure)),
@@ -674,7 +693,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       callRouteIdsRef.current.set(call.callId, routeId);
-      callMetaRef.current.set(call.callId, { number: extension, displayName, destinationCountry: 'Internal', photoUrl, startedAt, routeId });
+      callMetaRef.current.set(call.callId, { number: remoteExtension, displayName: remoteName, destinationCountry: 'Internal', photoUrl, startedAt, routeId });
       attachCall(call);
       followRoute(routeId, call.callId);
     } catch (startError) {
@@ -868,7 +887,49 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function VoiceRoot({ children }: { children: React.ReactNode }) {
-  return <TelnyxVoiceApp voipClient={voipClient} enableAutoReconnect debug={__DEV__}><VoiceProvider>{children}</VoiceProvider></TelnyxVoiceApp>;
+  const { loading, isAuthenticated, isPreview } = useAuth();
+  const [bootstrapSession, setBootstrapSession] = useState<VoiceLoginConfig | null>(null);
+  const [voiceRuntimeReady, setVoiceRuntimeReady] = useState(false);
+
+  useEffect(() => {
+    if (loading) {
+      setVoiceRuntimeReady(false);
+      return;
+    }
+    if (!isAuthenticated || isPreview) {
+      setBootstrapSession(null);
+      setVoiceRuntimeReady(true);
+      return;
+    }
+    let canceled = false;
+    const prepare = async () => {
+      try {
+        const launchedFromPush = await TelnyxVoipClient.isLaunchedFromPushNotification();
+        if (!launchedFromPush || canceled) return;
+        const ringtone = await loadIncomingRingtone();
+        const storedSession = await loadVoiceSession();
+        const session: VoiceLoginConfig = isVoiceSessionFresh(storedSession, 120_000)
+          ? { ...storedSession, ringtone }
+          : voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone);
+        await Promise.all([applyIncomingRingtone(ringtone), persistVoiceSession(session)]);
+        if (!canceled) setBootstrapSession(session);
+      } catch (failure) {
+        const normalized = failure instanceof Error ? failure : new Error(String(failure));
+        console.error('[Vocivo Voice] killed-state session bootstrap failed', { message: normalized.message, stack: normalized.stack });
+      } finally {
+        if (!canceled) setVoiceRuntimeReady(true);
+      }
+    };
+    prepare();
+    return () => { canceled = true; };
+  }, [isAuthenticated, isPreview, loading]);
+
+  // CallKit is reported synchronously by PushKit in native code. Mount the
+  // Telnyx runtime only after its refreshed credential is durable so a killed
+  // app never reconnects the pending INVITE with an expired token.
+  if (loading) return <>{children}</>;
+  if (!voiceRuntimeReady) return null;
+  return <TelnyxVoiceApp voipClient={voipClient} enableAutoReconnect debug={__DEV__}><VoiceProvider bootstrapSession={bootstrapSession}>{children}</VoiceProvider></TelnyxVoiceApp>;
 }
 
 export function useVoice() {
