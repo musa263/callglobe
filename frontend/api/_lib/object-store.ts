@@ -234,9 +234,53 @@ async function ensureSaasTables(sql: Sql) {
     await sql`create unique index if not exists vocivo_saas_admins_email_uq on vocivo_saas_admins (lower(email))`;
     await sql`create index if not exists vocivo_saas_admins_tenant_idx on vocivo_saas_admins (organization_id)`;
     await sql`create index if not exists vocivo_saas_admins_extension_idx on vocivo_saas_admins (organization_id, extension_id)`;
+    await sql`
+      create table if not exists vocivo_schema_migrations (
+        migration_id text primary key,
+        applied_at timestamptz not null default now()
+      )
+    `;
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext('vocivo:schema:saas-rls-v1'))`;
+      const applied = await transaction<Array<{ migration_id: string }>>`
+        insert into vocivo_schema_migrations (migration_id)
+        values ('saas-rls-v1')
+        on conflict (migration_id) do nothing
+        returning migration_id
+      `;
+      if (!applied.length) return;
+      for (const table of ['vocivo_saas_tenants', 'vocivo_saas_admins', 'vocivo_saas_entitlements']) {
+        await transaction.unsafe(`alter table ${table} enable row level security`);
+        await transaction.unsafe(`alter table ${table} force row level security`);
+        await transaction.unsafe(`
+          create policy vocivo_tenant_isolation on ${table}
+          using (
+            current_setting('vocivo.platform_access', true) = 'on'
+            or organization_id = nullif(current_setting('vocivo.organization_id', true), '')
+          )
+          with check (
+            current_setting('vocivo.platform_access', true) = 'on'
+            or organization_id = nullif(current_setting('vocivo.organization_id', true), '')
+          )
+        `);
+      }
+    });
     saasTablesReady = true;
   })().finally(() => { saasTablesRequest = null; });
   await saasTablesRequest;
+}
+
+async function setSaasTransactionContext(
+  transaction: TransactionSql,
+  organizationId?: string,
+  platformAccess = false,
+) {
+  if (!platformAccess && !organizationId) throw new Error('Tenant transaction context is required.');
+  await transaction`
+    select
+      set_config('vocivo.organization_id', ${organizationId || ''}, true),
+      set_config('vocivo.platform_access', ${platformAccess ? 'on' : 'off'}, true)
+  `;
 }
 
 export function assertTenantRowOwnership(expectedOrganizationId: string, actualOrganizationId: string) {
@@ -250,7 +294,7 @@ function assertTenantRows<T extends { organization_id: string }>(organizationId:
   return rows;
 }
 
-async function selectSaasPlans(sql: Sql) {
+async function selectSaasPlans(sql: Sql | TransactionSql) {
   return sql<SaasPlanRow[]>`
     select plan_id, name, description, monthly_price::float8 as monthly_price,
       annual_price::float8 as annual_price, currency, seat_limit, phone_number_limit,
@@ -335,6 +379,7 @@ export async function initializeSaasRows(seed: SaasRows) {
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     return sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, undefined, true);
       await transaction`select pg_advisory_xact_lock(hashtext('vocivo:saas:bootstrap:v2'))`;
       const planIds = await transaction<Array<{ plan_id: string }>>`select plan_id from vocivo_saas_plans`;
       const tenantIds = await transaction<Array<{ organization_id: string }>>`select organization_id from vocivo_saas_tenants`;
@@ -358,23 +403,24 @@ export async function initializeSaasRows(seed: SaasRows) {
 export async function readPlatformSaasRows(): Promise<SaasRows> {
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
-    const [plans, tenants, admins] = await Promise.all([
-      selectSaasPlans(sql),
-      sql<SaasTenantRow[]>`
+    return sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, undefined, true);
+      const plans = await selectSaasPlans(transaction);
+      const tenants = await transaction<SaasTenantRow[]>`
         select t.organization_id, plan_id, status, billing_cycle, amount::float8 as amount,
           currency, starts_at, trial_ends_at, renews_at, cancel_at_period_end,
           external_customer_id, notes, coalesce(e.feature_overrides, '{}'::jsonb) as feature_overrides
         from vocivo_saas_tenants t
         left join vocivo_saas_entitlements e using (organization_id)
         order by t.organization_id asc
-      `,
-      sql<SaasAdminRow[]>`
+      `;
+      const admins = await transaction<SaasAdminRow[]>`
         select id, organization_id, email, name, role, password_hash, status,
           force_password_change, extension_id, extension, created_at, updated_at
         from vocivo_saas_admins order by organization_id asc, created_at asc
-      `,
-    ]);
-    return { plans, tenants, admins };
+      `;
+      return { plans, tenants, admins };
+    });
   });
 }
 
@@ -382,36 +428,40 @@ export async function readTenantSaasRows(organizationId: string): Promise<SaasRo
   if (!organizationId) throw new Error('Tenant organization is required.');
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
-    const [plans, tenants, admins] = await Promise.all([
-      selectSaasPlans(sql),
-      sql<SaasTenantRow[]>`
+    return sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
+      const plans = await selectSaasPlans(transaction);
+      const tenants = await transaction<SaasTenantRow[]>`
         select t.organization_id, plan_id, status, billing_cycle, amount::float8 as amount,
           currency, starts_at, trial_ends_at, renews_at, cancel_at_period_end,
           external_customer_id, notes, coalesce(e.feature_overrides, '{}'::jsonb) as feature_overrides
         from vocivo_saas_tenants t
         left join vocivo_saas_entitlements e using (organization_id)
         where t.organization_id = ${organizationId}
-      `,
-      sql<SaasAdminRow[]>`
+      `;
+      const admins = await transaction<SaasAdminRow[]>`
         select id, organization_id, email, name, role, password_hash, status,
           force_password_change, extension_id, extension, created_at, updated_at
         from vocivo_saas_admins where organization_id = ${organizationId} order by created_at asc
-      `,
-    ]);
-    return { plans, tenants: assertTenantRows(organizationId, tenants), admins: assertTenantRows(organizationId, admins) };
+      `;
+      return { plans, tenants: assertTenantRows(organizationId, tenants), admins: assertTenantRows(organizationId, admins) };
+    });
   });
 }
 
 export async function findSaasAdminByEmailForAuthentication(email: string) {
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
-    const rows = await sql<SaasAdminRow[]>`
-      select id, organization_id, email, name, role, password_hash, status,
-        force_password_change, extension_id, extension, created_at, updated_at
-      from vocivo_saas_admins where lower(email) = ${email.trim().toLowerCase()} limit 1
-    `;
-    if (rows[0] && !rows[0].organization_id) throw new Error('Tenant row isolation violation.');
-    return rows[0] || null;
+    return sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, undefined, true);
+      const rows = await transaction<SaasAdminRow[]>`
+        select id, organization_id, email, name, role, password_hash, status,
+          force_password_change, extension_id, extension, created_at, updated_at
+        from vocivo_saas_admins where lower(email) = ${email.trim().toLowerCase()} limit 1
+      `;
+      if (rows[0] && !rows[0].organization_id) throw new Error('Tenant row isolation violation.');
+      return rows[0] || null;
+    });
   });
 }
 
@@ -419,6 +469,7 @@ export async function upsertSaasPlan(row: SaasPlanRow) {
   await withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     await sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, undefined, true);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:plan:${row.plan_id}`}))`;
       await insertPlan(transaction, row);
     });
@@ -430,6 +481,7 @@ export async function upsertTenantSaasRow(organizationId: string, row: SaasTenan
   await withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     await sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
       await insertTenant(transaction, row);
     });
@@ -441,6 +493,7 @@ export async function upsertTenantSaasOverrides(organizationId: string, override
   await withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     await sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
       await insertEntitlements(transaction, organizationId, overrides);
     });
@@ -452,6 +505,7 @@ export async function upsertTenantSaasAdmin(organizationId: string, row: SaasAdm
   await withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     await sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
       const existing = await transaction<Array<{ organization_id: string }>>`
         select organization_id from vocivo_saas_admins where id = ${row.id} for update
@@ -467,6 +521,7 @@ export async function deleteTenantSaasAdmin(organizationId: string, id: string) 
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     return sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
       const rows = await transaction<Array<{ id: string }>>`
         delete from vocivo_saas_admins where id = ${id} and organization_id = ${organizationId} returning id
@@ -480,6 +535,7 @@ export async function deleteTenantSaasAdminsForExtension(organizationId: string,
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     return sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
       const rows = await transaction<Array<{ id: string }>>`
         delete from vocivo_saas_admins
@@ -495,6 +551,7 @@ export async function deleteAllTenantSaasAdmins(organizationId: string) {
   await withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);
     await sql.begin(async (transaction) => {
+      await setSaasTransactionContext(transaction, organizationId);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:saas:tenant:${organizationId}`}))`;
       await transaction`delete from vocivo_saas_admins where organization_id = ${organizationId}`;
     });

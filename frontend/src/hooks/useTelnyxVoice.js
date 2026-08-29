@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TelnyxRTC } from '@telnyx/webrtc';
 import { api } from '../lib/api';
+import { registerWebPush } from '../lib/webPush';
 
 const TERMINAL_STATES = new Set(['hangup', 'destroy', 'purge']);
 
@@ -31,6 +32,11 @@ function getCallId(call) {
 
 function telnyxErrorMessage(event) {
   return event?.error?.message || event?.message || event?.payload?.message || 'The web phone could not connect.';
+}
+
+function reportWebVoiceError(operation, failure) {
+  const error = failure instanceof Error ? failure : new Error(String(failure));
+  console.error(`[Vocivo Web Voice] ${operation} failed`, { message: error.message, stack: error.stack });
 }
 
 export function useTelnyxVoice(token, enabled, identity = {}) {
@@ -100,7 +106,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       tone.loop = true;
       tone.volume = 0.72;
       incomingToneRef.current = tone;
-      tone.play().catch(() => undefined);
+      tone.play().catch((failure) => reportWebVoiceError('play incoming ringtone', failure));
     }
     navigator.vibrate?.([450, 250, 450, 650]);
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !incomingNotificationRef.current) {
@@ -118,7 +124,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const enableBrowserAlerts = useCallback(async () => {
     const probe = new Audio('/audio/ringback.wav');
     probe.volume = 0.01;
-    await probe.play().catch(() => undefined);
+    await probe.play().catch((failure) => reportWebVoiceError('unlock browser audio', failure));
     probe.pause();
     probe.currentTime = 0;
     if (typeof Notification === 'undefined') {
@@ -127,8 +133,14 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     }
     const permission = await Notification.requestPermission();
     setNotificationPermission(permission);
+    if (permission === 'granted') await registerWebPush();
     return permission;
   }, []);
+
+  useEffect(() => {
+    if (!enabled || !token || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    registerWebPush().catch((failure) => reportWebVoiceError('register browser push subscription', failure));
+  }, [enabled, token]);
 
   const disconnect = useCallback(() => {
     if (tokenRefreshRef.current) {
@@ -137,12 +149,12 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     }
     const routeId = routeIdRef.current;
     const extraRoutes = [heldCallRef.current?.routeId, ...(conferenceRef.current?.participants || []).map((item) => item.routeId)].filter(Boolean);
-    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch(() => undefined));
-    try { callRef.current?.hangup?.(); } catch { /* already closed */ }
-    try { heldCallRef.current?.call?.hangup?.(); } catch { /* already closed */ }
+    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch((failure) => reportWebVoiceError('cancel route during disconnect', failure)));
+    try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up active call during disconnect', failure); }
+    try { heldCallRef.current?.call?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up held call during disconnect', failure); }
     clientListenerCleanupRef.current?.();
     clientListenerCleanupRef.current = null;
-    try { clientRef.current?.disconnect?.(); } catch { /* already disconnected */ }
+    try { clientRef.current?.disconnect?.(); } catch (failure) { reportWebVoiceError('disconnect Telnyx client', failure); }
     clientRef.current = null;
     iceServersRef.current = undefined;
     callRef.current = null;
@@ -181,6 +193,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       const lifetimeSeconds = Number.isFinite(Number(expiresIn)) ? Number(expiresIn) : 3600;
       tokenRefreshRef.current = setTimeout(refreshWhenIdle, Math.max(30, lifetimeSeconds - 120) * 1000);
       iceServersRef.current = Array.isArray(iceServers) && iceServers.length ? iceServers : undefined;
+      clientListenerCleanupRef.current?.();
+      clientListenerCleanupRef.current = null;
       const client = new TelnyxRTC({ login_token: loginToken, iceServers: iceServersRef.current, trickleIce: true });
       clientRef.current = client;
       client.remoteElement = 'remoteMedia';
@@ -190,7 +204,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         listeners.push([event, listener]);
       };
       clientListenerCleanupRef.current = () => {
-        listeners.splice(0).forEach(([event, listener]) => client.off(event, listener));
+        listeners.splice(0).forEach(([event, listener]) => {
+          try { client.off(event, listener); } catch (failure) { reportWebVoiceError(`remove ${event} listener`, failure); }
+        });
       };
       on('telnyx.ready', () => {
         if (cancelled) return;
@@ -217,7 +233,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           ...(conferenceRef.current?.participants || []).map((participant) => participant.routeId),
         ].filter(Boolean);
         [...new Set(routeIds)].forEach((routeId) => {
-          api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch(() => undefined);
+          api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel route after socket close', failure));
         });
         routePollRef.current += 1;
         routeIdRef.current = null;
@@ -246,7 +262,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         const direction = String(updatedCall.direction || updatedCall.options?.direction || '').toLowerCase();
         const callId = updatedCall.id || updatedCall.callId;
         if (callId && locallyEndedCallIdsRef.current.has(callId) && !TERMINAL_STATES.has(nextState)) {
-          try { updatedCall.hangup?.(); } catch { /* already closing */ }
+          try { updatedCall.hangup?.(); } catch (failure) { reportWebVoiceError('enforce locally ended call', failure); }
           return;
         }
         const activeId = getCallId(callRef.current);
@@ -291,7 +307,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           incomingCallRef.current = null;
           setIncomingCall(null);
           stopIncomingRingtone();
-          resumeAudio().catch(() => undefined);
+          resumeAudio().catch((failure) => reportWebVoiceError('resume connected-call audio', failure));
         }
         if (TERMINAL_STATES.has(nextState)) {
           if (callId) locallyEndedCallIdsRef.current.delete(callId);
@@ -328,7 +344,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
               setState('active');
               setRoutePhase('connected');
               setRemoteIdentity(held.identity);
-            }).catch(() => undefined);
+            }).catch((failure) => reportWebVoiceError('resume held call after peer ended', failure));
           } else if (conferenceRef.current) {
             conferenceRef.current = null;
             setConference(null);
@@ -355,21 +371,21 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         if (result.phase === 'connected') {
           setRoutePhase('connected');
           stopRingback();
-          resumeAudio().catch(() => undefined);
+          resumeAudio().catch((failure) => reportWebVoiceError('resume bridged-call audio', failure));
           return;
         }
         if (['failed', 'ended'].includes(result.phase)) {
           setRoutePhase(result.phase);
           stopRingback();
           if (result.failureCause) setError(`Call ended: ${String(result.failureCause).replaceAll('_', ' ')}.`);
-          try { callRef.current?.hangup?.(); } catch { /* already closed */ }
+          try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up failed route', failure); }
           return;
         }
       } catch (routeError) {
         if (attempt > 8) {
           setError(routeError.message || 'Call status could not be confirmed.');
           stopRingback();
-          try { callRef.current?.hangup?.(); } catch { /* already closed */ }
+          try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up unconfirmed route', failure); }
           return;
         }
       }
@@ -378,7 +394,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     if (routePollRef.current === generation) {
       stopRingback();
       setError('Call setup timed out. Please try again.');
-      try { callRef.current?.hangup?.(); } catch { /* already closed */ }
+      try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up timed-out route', failure); }
     }
   }, [resumeAudio, stopRingback]);
 
@@ -477,7 +493,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setState('answering');
       setRoutePhase(null);
       setRemoteIdentity(callIdentityRef.current.get(getCallId(incoming)) || describeRemote(incoming));
-      await resumeAudio().catch(() => undefined);
+      await resumeAudio().catch((failure) => reportWebVoiceError('resume answered-call audio', failure));
       setIncomingCall(null);
     } catch (answerError) { setError(answerError.message || 'The call could not be answered.'); }
   }, [incomingCall, remoteIdentity, resumeAudio, stopIncomingRingtone]);
@@ -504,9 +520,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     routeIdRef.current = null;
     stopRingback();
     stopIncomingRingtone();
-    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch(() => undefined));
-    try { current?.hangup?.(); } catch { /* already closed */ }
-    try { held?.call?.hangup?.(); } catch { /* already closed */ }
+    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch((failure) => reportWebVoiceError('cancel route during hangup', failure)));
+    try { current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up active browser call', failure); }
+    try { held?.call?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up held browser call', failure); }
     callRef.current = null;
     incomingCallRef.current = null;
     heldCallRef.current = null;

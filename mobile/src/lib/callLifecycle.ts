@@ -1,6 +1,8 @@
 export type CallLifecycleState = 'NEW' | 'CONNECTING' | 'RINGING' | 'ACTIVE' | 'HELD' | 'ENDED' | 'FAILED' | 'DROPPED';
 
-const terminalStates = new Set<CallLifecycleState>(['ENDED', 'FAILED', 'DROPPED']);
+// DROPPED is recoverable in the Telnyx SDK. It is emitted while the client
+// changes networks and remains tracked until the signaling session reattaches.
+const terminalStates = new Set<CallLifecycleState>(['ENDED', 'FAILED']);
 
 export function isTerminalCallState(state: CallLifecycleState) {
   return terminalStates.has(state);

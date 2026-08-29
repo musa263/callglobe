@@ -15,6 +15,16 @@ export async function getVoicePushToken() {
   return (await VoicePnBridge.getFirebaseToken())?.trim() || undefined;
 }
 
+export async function persistVoiceSession(session: {
+  token: string;
+  iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
+}) {
+  await AsyncStorage.multiSet([
+    ['@credential_token', session.token],
+    ['@ice_servers', JSON.stringify(session.iceServers || [])],
+  ]);
+}
+
 const telnyxStorageKeys = [
   '@telnyx_username',
   '@telnyx_password',

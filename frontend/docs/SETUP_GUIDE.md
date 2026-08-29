@@ -32,8 +32,14 @@ TELNYX_SIP_URI=
 TELNYX_SMS_FROM=
 TELNYX_PUBLIC_KEY=
 TELNYX_ICE_SERVERS_JSON=
+WEB_PUSH_VAPID_PUBLIC_KEY=
+WEB_PUSH_VAPID_PRIVATE_KEY=
+WEB_PUSH_SUBJECT=mailto:security@vocivo.com
 VITE_APP_URL=https://vocivo.vercel.app
 ```
+
+The Web Push private key is server-only. The browser receives only the VAPID
+public key through the authenticated `/api/voice/web-push` endpoint.
 
 Optional voice-generation and payment integrations have their own server-side keys. The app falls back to carrier voice synthesis when the configured Vocivo voice provider is unavailable.
 

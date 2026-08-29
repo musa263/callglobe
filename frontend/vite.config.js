@@ -5,15 +5,12 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig({
   plugins: [react(), VitePWA({
     registerType: 'autoUpdate',
-    injectRegister: null,
+    strategies: 'injectManifest',
+    srcDir: 'src',
+    filename: 'sw.js',
+    injectRegister: 'auto',
     manifest: false,
-    workbox: {
-      navigateFallback: '/index.html',
-      navigateFallbackDenylist: [
-        /^\/(?:landing|platform|business|why-vocivo|pricing|security|contact)(?:\.html)?$/,
-        /^\/enroll(?:\.html)?$/,
-        /^\/video(?:\.html)?$/,
-      ],
+    injectManifest: {
       globPatterns: ['**/*.{js,css,html,png,svg,wav,json}'],
     },
   })],
