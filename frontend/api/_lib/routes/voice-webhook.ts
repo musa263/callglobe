@@ -691,10 +691,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               .catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
             await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
           } else {
-            background('stop extension ringback after automatic bridge', callAction(parentCallControlId, 'playback_stop', {
-              stop: 'all',
-              command_id: `${eventId}-stop-ringback`,
-            }));
+            // An answered fork is not yet a connected conversation. Telnyx's
+            // bridge-on-answer Dial completes asynchronously and emits
+            // call.bridged only after the two media legs are joined. Marking
+            // the route connected here exposes a live UI before RTP exists and
+            // creates the intermittent silent extension calls seen in production.
+            return res.status(200).json({ received: true });
           }
           const connectedAt = new Date().toISOString();
           await saveOutboundCallPair({

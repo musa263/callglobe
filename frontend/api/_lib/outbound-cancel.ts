@@ -17,15 +17,15 @@ export function outboundCallControlIds(pair: OutboundCallPair) {
   ].filter((id): id is string => Boolean(id)))];
 }
 
-export function outboundPlaybackCallControlIds(pair: OutboundCallPair) {
-  return [...new Set([
-    pair.clientCallControlId,
-    pair.peerClientCallControlId,
-  ].filter((id): id is string => Boolean(id)))];
-}
-
 function errorText(error: unknown) {
   return error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 500) : 'Unknown Telnyx hangup failure';
+}
+
+export function shouldClaimTermination(state: OutboundTerminationState | undefined, now = Date.now()) {
+  if (state?.status === 'terminated') return false;
+  if (state?.status !== 'pending') return true;
+  const updatedAt = new Date(state.updatedAt).getTime();
+  return !Number.isFinite(updatedAt) || now - updatedAt >= 15_000;
 }
 
 export function isAlreadyTerminatedHangupError(error: unknown) {
@@ -66,21 +66,26 @@ async function hangupLeg(id: string, commandId: string, priorAttempts = 0): Prom
 export async function terminateOutboundLegs(pair: OutboundCallPair, ids: string[], commandPrefix: string) {
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   const pendingAt = new Date().toISOString();
-  const pendingPair = await updateOutboundCallPair(pair, (current) => ({
-    ...current,
-    termination: {
-      ...(current.termination || {}),
-      ...Object.fromEntries(uniqueIds
-        .filter((id) => current.termination?.[id]?.status !== 'terminated')
-        .map((id) => [id, {
-          status: 'pending' as const,
-          attempts: current.termination?.[id]?.attempts || 0,
-          updatedAt: pendingAt,
-        }])),
-    },
-    updatedAt: pendingAt,
-  }));
-  const actionableIds = uniqueIds.filter((id) => pendingPair.termination?.[id]?.status !== 'terminated');
+  const claimedIds = new Set<string>();
+  const pendingPair = await updateOutboundCallPair(pair, (current) => {
+    claimedIds.clear();
+    const termination = { ...(current.termination || {}) };
+    for (const id of uniqueIds) {
+      const previous = termination[id];
+      if (!shouldClaimTermination(previous)) continue;
+      claimedIds.add(id);
+      termination[id] = {
+        status: 'pending',
+        attempts: previous?.attempts || 0,
+        updatedAt: pendingAt,
+      };
+    }
+    return { ...current, termination, updatedAt: pendingAt };
+  });
+  // The transaction above is the single-flight claim. Concurrent hangup,
+  // cancel, and webhook handlers must not all send the same carrier commands.
+  const actionableIds = [...claimedIds];
+  if (!actionableIds.length) return pendingPair;
   const results = await Promise.all(actionableIds.map(async (id) => [
     id,
     await hangupLeg(id, `${commandPrefix}-end-${id.slice(-8)}`, pendingPair.termination?.[id]?.attempts || 0),
@@ -94,20 +99,10 @@ export async function terminateOutboundLegs(pair: OutboundCallPair, ids: string[
 
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {
   const ids = outboundCallControlIds(pair);
-  const playbackIds = outboundPlaybackCallControlIds(pair);
-  const playbackCleanup = Promise.all(playbackIds.map(async (id) => {
-    try {
-      await callAction(id, 'playback_stop', { stop: 'all', command_id: `${commandPrefix}-stop-${id.slice(-8)}` });
-    } catch (error) {
-      console.warn('[outbound-cancel] ringback stop failed before hangup', { callControlId: id, error: errorText(error) });
-    }
-  }));
-  // Never make the opposite party wait for playback cleanup before receiving
-  // the hangup. Both operations are independent and must start together.
-  const [updated] = await Promise.all([
-    terminateOutboundLegs(pair, ids, commandPrefix),
-    playbackCleanup,
-  ]);
+  // Hanging up a Call Control leg stops its playback. Sending playback_stop as
+  // a separate command doubled carrier traffic and made concurrent cancel
+  // webhooks wait on already-ended calls.
+  const updated = await terminateOutboundLegs(pair, ids, commandPrefix);
   const complete = ids.every((id) => updated.termination?.[id]?.status === 'terminated');
   if (complete) {
     await clearOutboundCallPair(updated);

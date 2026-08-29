@@ -195,7 +195,12 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       iceServersRef.current = Array.isArray(iceServers) && iceServers.length ? iceServers : undefined;
       clientListenerCleanupRef.current?.();
       clientListenerCleanupRef.current = null;
-      const client = new TelnyxRTC({ login_token: loginToken, iceServers: iceServersRef.current, trickleIce: true });
+      const client = new TelnyxRTC({
+        login_token: loginToken,
+        iceServers: iceServersRef.current,
+        trickleIce: true,
+        keepConnectionAliveOnSocketClose: true,
+      });
       clientRef.current = client;
       client.remoteElement = 'remoteMedia';
       const listeners = [];
@@ -362,6 +367,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
 
   const followRoute = useCallback(async (routeId) => {
     const generation = ++routePollRef.current;
+    let lastRouteError = null;
     routeIdRef.current = routeId;
     setRoutePhase('ringing');
     for (let attempt = 0; attempt < 100 && routePollRef.current === generation; attempt += 1) {
@@ -382,18 +388,14 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           return;
         }
       } catch (routeError) {
-        if (attempt > 8) {
-          setError(routeError.message || 'Call status could not be confirmed.');
-          stopRingback();
-          try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up unconfirmed route', failure); }
-          return;
-        }
+        lastRouteError = routeError;
+        if (attempt === 9 || attempt === 39) reportWebVoiceError('poll extension route status', routeError);
       }
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
     if (routePollRef.current === generation) {
       stopRingback();
-      setError('Call setup timed out. Please try again.');
+      setError(lastRouteError ? 'Call setup could not be confirmed. Please try again.' : 'Call setup timed out. Please try again.');
       try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up timed-out route', failure); }
     }
   }, [resumeAudio, stopRingback]);

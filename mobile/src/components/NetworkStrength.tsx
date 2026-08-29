@@ -2,28 +2,15 @@ import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { colors } from '../theme';
-
-function quality(type: string, details: Record<string, unknown> | null, connected: boolean | null, reachable: boolean | null) {
-  if (!connected || reachable === false) return { bars: 0, label: 'Offline' };
-  if (type === 'wifi') {
-    const strength = typeof details?.strength === 'number' ? details.strength : 65;
-    return { bars: strength >= 75 ? 4 : strength >= 50 ? 3 : strength >= 25 ? 2 : 1, label: 'Wi-Fi' };
-  }
-  if (type === 'cellular') {
-    const generation = String(details?.cellularGeneration ?? '').toUpperCase();
-    const bars = generation === '5G' ? 4 : generation === '4G' ? 3 : generation === '3G' ? 2 : 1;
-    return { bars, label: generation || 'Mobile' };
-  }
-  return { bars: 3, label: 'Connected' };
-}
+import { networkPresentation } from '../lib/networkPresentation';
 
 export function NetworkStrength({ voiceReady }: { voiceReady: boolean }) {
   const netInfo = useNetInfo();
   const state = useMemo(
-    () => quality(netInfo.type, netInfo.details as Record<string, unknown> | null, netInfo.isConnected, netInfo.isInternetReachable),
-    [netInfo.details, netInfo.isConnected, netInfo.isInternetReachable, netInfo.type],
+    () => networkPresentation(netInfo.type, netInfo.details as Record<string, unknown> | null, netInfo.isConnected, netInfo.isInternetReachable, voiceReady),
+    [netInfo.details, netInfo.isConnected, netInfo.isInternetReachable, netInfo.type, voiceReady],
   );
-  const ready = state.bars > 0 && voiceReady;
+  const ready = state.status === 'Voice ready';
 
   return (
     <View accessibilityLabel={`Network ${state.label}, ${state.bars} of 4 bars`} style={styles.row}>
@@ -32,7 +19,7 @@ export function NetworkStrength({ voiceReady }: { voiceReady: boolean }) {
       </View>
       <Text style={[styles.label, !state.bars && styles.offline]}>{state.label}</Text>
       <View style={[styles.dot, ready && styles.dotReady]} />
-      <Text style={styles.voice}>{ready ? 'Voice ready' : state.bars ? 'Connecting voice' : 'No connection'}</Text>
+      <Text style={styles.voice}>{state.status}</Text>
     </View>
   );
 }

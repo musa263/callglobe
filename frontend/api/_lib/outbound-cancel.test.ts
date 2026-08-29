@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isAlreadyTerminatedHangupError, isRetryableHangupError, outboundCallControlIds, outboundPlaybackCallControlIds } from './outbound-cancel.js';
+import { isAlreadyTerminatedHangupError, isRetryableHangupError, outboundCallControlIds, shouldClaimTermination } from './outbound-cancel.js';
 import { mergeOutboundCallPair } from './outbound-call-store.js';
 import { TelnyxApiError } from './telnyx.js';
 
@@ -28,16 +28,12 @@ test('does not send duplicate hangup commands for the same call leg', () => {
   }), ['client-a', 'destination-a']);
 });
 
-test('stops ringback only on answered client legs', () => {
-  assert.deepEqual(outboundPlaybackCallControlIds({
-    clientCallControlId: 'client-a',
-    destinationCallControlId: 'destination-a',
-    peerClientCallControlId: 'client-b',
-    peerDestinationCallControlId: 'destination-b',
-    destination: '+15550000000',
-    status: 'conference',
-    updatedAt: new Date(0).toISOString(),
-  }), ['client-a', 'client-b']);
+test('single-flight termination skips fresh work and recovers abandoned claims', () => {
+  const now = Date.now();
+  assert.equal(shouldClaimTermination(undefined, now), true);
+  assert.equal(shouldClaimTermination({ status: 'pending', attempts: 1, updatedAt: new Date(now - 1_000).toISOString() }, now), false);
+  assert.equal(shouldClaimTermination({ status: 'pending', attempts: 1, updatedAt: new Date(now - 16_000).toISOString() }, now), true);
+  assert.equal(shouldClaimTermination({ status: 'terminated', attempts: 1, updatedAt: new Date(now).toISOString() }, now), false);
 });
 
 test('does not let a stale webhook replace the claimed answer or terminal state', () => {

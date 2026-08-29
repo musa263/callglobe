@@ -26,6 +26,11 @@ export function peerConnectionForCall(call: Call | null): PeerConnectionLike | n
   return nativeCall?.peer?.getPeerConnection?.() || null;
 }
 
+export function isTransportNetworkMigration(previous: string | null, current: string) {
+  const transports = new Set(['wifi', 'cellular']);
+  return Boolean(previous && previous !== current && transports.has(previous) && transports.has(current));
+}
+
 export function attachIceFailureListener(call: Call, recover: (reason: string) => void) {
   const peer = peerConnectionForCall(call);
   if (!peer?.addEventListener || !peer.removeEventListener) return null;
@@ -59,9 +64,8 @@ export class VoiceMediaRecoveryCoordinator {
   private lastAttemptAt = 0;
 
   constructor(
-    private readonly reconnectSignaling: () => Promise<boolean>,
     private readonly reportError: (operation: string, error: unknown) => void,
-    private readonly signalingDelayMs = 1_750,
+    private readonly recoveryDelayMs = 1_250,
   ) {}
 
   recover(call: Call | null, reason: string) {
@@ -72,24 +76,22 @@ export class VoiceMediaRecoveryCoordinator {
     this.lastAttemptAt = now;
     this.operation = (async () => {
       const peer = peerConnectionForCall(call);
+      // The Telnyx SDK owns socket reconnection and call re-attachment. A full
+      // client login here can replace the signaling session underneath a live
+      // call. Only operate on a real peer connection owned by this call.
+      if (!peer?.restartIce) return;
+      const initialIceState = String(peer.iceConnectionState || '').toLowerCase();
+      if (['connected', 'completed'].includes(initialIceState)) return;
       try {
-        peer?.restartIce?.();
+        peer.restartIce();
       } catch (error) {
         this.reportError(`${reason}:restart-ice`, error);
+        return;
       }
-
-      // The native Telnyx client owns the SIP attach/re-INVITE lifecycle. Wait
-      // briefly for its NetInfo handler, then request one serialized reattach if
-      // ICE is still failed or disconnected.
-      await new Promise((resolve) => setTimeout(resolve, this.signalingDelayMs));
+      await new Promise((resolve) => setTimeout(resolve, this.recoveryDelayMs));
       const iceState = String(peerConnectionForCall(call)?.iceConnectionState || '').toLowerCase();
       if (['connected', 'completed'].includes(iceState)) return;
-      try {
-        await this.reconnectSignaling();
-      } catch (error) {
-        this.reportError(`${reason}:signaling-reattach`, error);
-        throw error;
-      }
+      this.reportError(`${reason}:ice-pending`, new Error(`ICE remained ${iceState || 'unknown'} after restart`));
     })().finally(() => { this.operation = null; });
     return this.operation;
   }

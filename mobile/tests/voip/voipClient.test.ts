@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Call } from '@telnyx/react-voice-commons-sdk';
 import { CallLifecycleRegistry } from '../../src/lib/callLifecycle';
-import { attachIceFailureListener, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
+import { attachIceFailureListener, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
 
 class MockPeerConnection {
   iceConnectionState = 'connected';
@@ -55,15 +55,21 @@ test('Telnyx DROPPED state remains recoverable during a network handoff', () => 
   assert.equal(calls.transition('call-3', 'ACTIVE'), true);
 });
 
-test('Wi-Fi to cellular recovery restarts ICE and serializes signaling reattach', async () => {
+test('Wi-Fi to cellular recovery restarts ICE without replacing the live signaling session', async () => {
   const peer = new MockPeerConnection();
   peer.iceConnectionState = 'failed';
-  let reattachments = 0;
-  const coordinator = new VoiceMediaRecoveryCoordinator(async () => { reattachments += 1; return true; }, () => undefined, 0);
+  const coordinator = new VoiceMediaRecoveryCoordinator(() => undefined, 0);
   const call = mockTelnyxCall(peer);
   await Promise.all([coordinator.recover(call, 'network-wifi-to-cellular'), coordinator.recover(call, 'ice-failed')]);
   assert.equal(peer.restartCount, 1);
-  assert.equal(reattachments, 1);
+});
+
+test('network recovery ignores NetInfo initialization and only handles Wi-Fi/cellular migrations', () => {
+  assert.equal(isTransportNetworkMigration(null, 'wifi'), false);
+  assert.equal(isTransportNetworkMigration('unknown', 'wifi'), false);
+  assert.equal(isTransportNetworkMigration('wifi', 'wifi'), false);
+  assert.equal(isTransportNetworkMigration('wifi', 'cellular'), true);
+  assert.equal(isTransportNetworkMigration('cellular', 'wifi'), true);
 });
 
 test('ICE failure listener invokes recovery and is removed on call teardown', () => {

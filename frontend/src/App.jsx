@@ -166,7 +166,7 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal active-modal web-call-modal">
         <div className="live-pill"><span /> {status}</div>
-        {voice.remoteIdentity?.photoUrl ? <img className="call-avatar call-avatar-photo" src={voice.remoteIdentity.photoUrl} alt="" /> : <div className="call-avatar">{name.charAt(0).toUpperCase()}</div>}<h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p><strong className="call-timer">{formatDuration(elapsed)}</strong>
+        {voice.remoteIdentity?.photoUrl ? <img className="call-avatar call-avatar-photo" src={voice.remoteIdentity.photoUrl} alt="" /> : <div className="call-avatar">{name.charAt(0).toUpperCase()}</div>}<h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p>{voice.connected ? <strong className="call-timer">{formatDuration(elapsed)}</strong> : null}
         <div className="call-controls">
           <button className={voice.muted ? 'control active' : 'control'} onClick={voice.toggleMute} title={voice.muted ? 'Unmute' : 'Mute'}>{voice.muted ? <MicOff /> : <Mic />}<span>{voice.muted ? 'Unmute' : 'Mute'}</span></button>
           <button className={voice.state === 'held' ? 'control active' : 'control'} onClick={voice.toggleHold} title="Hold call"><Pause /><span>Hold</span></button>

@@ -14,7 +14,7 @@ import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, loadVoiceSession, persistVoiceSession, voipClient } from '../lib/voipClient';
 import { CallLifecycleRegistry, isTerminalCallState, type CallLifecycleState } from '../lib/callLifecycle';
-import { attachIceFailureListener, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator } from '../lib/voiceRecovery';
+import { attachIceFailureListener, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator } from '../lib/voiceRecovery';
 import type { ActiveCall, CallerNumber, CallPhase, CallRate, MergedConference } from '../types';
 import { useAuth } from './AuthContext';
 
@@ -148,7 +148,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     console.error(`[Vocivo Voice] ${operation} failed`, { message: normalized.message, stack: normalized.stack });
   }, []);
   const mediaRecoveryRef = useRef(new VoiceMediaRecoveryCoordinator(
-    () => voipClient.loginFromStoredConfig(),
     (operation, failure) => {
       const normalized = failure instanceof Error ? failure : new Error(String(failure));
       console.error(`[Vocivo Voice] ${operation} failed`, { message: normalized.message, stack: normalized.stack });
@@ -327,7 +326,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const unsubscribe = NetInfo.addEventListener((network) => {
       const previous = lastNetworkTypeRef.current;
       lastNetworkTypeRef.current = network.type;
-      if (!previous || previous === network.type || !network.isConnected || network.isInternetReachable === false) return;
+      if (!isTransportNetworkMigration(previous, network.type) || network.isConnected !== true) return;
       const current = callRef.current;
       const phase = activeCallRef.current?.phase;
       if (!current || !['active', 'connecting', 'ringing'].includes(phase || '')) return;
@@ -529,6 +528,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const followRoute = useCallback(async (routeId: string, callId: string) => {
     const generation = ++routePollGenerationRef.current;
+    let lastRouteError: unknown;
     for (let attempt = 0; attempt < 100 && routePollGenerationRef.current === generation; attempt += 1) {
       try {
         const result = await api.get<{ phase: 'dialing' | 'ringing' | 'connected' | 'ended' | 'failed'; connectedAt?: string; failureCause?: string }>(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
@@ -555,21 +555,20 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           return;
         }
       } catch (routeError) {
-        if (attempt > 8) {
-          stopRingback();
-          setError(routeError instanceof Error ? routeError.message : 'Call status could not be confirmed.');
-          await terminateCall(callId, routeId);
-          return;
-        }
+        // Route status is advisory; the Telnyx SDK owns the live media call.
+        // A brief Vercel/network polling failure must never tear down a healthy
+        // SIP session. Keep polling and only fail at the full setup deadline.
+        lastRouteError = routeError;
+        if (attempt === 9 || attempt === 39) reportVoiceError('poll extension route status', routeError);
       }
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
     if (routePollGenerationRef.current === generation) {
       stopRingback();
-      setError('Call setup timed out. Please try again.');
+      setError(lastRouteError instanceof Error ? 'Call setup could not be confirmed. Please try again.' : 'Call setup timed out. Please try again.');
       await terminateCall(callId, routeId);
     }
-  }, [stopRingback, terminateCall]);
+  }, [reportVoiceError, stopRingback, terminateCall]);
 
   const startCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string, photoUrl?: string) => {
     setError(null);
