@@ -4,7 +4,7 @@ import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
-import { callAction, decodeVoiceState, dialCall, encodeVoiceState } from '../voice-control.js';
+import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState } from '../voice-control.js';
 import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
@@ -511,6 +511,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       && payload?.direction === 'outgoing'
       && ['outbound', 'internal'].includes(parkedFlow);
 
+    if (eventType === 'call.initiated' && state?.flow === 'outbound_destination' && state.parentCallControlId) {
+      const existingRoute = state.routeId ? await readVoiceRoute(state.routeId) : null;
+      if (existingRoute && ['connected', 'ended', 'failed'].includes(existingRoute.phase)) {
+        await callAction(callControlId, 'hangup', { command_id: `${eventId}-late-fork` }).catch(() => undefined);
+        return res.status(200).json({ received: true });
+      }
+      const existingPair = state.routeId ? await readOutboundCallPairByRoute(state.routeId) : null;
+      const forkDestinationCallControlIds = [...new Set([
+        ...(existingPair?.forkDestinationCallControlIds || []),
+        existingPair?.destinationCallControlId,
+        callControlId,
+      ].filter((id): id is string => Boolean(id)))];
+      const pair = {
+        clientCallControlId: state.parentCallControlId,
+        destinationCallControlId: existingPair?.destinationCallControlId || callControlId,
+        forkDestinationCallControlIds,
+        routeId: state.routeId,
+        destination: payload?.to || existingPair?.destination || '',
+        status: 'direct' as const,
+        phase: 'ringing' as const,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveOutboundCallPair(pair);
+      if (state.routeId) await updateVoiceRoute(state.routeId, { phase: 'ringing' });
+      return res.status(200).json({ received: true });
+    }
+
     if (eventType === 'call.initiated' && isParkedVocivoClient && payload?.state === 'parked') {
       const destination = customHeader(payload, 'X-Vocivo-Destination') || payload.to || '';
       const selectedCallerId = customHeader(payload, 'X-Vocivo-Caller-ID');
@@ -560,13 +587,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             destinationName: reservation.destinationName,
           },
           fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
-            ? `${businessName ? `${businessName} - ` : ''}${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
+            ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
             : payload.caller_id_name || 'Vocivo'),
           customHeaders: reservation.flow === 'internal' ? [
             { name: 'X-Vocivo-Call-Type', value: 'internal' },
             ...(reservation.callerName ? [{ name: 'X-Vocivo-Caller-Name', value: reservation.callerName }] : []),
             ...(reservation.callerExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: reservation.callerExtension }] : []),
             ...(reservation.callerPhotoUrl ? [{ name: 'X-Vocivo-Caller-Photo', value: reservation.callerPhotoUrl }] : []),
+            ...(businessName ? [{ name: 'X-Vocivo-Company-Name', value: businessName }] : []),
             { name: 'X-Vocivo-Organization-ID', value: reservation.organizationId },
           ] : undefined,
           commandId: `${eventId}-destination`,
@@ -576,15 +604,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-dial-failed` }).catch(() => undefined);
         return res.status(200).json({ received: true });
       }
-      const destinationCallControlId = destinationCall.data?.call_control_id;
-      if (!destinationCallControlId) {
-        background('missing route leg', updateVoiceRoute(routeId, { phase: 'failed', failureCause: 'missing_destination_call_leg' }));
-        await callAction(callControlId, 'hangup', { command_id: `${eventId}-missing-leg` }).catch(() => undefined);
+      const destinationLegs = dialCallLegs(destinationCall);
+      if (!destinationLegs.length) {
+        // Multi-destination Dial may only identify each child leg in its
+        // call.initiated webhook. Keep the parked caller alive while those
+        // authoritative destination events register the route.
+        await updateVoiceRoute(routeId, { phase: 'ringing' });
         return res.status(200).json({ received: true });
       }
+      const destinationCallControlIds = destinationLegs
+        .map((leg) => leg.call_control_id)
+        .filter((id): id is string => Boolean(id));
       const pair = {
           clientCallControlId: callControlId,
-          destinationCallControlId,
+          destinationCallControlId: destinationCallControlIds[0],
+          forkDestinationCallControlIds: destinationCallControlIds,
           routeId,
           destination,
           status: 'direct' as const,
@@ -608,6 +642,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // webhook must never postpone the media bridge after answer.
           await callAction(parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch(() => undefined);
           await completeOutboundBridge(parentCallControlId, callControlId, eventId, connectedRouteId);
+          const connectedPair = await readOutboundCallPairByDestination(callControlId)
+            || (connectedRouteId ? await readOutboundCallPairByRoute(connectedRouteId) : null);
+          const connectedAt = new Date().toISOString();
+          const selectedPair = connectedPair || {
+            clientCallControlId: parentCallControlId,
+            destinationCallControlId: callControlId,
+            forkDestinationCallControlIds: [callControlId],
+            routeId: connectedRouteId,
+            destination: payload?.to || '',
+            status: 'direct' as const,
+            updatedAt: connectedAt,
+          };
+          await saveOutboundCallPair({
+            ...selectedPair,
+            selectedDestinationCallControlId: callControlId,
+            phase: 'connected',
+            connectedAt,
+            updatedAt: connectedAt,
+          });
+          await Promise.all((selectedPair.forkDestinationCallControlIds || [])
+            .filter((id) => id !== callControlId)
+            .map((id) => callAction(id, 'hangup', { command_id: `${eventId}-cancel-fork-${id.slice(-8)}` }).catch(() => undefined)));
         } catch {
           if (connectedRouteId) await updateVoiceRoute(connectedRouteId, { phase: 'failed', failureCause: 'bridge_failed' }).catch(() => undefined);
           await Promise.all([
@@ -636,10 +692,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (eventType === 'call.hangup' && (state?.flow === 'outbound_destination' || endedOutboundPair)) {
       if (state?.flow === 'outbound_destination') {
-        const phase = payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed';
-        if (state.routeId) await updateVoiceRoute(state.routeId, { phase, failureCause: payload?.hangup_cause });
         const pair = await readOutboundCallPairByDestination(callControlId)
           || (state.routeId ? await readOutboundCallPairByRoute(state.routeId) : null);
+        if (pair?.phase === 'connected' && pair.selectedDestinationCallControlId !== callControlId) {
+          return res.status(200).json({ received: true });
+        }
+        const otherForks = (pair?.forkDestinationCallControlIds || [])
+          .filter((id) => id !== callControlId);
+        if (pair?.phase === 'ringing' && otherForks.length) {
+          await saveOutboundCallPair({
+            ...pair,
+            destinationCallControlId: otherForks[0],
+            forkDestinationCallControlIds: otherForks,
+            updatedAt: new Date().toISOString(),
+          });
+          return res.status(200).json({ received: true });
+        }
+        const phase = payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed';
+        if (state.routeId) await updateVoiceRoute(state.routeId, { phase, failureCause: payload?.hangup_cause });
         if (pair) {
           await terminateOutboundPair(pair, `${eventId}-destination-hangup`);
         } else if (state.parentCallControlId) {
@@ -729,8 +799,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         timeoutSeconds: queue.kind === 'queue' ? 45 : Math.min(120, Math.max(10, pbxForOrganization(pbx, organizationId).callHandling.ringGroups.find((item) => item.id === queue.handlingId)?.timeout || 25)),
         commandId: `${eventId}-queue-agents`,
       });
-      const agentCallControlId = agentCall.data?.call_control_id;
-      await saveQueueCall({ ...queue, status: 'dialing', agentCallControlIds: agentCallControlId ? [agentCallControlId] : [], updatedAt: new Date().toISOString() });
+      const agentCallControlIds = dialCallLegs(agentCall)
+        .map((leg) => leg.call_control_id)
+        .filter((id): id is string => Boolean(id));
+      await saveQueueCall({ ...queue, status: 'dialing', agentCallControlIds, updatedAt: new Date().toISOString() });
       return res.status(200).json({ received: true });
     }
 

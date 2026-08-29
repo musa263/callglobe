@@ -16,6 +16,8 @@ export type OutboundCallPair = {
   conferenceRole?: 'host' | 'released';
   peerClientCallControlId?: string;
   peerDestinationCallControlId?: string;
+  forkDestinationCallControlIds?: string[];
+  selectedDestinationCallControlId?: string;
   updatedAt: string;
 };
 
@@ -42,9 +44,13 @@ async function readPath(pathname: string) {
 
 export async function saveOutboundCallPair(pair: OutboundCallPair) {
   const body = encrypt(pair);
+  const destinationIds = [...new Set([
+    pair.destinationCallControlId,
+    ...(pair.forkDestinationCallControlIds || []),
+  ].filter(Boolean))];
   const paths = [
     { pathname: path('client', pair.clientCallControlId), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
-    { pathname: path('destination', pair.destinationCallControlId), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } },
+    ...destinationIds.map((id) => ({ pathname: path('destination', id), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } })),
   ];
   if (pair.routeId) paths.push({ pathname: path('route', pair.routeId), value: body, options: { access: 'private' as const, contentType: 'application/octet-stream', allowOverwrite: true } });
   await putMany(paths);
@@ -55,7 +61,11 @@ export function readOutboundCallPairByDestination(id: string) { return readPath(
 export function readOutboundCallPairByRoute(id: string) { return readPath(path('route', id)); }
 
 export async function clearOutboundCallPair(pair: OutboundCallPair) {
-  const paths = [path('client', pair.clientCallControlId), path('destination', pair.destinationCallControlId)];
+  const destinationIds = [...new Set([
+    pair.destinationCallControlId,
+    ...(pair.forkDestinationCallControlIds || []),
+  ].filter(Boolean))];
+  const paths = [path('client', pair.clientCallControlId), ...destinationIds.map((id) => path('destination', id))];
   if (pair.routeId) paths.push(path('route', pair.routeId));
   await del(paths);
 }

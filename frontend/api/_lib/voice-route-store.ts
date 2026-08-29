@@ -58,7 +58,9 @@ export async function updateVoiceRoute(routeId: string, patch: Partial<ReservedV
     const current = decrypt(value);
     if (new Date(current.expiresAt).getTime() <= Date.now()) return value;
     const terminal = current.phase === 'ended' || current.phase === 'failed';
-    const nextPatch = terminal && patch.phase && !['ended', 'failed'].includes(patch.phase)
+    const phaseOrder: Record<ReservedVoiceRoute['phase'], number> = { dialing: 0, ringing: 1, connected: 2, ended: 3, failed: 3 };
+    const regresses = patch.phase && phaseOrder[patch.phase] < phaseOrder[current.phase];
+    const nextPatch = (terminal || regresses) && patch.phase && patch.phase !== current.phase
       ? { ...patch, phase: current.phase }
       : patch;
     updated = { ...current, ...nextPatch, routeId: current.routeId };

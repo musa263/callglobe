@@ -5,6 +5,7 @@ export function outboundCallControlIds(pair: OutboundCallPair) {
   return [...new Set([
     pair.clientCallControlId,
     pair.destinationCallControlId,
+    ...(pair.forkDestinationCallControlIds || []),
     pair.peerClientCallControlId,
     pair.peerDestinationCallControlId,
   ].filter((id): id is string => Boolean(id)))];

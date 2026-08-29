@@ -6,12 +6,13 @@ test('returns every unique call leg in a merged outbound pair', () => {
   assert.deepEqual(outboundCallControlIds({
     clientCallControlId: 'client-a',
     destinationCallControlId: 'destination-a',
+    forkDestinationCallControlIds: ['destination-a', 'destination-c'],
     peerClientCallControlId: 'client-b',
     peerDestinationCallControlId: 'destination-b',
     destination: '+15550000000',
     status: 'conference',
     updatedAt: new Date(0).toISOString(),
-  }), ['client-a', 'destination-a', 'client-b', 'destination-b']);
+  }), ['client-a', 'destination-a', 'destination-c', 'client-b', 'destination-b']);
 });
 
 test('does not send duplicate hangup commands for the same call leg', () => {

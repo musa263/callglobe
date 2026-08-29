@@ -48,6 +48,21 @@ export function decodeVoiceState(value: unknown): VoiceState | null {
   try { return JSON.parse(Buffer.from(value, 'base64').toString('utf8')) as VoiceState; } catch { return null; }
 }
 
+export type DialCallLeg = {
+  call_control_id?: string;
+  call_leg_id?: string;
+};
+
+export type DialCallResponse = {
+  data?: DialCallLeg | DialCallLeg[];
+};
+
+export function dialCallLegs(response: DialCallResponse) {
+  if (!response.data) return [];
+  return (Array.isArray(response.data) ? response.data : [response.data])
+    .filter((leg): leg is DialCallLeg => Boolean(leg?.call_control_id));
+}
+
 export async function dialCall(input: { to: string | string[]; state: VoiceState; from?: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
   const response = await telnyx('/calls', {
     method: 'POST',
@@ -63,7 +78,7 @@ export async function dialCall(input: { to: string | string[]; state: VoiceState
       ...(input.commandId ? { command_id: input.commandId } : {}),
     }),
   });
-  return await response.json() as { data?: { call_control_id?: string; call_leg_id?: string } };
+  return await response.json() as DialCallResponse;
 }
 
 export function callAction(callControlId: string, action: string, body: Record<string, unknown> = {}) {

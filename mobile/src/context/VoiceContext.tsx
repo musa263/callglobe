@@ -160,7 +160,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     const internalName = inviteHeader(call, 'X-Vocivo-Caller-Name') || displayMatch?.[1];
     const isInternal = Boolean(internalExtension || inviteHeader(call, 'X-Vocivo-Call-Type') === 'internal' || meta.destinationCountry === 'Internal');
     const fallbackNumber = call.isIncoming ? call.callerNumber : call.destination;
-    const fallbackName = call.callerName && !/^sip:/i.test(call.callerName) ? call.callerName : visibleCallAddress(call.destination);
+    const usableCallerName = call.callerName && !/^(?:unknown caller|vocivo)$/i.test(call.callerName.trim()) && !/^sip:/i.test(call.callerName)
+      ? call.callerName
+      : '';
+    const fallbackName = usableCallerName || (isInternal ? 'Company colleague' : visibleCallAddress(call.destination));
     return {
       id: call.callId,
       number: meta.number || internalExtension || visibleCallAddress(fallbackNumber),

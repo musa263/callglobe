@@ -154,6 +154,37 @@ index f15ea17..ceb3c71 100644
      @objc
      func setMissedCallNotificationsEnabled(_ enabled: Bool, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
          UserDefaults.standard.set(enabled, forKey: TelnyxVoiceUserDefaultsKey.missedCallNotificationsEnabled)
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
+index 993ecf6..2331359 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
++++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
+@@ -6,6 +6,15 @@ const operators_1 = require('rxjs/operators');
+ const call_1 = require('../../models/call');
+ const call_state_1 = require('../../models/call-state');
+ const callkit_coordinator_1 = require('../../callkit/callkit-coordinator');
++
++function inviteHeader(telnyxCall, name) {
++  const headers = telnyxCall?.inviteCustomHeaders;
++  if (!Array.isArray(headers)) return '';
++  const match = headers.find(
++    (header) => String(header?.name || header?.header_name || '').toLowerCase() === name.toLowerCase()
++  );
++  return String(match?.value || match?.header_value || '').trim();
++}
+ /**
+  * Central state machine for call management.
+  *
+@@ -385,6 +394,10 @@ class CallStateController {
+         callerName
+       );
+     }
++    const internalCallerName = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Name');
++    const internalCallerExtension = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Extension');
++    if (internalCallerName) callerName = internalCallerName;
++    if (internalCallerExtension) callerNumber = `Extension ${internalCallerExtension}`;
+     // Use smart fallbacks - prefer caller number over "Unknown"
+     const finalCallerNumber = callerNumber || 'Unknown Number';
+     const finalCallerName = callerName || callerNumber || 'Unknown Caller';
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js
 index 30f162f..1ec33d7 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js

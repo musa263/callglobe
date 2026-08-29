@@ -6,7 +6,7 @@ import { assertCallerIdForSession } from '../phone-number-access.js';
 import { getExtension, listExtensions } from '../pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { sessionOrganizationId } from '../tenancy.js';
-import { dialCall } from '../voice-control.js';
+import { dialCall, dialCallLegs } from '../voice-control.js';
 import { organizationExtensionSipUri } from '../internal-sip.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
@@ -86,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       state: { flow: 'conference_host', room, conferenceParticipants: resolved, callerId, organizationId, sourceExtension: extension.extension, sourceName: extension.name },
       fromDisplayName: `Conference for ${extension.name}`,
     });
-    return res.status(200).json({ room, host_call_id: result.data?.call_control_id, participants: resolved.length, internalParticipants: resolved.filter((participant) => participant.internal).length });
+    return res.status(200).json({ room, host_call_id: dialCallLegs(result)[0]?.call_control_id, participants: resolved.length, internalParticipants: resolved.filter((participant) => participant.internal).length });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && /Caller ID|organization|owned|verified|outbound rule|International calling|active colleague|active company extension/i.test(error.message)) return res.status(403).json({ error: error.message });

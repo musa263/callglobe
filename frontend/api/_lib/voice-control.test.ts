@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decodeVoiceState, encodeVoiceState } from './voice-control.js';
+import { decodeVoiceState, dialCallLegs, encodeVoiceState } from './voice-control.js';
 
 test('preserves the destination while ringback stops before an outbound bridge', () => {
   const encoded = encodeVoiceState({
@@ -17,4 +17,17 @@ test('preserves the destination while ringback stops before an outbound bridge',
     organizationId: 'company-a',
     routeId: 'vc_route',
   });
+});
+
+test('normalizes single and forked Telnyx Dial response legs', () => {
+  assert.deepEqual(dialCallLegs({ data: { call_control_id: 'one' } }), [{ call_control_id: 'one' }]);
+  assert.deepEqual(dialCallLegs({ data: [
+    { call_control_id: 'one' },
+    { call_control_id: 'two' },
+    {},
+  ] }), [
+    { call_control_id: 'one' },
+    { call_control_id: 'two' },
+  ]);
+  assert.deepEqual(dialCallLegs({}), []);
 });

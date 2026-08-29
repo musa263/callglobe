@@ -29,6 +29,10 @@ function getCallId(call) {
   return call?.id || call?.callId || '';
 }
 
+function telnyxErrorMessage(event) {
+  return event?.error?.message || event?.message || event?.payload?.message || 'The web phone could not connect.';
+}
+
 export function useTelnyxVoice(token, enabled, identity = {}) {
   const clientRef = useRef(null);
   const clientListenerCleanupRef = useRef(null);
@@ -190,12 +194,19 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       };
       on('telnyx.ready', () => {
         if (cancelled) return;
+        setError('');
         setReady(true);
         setStatusLabel('Ready for calls');
       });
       on('telnyx.error', (event) => {
         if (cancelled) return;
-        setError(event?.message || 'The web phone could not connect.');
+        const message = telnyxErrorMessage(event);
+        console.error('Vocivo Telnyx client error', {
+          code: event?.code || event?.error?.code || event?.payload?.code,
+          message,
+          fatal: event?.fatal ?? event?.error?.fatal,
+        });
+        setError(message);
         setStatusLabel('Connection problem');
       });
       on('telnyx.socket.close', () => {
