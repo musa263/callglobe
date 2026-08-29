@@ -25,6 +25,7 @@ export type OutboundCallPair = {
   peerDestinationCallControlId?: string;
   forkDestinationCallControlIds?: string[];
   selectedDestinationCallControlId?: string;
+  bridgeOnAnswer?: boolean;
   termination?: Record<string, OutboundTerminationState>;
   version?: number;
   updatedAt: string;

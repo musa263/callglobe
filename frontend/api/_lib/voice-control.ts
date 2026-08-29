@@ -37,6 +37,7 @@ export type VoiceState = {
   forwardNoAnswer?: string;
   forwardUnavailable?: string;
   forwardingDepth?: number;
+  bridgeOnAnswer?: boolean;
 };
 
 export function encodeVoiceState(state: VoiceState) {
@@ -57,28 +58,47 @@ export type DialCallResponse = {
   data?: DialCallLeg | DialCallLeg[];
 };
 
+const e164 = /^\+[1-9]\d{6,14}$/;
+let primaryVoiceNumberCache: { value: string; expiresAt: number } | null = null;
+
+export async function primaryVoiceCallerId() {
+  const configured = process.env.TELNYX_VOICE_FROM?.trim();
+  if (configured && e164.test(configured)) return configured;
+  if (primaryVoiceNumberCache && primaryVoiceNumberCache.expiresAt > Date.now()) return primaryVoiceNumberCache.value;
+  const response = await telnyx(`/phone_numbers/${encodeURIComponent(requiredEnv('TELNYX_PHONE_NUMBER_ID'))}`);
+  const payload = await response.json() as { data?: { phone_number?: string } };
+  const value = payload.data?.phone_number?.trim() || '';
+  if (!e164.test(value)) throw new Error('The primary Telnyx voice number is not a valid E.164 caller identity.');
+  primaryVoiceNumberCache = { value, expiresAt: Date.now() + 5 * 60 * 1000 };
+  return value;
+}
+
 export function dialCallLegs(response: DialCallResponse) {
   if (!response.data) return [];
   return (Array.isArray(response.data) ? response.data : [response.data])
     .filter((leg): leg is DialCallLeg => Boolean(leg?.call_control_id));
 }
 
-export async function dialCall(input: { to: string | string[]; state: VoiceState; from: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
+export function dialCallBody(input: { to: string | string[]; state: VoiceState; from: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
   const from = input.from?.trim();
   if (!from) throw new Error('An explicit server-resolved caller identity is required.');
+  return {
+    connection_id: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
+    from,
+    to: input.to,
+    from_display_name: input.fromDisplayName || 'Vocivo',
+    ...(input.customHeaders?.length ? { custom_headers: input.customHeaders } : {}),
+    client_state: encodeVoiceState(input.state),
+    timeout_secs: input.timeoutSeconds ?? 45,
+    ...(input.linkTo ? { link_to: input.linkTo, bridge_intent: true, bridge_on_answer: true, prevent_double_bridge: true } : {}),
+    ...(input.commandId ? { command_id: input.commandId } : {}),
+  };
+}
+
+export async function dialCall(input: { to: string | string[]; state: VoiceState; from: string; fromDisplayName?: string; customHeaders?: Array<{ name: string; value: string }>; linkTo?: string; commandId?: string; timeoutSeconds?: number }) {
   const response = await telnyx('/calls', {
     method: 'POST',
-    body: JSON.stringify({
-      connection_id: requiredEnv('TELNYX_CALL_CONTROL_APP_ID'),
-      from,
-      to: input.to,
-      from_display_name: input.fromDisplayName || 'Vocivo',
-      ...(input.customHeaders?.length ? { custom_headers: input.customHeaders } : {}),
-      client_state: encodeVoiceState(input.state),
-      timeout_secs: input.timeoutSeconds ?? 45,
-      ...(input.linkTo ? { link_to: input.linkTo, bridge_on_answer: true, prevent_double_bridge: true } : {}),
-      ...(input.commandId ? { command_id: input.commandId } : {}),
-    }),
+    body: JSON.stringify(dialCallBody(input)),
   });
   return await response.json() as DialCallResponse;
 }

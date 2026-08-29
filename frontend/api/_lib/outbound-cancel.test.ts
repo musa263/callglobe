@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isRetryableHangupError, outboundCallControlIds, outboundPlaybackCallControlIds } from './outbound-cancel.js';
+import { isAlreadyTerminatedHangupError, isRetryableHangupError, outboundCallControlIds, outboundPlaybackCallControlIds } from './outbound-cancel.js';
 import { mergeOutboundCallPair } from './outbound-call-store.js';
 import { TelnyxApiError } from './telnyx.js';
 
@@ -74,4 +74,10 @@ test('retries only transient or conflicting Telnyx hangup failures', () => {
   assert.equal(isRetryableHangupError(new TelnyxApiError(503, 'busy')), true);
   assert.equal(isRetryableHangupError(new TelnyxApiError(409, 'not ready')), true);
   assert.equal(isRetryableHangupError(new TelnyxApiError(400, 'invalid')), false);
+});
+
+test('treats Telnyx inactive-call responses as an idempotent successful hangup', () => {
+  assert.equal(isAlreadyTerminatedHangupError(new TelnyxApiError(404, 'not found')), true);
+  assert.equal(isAlreadyTerminatedHangupError(new TelnyxApiError(422, "This call is no longer active and can't receive commands.")), true);
+  assert.equal(isAlreadyTerminatedHangupError(new TelnyxApiError(422, 'Invalid call state transition.')), false);
 });

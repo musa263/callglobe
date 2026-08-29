@@ -28,6 +28,11 @@ function errorText(error: unknown) {
   return error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 500) : 'Unknown Telnyx hangup failure';
 }
 
+export function isAlreadyTerminatedHangupError(error: unknown) {
+  return error instanceof TelnyxApiError
+    && (error.status === 404 || (error.status === 422 && /no longer active|can't receive commands|already (?:ended|terminated)/i.test(error.message)));
+}
+
 export function isRetryableHangupError(error: unknown) {
   return !(error instanceof TelnyxApiError) || error.status === 409 || error.status === 422 || error.status === 429 || error.status >= 500;
 }
@@ -43,7 +48,7 @@ async function hangupLeg(id: string, commandId: string, priorAttempts = 0): Prom
       await callAction(id, 'hangup', { command_id: commandId });
       return { status: 'terminated', attempts: priorAttempts + attempts, updatedAt: new Date().toISOString() };
     } catch (error) {
-      if (error instanceof TelnyxApiError && error.status === 404) {
+      if (isAlreadyTerminatedHangupError(error)) {
         return { status: 'terminated', attempts: priorAttempts + attempts, updatedAt: new Date().toISOString() };
       }
       lastError = error;
@@ -90,14 +95,19 @@ export async function terminateOutboundLegs(pair: OutboundCallPair, ids: string[
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {
   const ids = outboundCallControlIds(pair);
   const playbackIds = outboundPlaybackCallControlIds(pair);
-  await Promise.all(playbackIds.map(async (id) => {
+  const playbackCleanup = Promise.all(playbackIds.map(async (id) => {
     try {
       await callAction(id, 'playback_stop', { stop: 'all', command_id: `${commandPrefix}-stop-${id.slice(-8)}` });
     } catch (error) {
       console.warn('[outbound-cancel] ringback stop failed before hangup', { callControlId: id, error: errorText(error) });
     }
   }));
-  const updated = await terminateOutboundLegs(pair, ids, commandPrefix);
+  // Never make the opposite party wait for playback cleanup before receiving
+  // the hangup. Both operations are independent and must start together.
+  const [updated] = await Promise.all([
+    terminateOutboundLegs(pair, ids, commandPrefix),
+    playbackCleanup,
+  ]);
   const complete = ids.every((id) => updated.termination?.[id]?.status === 'terminated');
   if (complete) {
     await clearOutboundCallPair(updated);

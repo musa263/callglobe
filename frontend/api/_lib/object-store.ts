@@ -633,7 +633,6 @@ export async function putMany(entries: PutEntry[]) {
     };
   }));
   return withDatabaseRetry(async (sql) => {
-    await ensureTable(sql);
     return sql.begin(async (transaction) => {
       const results = [];
       const lockPaths = [...new Set(prepared.map((item) => item.storedPath))].sort();
@@ -695,7 +694,6 @@ export async function readObjects(pathnames: string[]) {
 
 export async function updateObject(pathname: string, update: (current: Buffer) => Buffer | Promise<Buffer>) {
   return withDatabaseRetry(async (sql) => {
-    await ensureTable(sql);
     return sql.begin(async (transaction) => {
       await transaction`select pg_advisory_xact_lock(hashtext(${pathname}))`;
       const currentRows = await transaction<Array<{ body: Buffer; etag: string }>>`
@@ -724,17 +722,19 @@ export async function transactObjectGroup<T>(
 ) {
   if (!lockKey) throw new Error('Object transaction lock key is required.');
   return withDatabaseRetry(async (sql) => {
-    await ensureTable(sql);
     return sql.begin(async (transaction) => {
       const paths = [...new Set(readPathnames.filter(Boolean))].sort();
       const lockKeys = [...new Set([lockKey, ...paths])].sort();
       for (const key of lockKeys) await transaction`select pg_advisory_xact_lock(hashtext(${key}))`;
-      const rows = paths.length
+      const rows: Array<{ pathname: string; body: Buffer; etag: string }> = paths.length
         ? await transaction<Array<{ pathname: string; body: Buffer; etag: string }>>`
             select pathname, body, etag from vocivo_objects where pathname in ${transaction(paths)} for update
           `
         : [];
-      const current = new Map(rows.map((row) => [row.pathname, { body: Buffer.from(row.body), etag: row.etag }]));
+      const current = new Map<string, { body: Buffer; etag: string }>(rows.map((row) => [
+        row.pathname,
+        { body: Buffer.from(row.body), etag: row.etag },
+      ]));
       const mutation = await update(current);
       const prepared = await Promise.all((mutation.puts || []).map(async ({ pathname, value, options = {} }) => {
         const body = await bodyBuffer(value);
@@ -769,7 +769,6 @@ export async function transactObject(
   const contentType = options.contentType || 'application/octet-stream';
   const access = options.access || 'private';
   return withDatabaseRetry(async (sql) => {
-    await ensureTable(sql);
     return sql.begin(async (transaction) => {
       // The advisory lock also serializes first-write races where no row exists
       // yet. The etag predicate is the compare-and-swap guard for existing rows.

@@ -4,7 +4,7 @@ import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { ensureTelnyxSipUriCalling, findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
-import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState } from '../voice-control.js';
+import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState, primaryVoiceCallerId } from '../voice-control.js';
 import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
@@ -523,6 +523,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ received: true });
       }
       const existingPair = state.routeId ? await readOutboundCallPairByRoute(state.routeId) : null;
+      if (existingPair && ['connected', 'ended', 'failed'].includes(existingPair.phase || 'dialing')) {
+        background('hang up late extension fork', callAction(callControlId, 'hangup', { command_id: `${eventId}-late-fork` }));
+        return res.status(200).json({ received: true });
+      }
       const forkDestinationCallControlIds = [...new Set([
         ...(existingPair?.forkDestinationCallControlIds || []),
         existingPair?.destinationCallControlId,
@@ -536,6 +540,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         destination: payload?.to || existingPair?.destination || '',
         status: 'direct' as const,
         phase: 'ringing' as const,
+        bridgeOnAnswer: existingPair?.bridgeOnAnswer || state.bridgeOnAnswer === true,
         updatedAt: new Date().toISOString(),
       };
       await saveOutboundCallPair(pair);
@@ -583,11 +588,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ? await listExtensionSipUsernames(reservation.destinationExtensionId)
           : [];
         const destinations = sipUsers.map(extensionSipUri);
-        const sourceSipUsername = reservation.flow === 'internal' && reservation.sourceExtensionId
-          ? (await getExtension(reservation.sourceExtensionId)).sipUsername
-          : reservation.callerSipUsername;
-        const dialFrom = reservation.flow === 'internal' && sourceSipUsername
-          ? extensionSipUri(sourceSipUsername)
+        const dialFrom = reservation.flow === 'internal'
+          ? await primaryVoiceCallerId()
           : reservation.callerId;
         if (!dialFrom) throw new Error('The signed call route has no authorized caller identity.');
         destinationCall = await dialCall({
@@ -599,6 +601,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             sourcePhotoUrl: reservation.callerPhotoUrl,
             destinationExtensionId: reservation.destinationExtensionId, destinationExtension: reservation.destinationExtension,
             destinationName: reservation.destinationName,
+            bridgeOnAnswer: reservation.flow === 'internal',
           },
           fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
             ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
@@ -611,6 +614,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             ...(businessName ? [{ name: 'X-Vocivo-Company-Name', value: businessName }] : []),
             { name: 'X-Vocivo-Organization-ID', value: reservation.organizationId },
           ] : undefined,
+          linkTo: reservation.flow === 'internal' ? callControlId : undefined,
           commandId: `${eventId}-destination`,
         });
       } catch (dialError) {
@@ -637,6 +641,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           destination,
           status: 'direct' as const,
           phase: 'ringing' as const,
+          bridgeOnAnswer: reservation.flow === 'internal',
           updatedAt: new Date().toISOString(),
       };
       await saveOutboundCallPair(pair);
@@ -663,27 +668,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           destination: payload?.to || '',
           status: 'direct' as const,
           phase: 'ringing' as const,
+          bridgeOnAnswer: state?.flow === 'outbound_destination' && state.bridgeOnAnswer === true,
           updatedAt: now,
         };
         try {
           const claim = await claimOutboundCallWinner(candidatePair, callControlId);
           if (!claim.won) {
-            await terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-losing-fork`);
+            background('reject losing answered fork', terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-losing-fork`));
             return res.status(200).json({ received: true });
           }
-          if (claim.loserIds.length) {
-            await terminateOutboundLegs(claim.pair, claim.loserIds, `${eventId}-cancel-fork`);
-          }
+          if (claim.loserIds.length) background('cancel losing extension forks', terminateOutboundLegs(claim.pair, claim.loserIds, `${eventId}-cancel-fork`));
           const existingRoute = connectedRouteId ? await readVoiceRoute(connectedRouteId) : null;
           if (existingRoute && ['ended', 'failed'].includes(existingRoute.phase)) {
             await terminateOutboundPair(claim.pair, `${eventId}-terminal`);
             return res.status(200).json({ received: true });
           }
-          // Ringback cleanup is best-effort. A delayed or missing playback
-          // webhook must never postpone the media bridge after answer.
-          await callAction(parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` })
-            .catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
-          await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
+          const automaticBridge = state?.bridgeOnAnswer === true || claim.pair.bridgeOnAnswer === true;
+          if (!automaticBridge) {
+            // Keep the proven PSTN path unchanged. Extension calls use the
+            // atomic bridge-on-answer command sent with Dial instead.
+            await callAction(parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` })
+              .catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
+            await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
+          } else {
+            background('stop extension ringback after automatic bridge', callAction(parentCallControlId, 'playback_stop', {
+              stop: 'all',
+              command_id: `${eventId}-stop-ringback`,
+            }));
+          }
           const connectedAt = new Date().toISOString();
           await saveOutboundCallPair({
             ...claim.pair,
@@ -705,7 +717,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (eventType === 'call.bridged') {
       if (state?.flow === 'outbound_destination' && state.routeId) {
-        background('bridged route state', updateVoiceRoute(state.routeId, { phase: 'connected', connectedAt: new Date().toISOString() }));
+        const connectedAt = new Date().toISOString();
+        const pair = await readOutboundCallPairByDestination(callControlId)
+          || await readOutboundCallPairByRoute(state.routeId);
+        if (pair && pair.phase !== 'connected') {
+          await saveOutboundCallPair({
+            ...pair,
+            selectedDestinationCallControlId: pair.selectedDestinationCallControlId || callControlId,
+            phase: 'connected',
+            connectedAt,
+            updatedAt: connectedAt,
+          });
+        }
+        background('bridged route state', updateVoiceRoute(state.routeId, { phase: 'connected', connectedAt }));
         return res.status(200).json({ received: true });
       }
       const pair = await readOutboundCallPairByClient(callControlId)
