@@ -14,6 +14,7 @@ import video from './_lib/routes/voice-video.js';
 import voicemails from './_lib/routes/voice-voicemails.js';
 import webhook from './_lib/routes/voice-webhook.js';
 import webPush from './_lib/routes/voice-web-push.js';
+import aiTransfer from './_lib/routes/voice-ai-transfer.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -32,6 +33,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   video,
   voicemails,
   webhook,
+  'ai-transfer': aiTransfer,
   'web-push': webPush,
 });
 

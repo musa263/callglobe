@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put } from './object-store.js';
+import { del, put, transactObjectGroup } from './object-store.js';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
@@ -29,4 +29,15 @@ export async function readActiveCallRoute(extensionId: string) {
 
 export async function clearActiveCallRoute(extensionId: string) {
   await del(`vocivo/call-routes/${extensionId}.bin`);
+}
+
+export async function clearActiveCallRouteIfMatches(extensionId: string, agentCallControlId: string) {
+  const pathname = `vocivo/call-routes/${extensionId}.bin`;
+  return transactObjectGroup(`vocivo:call-route:${extensionId}`, [pathname], (objects) => {
+    const stored = objects.get(pathname)?.body;
+    if (!stored) return { result: false };
+    const route = decrypt(stored);
+    if (route.agentCallControlId !== agentCallControlId) return { result: false };
+    return { deletes: [pathname], result: true };
+  });
 }

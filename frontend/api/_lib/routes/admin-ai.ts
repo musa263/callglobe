@@ -6,9 +6,7 @@ import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice } from '../voice-catalog.js';
 import { findExtension, listExtensions } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
-import { primaryVoiceCallerId } from '../voice-control.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools } from '../ai-transfer.js';
-import { normalizeE164 } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -30,8 +28,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Choose an active company extension for AI transfers before enabling the receptionist.' });
     }
     const targets = activeAiTransferTargets(current, organizationId, extensions);
-    const configuredCallerId = normalizeE164(tenant.company.defaultCallerId);
-    const transferFrom = /^\+[1-9]\d{6,14}$/.test(configuredCallerId) ? configuredCallerId : await primaryVoiceCallerId();
     const payload = {
       name: ai.name.trim(), description: 'Vocivo interactive company receptionist',
       instructions: aiAssistantInstructions(ai, targets),
@@ -39,7 +35,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       voice_settings: { voice: carrierFallbackVoice(ai.voice) },
       transcription: { model: ai.language === 'en' ? 'deepgram/flux' : 'deepgram/nova-3', language: ai.language },
       post_conversation_settings: { enabled: ai.summariesEnabled },
-      tools: aiAssistantTools(ai.transferEnabled, targets, transferFrom),
+      // Live calls inject a signed, call-scoped transfer webhook. The stored
+      // assistant deliberately has no reusable transfer destination or secret.
+      tools: aiAssistantTools(ai.transferEnabled, targets),
     };
     const response = await telnyx(ai.assistantId ? `/ai/assistants/${encodeURIComponent(ai.assistantId)}` : '/ai/assistants', { method: 'POST', body: JSON.stringify(payload) });
     const assistant = await response.json() as { id?: string };

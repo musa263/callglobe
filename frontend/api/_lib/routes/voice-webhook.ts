@@ -5,10 +5,10 @@ import { readBusinessVoiceConfig } from '../number-config.js';
 import { findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
 import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState, primaryVoiceCallerId } from '../voice-control.js';
-import { clearActiveCallRoute, saveActiveCallRoute } from '../call-route-store.js';
+import { clearActiveCallRouteIfMatches, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
-import { claimOutboundCallWinner, clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair } from '../outbound-call-store.js';
+import { claimOutboundCallWinner, clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundLegs, terminateOutboundPair } from '../outbound-cancel.js';
 import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
@@ -29,6 +29,7 @@ import { activeOrganizationExtensionTargets, extensionSipUri, isAllowedInternalS
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
 import { claimReplayKey, releaseReplayKey } from '../object-store.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools, inboundAiCommandId, inboundAiRoutingKey } from '../ai-transfer.js';
+import { createAiTransferToken } from '../ai-transfer-token.js';
 
 type VoiceEvent = {
   data?: {
@@ -550,6 +551,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ received: true });
     }
 
+    if (eventType === 'call.initiated' && state?.flow === 'agent' && state.parentCallControlId) {
+      const existingPair = await readOutboundCallPairByClient(state.parentCallControlId);
+      if (existingPair && ['connected', 'ended', 'failed'].includes(existingPair.phase || 'ringing')) {
+        background('end late agent device fork', terminateOutboundLegs(existingPair, [callControlId], `${eventId}-late-agent`));
+        return res.status(200).json({ received: true });
+      }
+      await saveOutboundCallPair({
+        clientCallControlId: state.parentCallControlId,
+        destinationCallControlId: existingPair?.destinationCallControlId || callControlId,
+        forkDestinationCallControlIds: [...new Set([
+          ...(existingPair?.forkDestinationCallControlIds || []),
+          existingPair?.destinationCallControlId,
+          callControlId,
+        ].filter((id): id is string => Boolean(id)))],
+        destination: payload?.to || existingPair?.destination || '',
+        status: 'direct',
+        phase: 'ringing',
+        bridgeOnAnswer: true,
+        updatedAt: new Date().toISOString(),
+      });
+      return res.status(200).json({ received: true });
+    }
+
     if (eventType === 'call.initiated' && isParkedVocivoClient && payload?.state === 'parked') {
       const destination = customHeader(payload, 'X-Vocivo-Destination') || payload.to || '';
       const selectedCallerId = customHeader(payload, 'X-Vocivo-Caller-ID');
@@ -726,6 +750,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (eventType === 'call.bridged') {
+      if (state?.flow === 'agent' && state.parentCallControlId) {
+        const pair = await readOutboundCallPairByDestination(callControlId)
+          || await readOutboundCallPairByClient(state.parentCallControlId);
+        if (pair) {
+          const claim = await claimOutboundCallWinner(pair, callControlId);
+          if (!claim.won) {
+            background('end late bridged agent fork', terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-late-agent`));
+            return res.status(200).json({ received: true });
+          }
+          const connectedAt = new Date().toISOString();
+          await saveOutboundCallPair({
+            ...claim.pair,
+            selectedDestinationCallControlId: callControlId,
+            phase: 'connected',
+            connectedAt,
+            updatedAt: connectedAt,
+          });
+          await callAction(state.parentCallControlId, 'playback_stop', {
+            stop: 'all',
+            command_id: `${eventId}-stop-bridged-waiting`,
+          }).catch((error) => logWebhookFailure('stop bridged waiting playback', error));
+          const targetExtensionId = await extensionForAgentState(state, payload?.to);
+          if (targetExtensionId) {
+            await saveActiveCallRoute({
+              extensionId: targetExtensionId,
+              parentCallControlId: state.parentCallControlId,
+              agentCallControlId: callControlId,
+              updatedAt: connectedAt,
+            });
+          }
+        }
+        return res.status(200).json({ received: true });
+      }
       if (state?.flow === 'outbound_destination' && state.routeId) {
         const connectedAt = new Date().toISOString();
         const pair = await readOutboundCallPairByDestination(callControlId)
@@ -747,6 +804,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (pair?.status === 'direct' && pair.phase !== 'connected') {
         const connectedAt = new Date().toISOString();
         await saveOutboundCallPair({ ...pair, phase: 'connected', connectedAt, updatedAt: connectedAt });
+        if (pair.bridgeOnAnswer) {
+          await callAction(pair.clientCallControlId, 'playback_stop', {
+            stop: 'all',
+            command_id: `${eventId}-stop-bridged-ringback`,
+          }).catch((error) => logWebhookFailure('stop bridge-on-answer ringback', error));
+        }
         if (pair.routeId) await updateVoiceRoute(pair.routeId, { phase: 'connected', connectedAt });
       }
       return res.status(200).json({ received: true });
@@ -819,21 +882,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (eventType === 'call.answered' && (state?.flow === 'agent' || state?.flow === 'queue_agent') && state.parentCallControlId) {
       const targetExtensionId = await extensionForAgentState(state, payload?.to);
+      if (state.flow === 'agent') {
+        const storedPair = await readOutboundCallPairByDestination(callControlId)
+          || await readOutboundCallPairByClient(state.parentCallControlId);
+        const pair = storedPair || {
+          clientCallControlId: state.parentCallControlId,
+          destinationCallControlId: callControlId,
+          forkDestinationCallControlIds: [callControlId],
+          destination: payload?.to || '',
+          status: 'direct' as const,
+          phase: 'ringing' as const,
+          bridgeOnAnswer: true,
+          updatedAt: new Date().toISOString(),
+        };
+        const claim = await claimOutboundCallWinner(pair, callControlId);
+        if (!claim.won) {
+          background('reject losing answered agent fork', terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-losing-agent`));
+          return res.status(200).json({ received: true });
+        }
+        if (claim.loserIds.length) {
+          background('cancel losing agent device forks', terminateOutboundLegs(claim.pair, claim.loserIds, `${eventId}-cancel-agent`));
+        }
+      }
       await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop waiting playback', error));
       if (targetExtensionId) {
-        background('active agent route', saveActiveCallRoute({ extensionId: targetExtensionId, parentCallControlId: state.parentCallControlId, agentCallControlId: callControlId, updatedAt: new Date().toISOString() }));
+        await saveActiveCallRoute({ extensionId: targetExtensionId, parentCallControlId: state.parentCallControlId, agentCallControlId: callControlId, updatedAt: new Date().toISOString() });
       }
     }
     if (eventType === 'call.hangup' && (state?.flow === 'agent' || state?.flow === 'queue_agent')) {
       const targetExtensionId = await extensionForAgentState(state, payload?.to);
-      if (targetExtensionId) await clearActiveCallRoute(targetExtensionId);
-    }
-
-    if (eventType === 'call.hangup' && state?.flow === 'agent' && state.parentCallControlId) {
-      const cause = (payload?.hangup_cause || '').toLowerCase();
-      if (isUnansweredAgentCause(cause)) {
-        await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop rejected waiting playback', error));
-        await routeAfterAgentFailure(state, cause, eventId);
+      if (state.flow === 'agent' && state.parentCallControlId) {
+        const pair = await readOutboundCallPairByDestination(callControlId)
+          || await readOutboundCallPairByClient(state.parentCallControlId);
+        if (pair?.phase === 'connected' && pair.selectedDestinationCallControlId !== callControlId) {
+          return res.status(200).json({ received: true });
+        }
+        const otherForks = [...new Set([
+          pair?.destinationCallControlId,
+          ...(pair?.forkDestinationCallControlIds || []),
+        ].filter((id): id is string => Boolean(id) && id !== callControlId))];
+        if (pair?.phase === 'ringing' && otherForks.length) {
+          await updateOutboundCallPair(pair, (current) => ({
+            ...current,
+            destinationCallControlId: otherForks[0],
+            forkDestinationCallControlIds: otherForks,
+            updatedAt: new Date().toISOString(),
+          }));
+          return res.status(200).json({ received: true });
+        }
+        if (targetExtensionId) await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
+        const cause = (payload?.hangup_cause || '').toLowerCase();
+        if (pair) await clearOutboundCallPair(pair);
+        if (isUnansweredAgentCause(cause)) {
+          await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop rejected waiting playback', error));
+          await routeAfterAgentFailure(state, cause, eventId);
+        }
+      } else if (targetExtensionId) {
+        await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
       }
     }
 
@@ -1034,18 +1139,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         try {
           const extensions = await listExtensions(organizationId);
           const targets = activeAiTransferTargets(pbx, organizationId, extensions);
-          const assignedInboundNumber = normalizeE164(inboundNumber);
-          const configuredCallerId = normalizeE164(organizationPbx.company.defaultCallerId);
-          const transferFrom = e164.test(assignedInboundNumber)
-            ? assignedInboundNumber
-            : e164.test(configuredCallerId)
-              ? configuredCallerId
-              : await primaryVoiceCallerId();
+          const transferToken = createAiTransferToken({
+            callControlId,
+            organizationId,
+            inboundNumber,
+            callerNumber,
+            callerName,
+            assistantId: organizationPbx.ai.assistantId,
+          });
+          const transferUrl = `${requiredEnv('VITE_APP_URL').replace(/\/+$/, '')}/api/voice/ai-transfer?token=${encodeURIComponent(transferToken)}`;
           await callAction(callControlId, 'ai_assistant_start', {
             assistant: {
               id: organizationPbx.ai.assistantId,
               instructions: aiAssistantInstructions(organizationPbx.ai, targets),
-              tools: aiAssistantTools(organizationPbx.ai.transferEnabled, targets, transferFrom),
+              tools: aiAssistantTools(organizationPbx.ai.transferEnabled, targets, transferUrl),
             },
             command_id: inboundAiCommandId(callControlId),
           });
