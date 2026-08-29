@@ -10,6 +10,7 @@ import {
   saveSaasFeatureOverrides, saveSaasPlan, saveSaasSubscription, saveTenantAdmin,
   type FeatureKey, type SaasPlan, type SaasSubscription,
 } from '../saas-store.js';
+import { VOCIVO_PLATFORM_NAME } from '../platform-identity.js';
 
 function text(value: unknown, max = 100) {
   return typeof value === 'string' ? value.replace(/[\r\n]/g, ' ').trim().slice(0, max) : '';
@@ -44,6 +45,9 @@ async function responseFor(superadmin: boolean, organizationId?: string) {
   const mrr = active.reduce((total, organization) => total + (organization.subscription.billingCycle === 'annual' ? organization.subscription.amount / 12 : organization.subscription.amount), 0);
   return {
     platform: superadmin ? {
+      name: VOCIVO_PLATFORM_NAME,
+      owner: VOCIVO_PLATFORM_NAME,
+      accountType: 'platform',
       customers: organizations.length,
       activeSubscriptions: active.length,
       trials: organizations.filter((organization) => organization.subscription.status === 'trialing').length,

@@ -8,6 +8,7 @@ import { readUserProfile, readUserProfiles } from '../profile-store.js';
 import { mobileRates } from '../rates.js';
 import { accessForSession } from '../saas-access.js';
 import { sessionOrganizationId } from '../tenancy.js';
+import { readRetailRateDirectory, readTenantWallet } from '../wallet-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -21,9 +22,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const organizationId = sessionOrganizationId(session, config);
     const organization = access.organization;
     const canUseDirectory = organization.accountType === 'business' && organization.internalCallingEnabled && access.features.internalCalling;
-    const [extensions, storedProfile] = await Promise.all([
+    const canViewWallet = organization.accountType === 'individual' || ['company_owner', 'company_admin'].includes(session.role || '');
+    const [extensions, storedProfile, wallet, rates] = await Promise.all([
       canUseDirectory ? listExtensions(organizationId) : Promise.resolve([]),
       readUserProfile(session.sub || ''),
+      canViewWallet ? readTenantWallet(organizationId, access.subscription.currency) : Promise.resolve(null),
+      readRetailRateDirectory(mobileRates),
     ]);
     const profiles = canUseDirectory
       ? await readUserProfiles(extensions.map((item) => `vocivo-extension:${item.id}`))
@@ -61,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'private, no-store');
     return res.status(200).json({
       profile,
-      account: { balance: null, can_call: access.features.internalCalling || access.features.outboundCalling, currency: access.subscription.currency, rates: mobileRates },
+      account: { balance: wallet ? wallet.availableMinor / 100 : null, can_call: access.features.internalCalling || access.features.outboundCalling, currency: wallet?.currency || access.subscription.currency, rates },
       numbers: assignedNumbers,
       directory,
       calls: [],

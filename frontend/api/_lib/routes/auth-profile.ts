@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { readUserProfile, saveProfilePhoto, saveUserProfile, type StoredUserProfile } from '../profile-store.js';
+import { VOCIVO_SUPERADMIN_NAME } from '../platform-identity.js';
 
 function clean(value: unknown, max: number) {
   return typeof value === 'string' ? value.replace(/[\r\n]/g, ' ').trim().slice(0, max) : '';
@@ -11,7 +12,7 @@ function baseProfile(session: Awaited<ReturnType<typeof requireSession>>): Store
   const owner = session.sub === 'vocivo-owner';
   return {
     id: session.sub || 'vocivo-user',
-    fullName: owner ? process.env.APP_ADMIN_NAME || 'Vocivo Superadmin' : session.name || `Extension ${session.extension || ''}`,
+    fullName: owner ? process.env.APP_ADMIN_NAME || VOCIVO_SUPERADMIN_NAME : session.name || `Extension ${session.extension || ''}`,
     email: session.email || '',
     jobTitle: owner ? 'Platform superadmin' : '',
     department: '',

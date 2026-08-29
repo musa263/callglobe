@@ -121,7 +121,7 @@ export function transientDatabaseError(error: unknown) {
     || /too many connections|connection (?:terminated|timed? out|refused)|connect_timeout/i.test(value?.message || '');
 }
 
-async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) {
+export async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) {
   const delays = [0, 100, 350];
   let lastError: unknown;
   for (const delay of delays) {

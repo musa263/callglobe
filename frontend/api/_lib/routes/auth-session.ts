@@ -3,6 +3,7 @@ import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed } from '../http.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { effectiveEntitlements, readTenantSaasState } from '../saas-store.js';
+import { VOCIVO_PLATFORM_NAME, VOCIVO_SUPERADMIN_NAME } from '../platform-identity.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -17,14 +18,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       profile: {
         id: session.sub,
         email: session.email,
-        full_name: isOwner ? process.env.APP_ADMIN_NAME || 'Vocivo Superadmin' : session.name || `Extension ${session.extension || ''}`,
+        full_name: isOwner ? process.env.APP_ADMIN_NAME || VOCIVO_SUPERADMIN_NAME : session.name || `Extension ${session.extension || ''}`,
         currency: 'USD',
         extension: session.extension,
         organization_id: session.organizationId,
         role: session.role,
         account_type: isOwner ? 'platform' : organization?.accountType || session.accountType || 'business',
-        organization_name: isOwner ? 'Vocivo' : organization?.name,
-        organization_owner: organization?.ownerDisplayName,
+        organization_name: isOwner ? VOCIVO_PLATFORM_NAME : organization?.name,
+        organization_owner: isOwner ? VOCIVO_PLATFORM_NAME : organization?.ownerDisplayName,
         admin_only: Boolean(session.accountId && !session.extensionId) || isOwner,
         force_password_change: Boolean(session.forcePasswordChange),
         entitlements: access?.features,

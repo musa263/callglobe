@@ -7,6 +7,7 @@ import { readPbxConfig } from '../pbx-config-store.js';
 import { authenticateTenantAdmin, effectiveEntitlements, readTenantSaasState } from '../saas-store.js';
 import { checkLoginRateLimit, clearAccountLoginFailures, recordLoginFailure, requestIp } from '../auth-rate-limit.js';
 import { quarantineSecurityEvent } from '../security-quarantine.js';
+import { VOCIVO_PLATFORM_NAME, VOCIVO_SUPERADMIN_NAME } from '../platform-identity.js';
 
 function securityLog(event: string, input: { accountHash: string; ipHash: string; retryAfterSeconds?: number }) {
   console.warn(JSON.stringify({
@@ -57,8 +58,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({
         token,
         profile: {
-          id: 'vocivo-owner', email, full_name: process.env.APP_ADMIN_NAME || 'Vocivo Superadmin', currency: 'USD',
-          role: 'superadmin', account_type: 'platform', organization_name: 'Vocivo', admin_only: true,
+          id: 'vocivo-owner', email, full_name: process.env.APP_ADMIN_NAME || VOCIVO_SUPERADMIN_NAME, currency: 'USD',
+          role: 'superadmin', account_type: 'platform', organization_name: VOCIVO_PLATFORM_NAME,
+          organization_owner: VOCIVO_PLATFORM_NAME, admin_only: true,
         },
       });
     }

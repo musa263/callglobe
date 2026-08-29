@@ -3,6 +3,7 @@ import { requireSession } from '../_lib/auth.js';
 import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
 import { mobileRates } from '../_lib/rates.js';
 import { accessForSession } from '../_lib/saas-access.js';
+import { readRetailRateDirectory, readTenantWallet } from '../_lib/wallet-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -13,12 +14,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await accessForSession(session);
     if (access.superadmin === true) return res.status(200).json({ balance: null, can_call: false, currency: 'USD', pending: 0, rates: mobileRates });
     const canCall = access.features.internalCalling || access.features.outboundCalling;
+    const canViewWallet = access.organization.accountType === 'individual' || ['company_owner', 'company_admin'].includes(session.role || '');
+    const [wallet, rates] = await Promise.all([
+      canViewWallet ? readTenantWallet(access.organization.id, access.subscription.currency) : Promise.resolve(null),
+      readRetailRateDirectory(mobileRates),
+    ]);
     return res.status(200).json({
-      balance: null,
+      balance: wallet ? wallet.availableMinor / 100 : null,
       can_call: canCall,
-      currency: access.subscription.currency,
-      pending: 0,
-      rates: mobileRates,
+      currency: wallet?.currency || access.subscription.currency,
+      pending: wallet ? wallet.reservedMinor / 100 : 0,
+      rates,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
