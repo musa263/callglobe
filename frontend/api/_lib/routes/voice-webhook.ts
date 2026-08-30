@@ -14,12 +14,12 @@ import { bridgeOutboundCalls } from '../outbound-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
-import { organizationForNumber } from '../tenancy.js';
+import { normalizeE164, organizationForNumber } from '../tenancy.js';
 import { verifyTelnyxWebhook } from '../telnyx-webhook-auth.js';
 import { quarantineSecurityEvent } from '../security-quarantine.js';
 import { storeCallEvent } from '../call-event-store.js';
 import { clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
-import { normalizeE164 } from '../tenancy.js';
+import { clearConferenceCall, readConferenceCall, saveConferenceCall } from '../conference-call-store.js';
 import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
@@ -144,7 +144,7 @@ async function routeToAvailableAgent(input: {
 
 async function resolveOrganizationDestination(organizationId: string, inboundNumber: string, department?: string, preferMain = false) {
   const pbx = await readPbxConfig();
-  const assignment = pbx.numberAssignments[inboundNumber];
+  const assignment = pbx.numberAssignments[normalizeE164(inboundNumber)];
   if (assignment?.organizationId === organizationId && assignment.destinationType === 'main') return null;
   if (assignment?.organizationId === organizationId && assignment.destinationType === 'extension' && assignment.destinationId) {
     const extension = await getExtension(assignment.destinationId).catch(() => null);
@@ -278,6 +278,16 @@ async function routeAfterAgentFailure(state: NonNullable<ReturnType<typeof decod
     return;
   }
   await routeUnavailable(state.parentCallControlId || '', organizationId, eventId, state.callerNumber, state.callerName, state.voicemailEnabled);
+}
+
+async function endConferenceRoom(room: string | undefined, eventId: string) {
+  if (!room) return;
+  const conference = await readConferenceCall(room);
+  await Promise.all((conference?.guestCallControlIds || []).map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-guest-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end conference guest', error))));
+  if (conference?.conferenceId) {
+    await telnyx(`/conferences/${encodeURIComponent(conference.conferenceId)}`, { method: 'DELETE' }).catch((error) => logWebhookFailure('end conference room', error));
+  }
+  await clearConferenceCall(room).catch((error) => logWebhookFailure('clear conference room', error));
 }
 
 function cleanQueuePart(value: string) { return value.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'route'; }
@@ -716,7 +726,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         || (routeId ? await readOutboundCallPairByRoute(routeId) : null);
       const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
       if (!pair && routeId) await updateVoiceRoute(routeId, outcome);
-      if (!pair) return res.status(200).json({ received: true });
+      if (!pair) {
+        if (state?.flow === 'conference_host') await endConferenceRoom(state.room, eventId);
+        return res.status(200).json({ received: true });
+      }
       if (pair.status === 'direct') {
         if (pair.routeId) await updateVoiceRoute(pair.routeId, outcome);
         await terminateOutboundPair(pair, `${eventId}-client-hangup`);
@@ -728,6 +741,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await Promise.all([clearOutboundCallPair(pair), ...(peer ? [clearOutboundCallPair(peer)] : [])])
           .catch((error) => logWebhookFailure('clear outbound call pair', error));
       }
+      return res.status(200).json({ received: true });
+    }
+
+    if (eventType === 'call.hangup' && state?.flow === 'conference_host') {
+      await endConferenceRoom(state.room, eventId);
       return res.status(200).json({ received: true });
     }
 
@@ -809,8 +827,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         if (targetExtensionId) await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
         const cause = (payload?.hangup_cause || '').toLowerCase();
-        if (pair) await clearOutboundCallPair(pair);
-        if (pair?.phase === 'connected') {
+        if (!pair) return res.status(200).json({ received: true });
+        await clearOutboundCallPair(pair);
+        if (pair.phase === 'connected') {
           await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-caller` }).catch((error) => logWebhookFailure('end inbound caller after agent hangup', error));
         } else {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop rejected waiting playback', error));
@@ -882,6 +901,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.dequeued' && state?.flow === 'queue_wait' && state.queueName && state.organizationId) {
       const queue = await readQueueCall(state.queueName);
       await clearQueueCall(state.queueName);
+      await Promise.all((queue?.agentCallControlIds || []).map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-agent-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end queued agent after dequeue', error))));
       if (!queue || queue.status === 'connected' || queue.status === 'connecting') return res.status(200).json({ received: true });
       await routeCallGroupFallback({ callControlId, eventId, organizationId: state.organizationId, handlingId: state.handlingId || '', kind: queue?.kind || 'queue', inboundNumber: state.inboundNumber, callerNumber: state.callerNumber, callerName: state.callerName });
       return res.status(200).json({ received: true });
@@ -963,23 +983,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ received: true });
       }
       if (!state.callerId) throw new Error('The conference has no authorized caller identity.');
-        const conferenceCallerId = state.callerId;
-        const participants = state.conferenceParticipants ?? (state.participants ?? []).map((destination) => ({ destination, displayName: destination, internal: false }));
-        await Promise.all(participants.map((participant, index) => dialCall({
-          to: participant.destination,
-          from: conferenceCallerId,
-          state: { flow: 'conference_guest', room: state.room, conferenceId, callerId: conferenceCallerId, organizationId: state.organizationId },
-          fromDisplayName: participant.internal && state.sourceName
-            ? callerDisplay(`${state.sourceName}${state.sourceExtension ? ` - Ext ${state.sourceExtension}` : ''}`)
-            : 'Vocivo Conference',
-          customHeaders: participant.internal ? [
-            { name: 'X-Vocivo-Call-Type', value: 'internal' },
-            ...(state.sourceName ? [{ name: 'X-Vocivo-Caller-Name', value: state.sourceName }] : []),
-            ...(state.sourceExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: state.sourceExtension }] : []),
-            ...(state.organizationId ? [{ name: 'X-Vocivo-Organization-ID', value: state.organizationId }] : []),
-          ] : undefined,
-          commandId: `${eventId}-guest-${index}`,
-        })));
+      const conferenceCallerId = state.callerId;
+      if (state.room) {
+        await saveConferenceCall({
+          room: state.room,
+          hostCallControlId: callControlId,
+          conferenceId,
+          guestCallControlIds: [],
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      const participants = state.conferenceParticipants ?? (state.participants ?? []).map((destination) => ({ destination, displayName: destination, internal: false }));
+      const guestResults = await Promise.allSettled(participants.map((participant, index) => dialCall({
+        to: participant.destination,
+        from: conferenceCallerId,
+        state: { flow: 'conference_guest', room: state.room, conferenceId, callerId: conferenceCallerId, organizationId: state.organizationId },
+        fromDisplayName: participant.internal && state.sourceName
+          ? callerDisplay(`${state.sourceName}${state.sourceExtension ? ` - Ext ${state.sourceExtension}` : ''}`)
+          : 'Vocivo Conference',
+        customHeaders: participant.internal ? [
+          { name: 'X-Vocivo-Call-Type', value: 'internal' },
+          ...(state.sourceName ? [{ name: 'X-Vocivo-Caller-Name', value: state.sourceName }] : []),
+          ...(state.sourceExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: state.sourceExtension }] : []),
+          ...(state.organizationId ? [{ name: 'X-Vocivo-Organization-ID', value: state.organizationId }] : []),
+        ] : undefined,
+        commandId: `${eventId}-guest-${index}`,
+      })));
+      const guestCallControlIds = guestResults.flatMap((result) => {
+        if (result.status !== 'fulfilled') {
+          logWebhookFailure('dial conference guest', result.reason);
+          return [];
+        }
+        return dialCallLegs(result.value).map((leg) => leg.call_control_id).filter((id): id is string => Boolean(id));
+      });
+      if (state.room) {
+        await saveConferenceCall({
+          room: state.room,
+          hostCallControlId: callControlId,
+          conferenceId,
+          guestCallControlIds,
+          updatedAt: new Date().toISOString(),
+        });
+      }
     }
 
     if (eventType === 'call.answered' && state?.flow === 'conference_guest' && state.conferenceId) {

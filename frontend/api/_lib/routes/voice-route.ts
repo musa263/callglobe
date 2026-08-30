@@ -63,17 +63,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destinationExtensionId = target.id;
     } else {
       if (!e164.test(destination)) return res.status(400).json({ error: 'Use a complete international destination beginning with +.' });
-      const profile = session.extensionId ? config.userProfiles[session.extensionId] : undefined;
+      const tenant = pbxForOrganization(config, organizationId);
+      const profile = session.extensionId ? tenant.userProfiles[session.extensionId] : undefined;
       const preferredCallerId = typeof req.body?.callerId === 'string' && req.body.callerId.trim()
         ? req.body.callerId
-        : profile?.outboundCallerId || config.company.defaultCallerId;
+        : profile?.outboundCallerId || tenant.company.defaultCallerId;
       if (!preferredCallerId) return res.status(409).json({ error: 'No caller ID is assigned to this account. Ask your administrator to assign a phone number or verified caller ID.' });
       const [resolvedCallerId, extension] = await Promise.all([
         assertCallerIdForSession(session, preferredCallerId),
         session.extensionId ? getExtension(session.extensionId) : Promise.resolve(undefined),
       ]);
       callerId = resolvedCallerId;
-      authorizeOutboundCall(pbxForOrganization(config, organizationId), {
+      authorizeOutboundCall(tenant, {
         extension: extension?.extension,
         department: extension?.department,
         internationalAllowed: profile?.permissions?.international !== false,

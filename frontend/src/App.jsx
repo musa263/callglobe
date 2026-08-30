@@ -154,7 +154,8 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
         if (!colleague?.sipUsername) throw new Error('That extension is not available.');
         await voice.startSecondInternalCall(colleague.sipUsername, colleague.extension, colleague.name);
       } else {
-        await voice.startSecondCall(target.startsWith('+') ? target : `+${target}`, selectedNumber?.phone_number);
+        if (!selectedNumber?.phone_number) throw new Error('Choose a caller ID before adding an external caller.');
+        await voice.startSecondCall(target.startsWith('+') ? target : `+${target}`, selectedNumber.phone_number);
       }
       setTool(''); setTarget('');
     } catch (addError) { setToolError(addError.message || 'The second call could not be started.'); }
@@ -437,6 +438,9 @@ export default function App() {
   useEffect(() => {
     if (view === 'admin' && profile && !canAdmin) setView('dialer');
   }, [canAdmin, profile, view]);
+  useEffect(() => {
+    if (view !== 'dialer') setPendingDial('');
+  }, [view]);
   function logout() {
     voice.disconnect();
     clearSession();

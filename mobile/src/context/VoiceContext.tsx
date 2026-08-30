@@ -524,6 +524,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     if (voipClient.currentCalls.some((call) => call.currentState === TelnyxCallState.HELD)) throw new Error('Resume or merge the held call before adding another caller.');
     const current = voipClient.currentActiveCall;
     if (!current || current.currentState !== TelnyxCallState.ACTIVE) throw new Error('Connect the first call before adding another caller.');
+    if (!callerNumber?.phone_number) throw new Error('Choose a caller ID before adding an external caller.');
     multiCallBusyRef.current = true;
     const routeId = createRouteId();
     try {

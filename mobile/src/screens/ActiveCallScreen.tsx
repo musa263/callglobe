@@ -35,6 +35,10 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
 
   const start = async () => {
     if (number.length < 4 || busy) return;
+    if (!caller?.phone_number) {
+      setError('Choose a caller ID before adding an external caller.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {

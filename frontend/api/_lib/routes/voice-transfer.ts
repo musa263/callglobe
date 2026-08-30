@@ -6,6 +6,7 @@ import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { callAction } from '../voice-control.js';
 import { organizationExtensionSipUri } from '../internal-sip.js';
+import { clearOutboundCallPair, readOutboundCallPairByClient } from '../outbound-call-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -28,6 +29,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!target || target.status !== 'active' || !target.sipUsername) return res.status(409).json({ error: 'The selected colleague is not available.' });
     if (target.organizationId !== session.organizationId) return res.status(403).json({ error: 'Calls can only be transferred within your organization.' });
     await callAction(route.parentCallControlId, 'transfer', { to: organizationExtensionSipUri(config, target.organizationId, target.sipUsername), timeout_secs: 30 });
+    const pair = await readOutboundCallPairByClient(route.parentCallControlId);
+    if (pair) await clearOutboundCallPair(pair);
     if (route.agentCallControlId) {
       await callAction(route.agentCallControlId, 'hangup', { command_id: `vocivo-transfer-release-${Date.now()}` }).catch(() => undefined);
     }

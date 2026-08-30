@@ -16,8 +16,20 @@ function successfulOrderNumbers(order: Record<string, any> | undefined) {
     .map((item: { phone_number: string }) => item.phone_number);
 }
 
-async function assignFulfilledNumbers(organizationId: string, phoneNumbers: string[]) {
-  await Promise.all([...new Set(phoneNumbers)].map((phoneNumber) => assignNumberToOrganization(phoneNumber, organizationId, { source: 'owned', destinationType: 'main' }).catch(() => undefined)));
+async function assignFulfilledNumbers(organizationId: string, phoneNumbers: string[], options: { failOnError?: boolean } = {}) {
+  await Promise.all([...new Set(phoneNumbers)].map(async (phoneNumber) => {
+    try {
+      await assignNumberToOrganization(phoneNumber, organizationId, { source: 'owned', destinationType: 'main' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!options.failOnError && message.includes('already belongs to another organization')) {
+        console.warn('Vocivo skipped assigning a purchased number already owned by another organization', { organizationId, phoneNumber });
+        return;
+      }
+      if (options.failOnError) throw error;
+      console.warn('Vocivo delayed number assignment failed', { organizationId, phoneNumber, error: message });
+    }
+  }));
 }
 
 type AvailableNumber = {
@@ -108,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }),
       });
       const payload = await response.json() as { data?: Record<string, any> };
-      await assignFulfilledNumbers(activeOrganizationId, successfulOrderNumbers(payload.data));
+      await assignFulfilledNumbers(activeOrganizationId, successfulOrderNumbers(payload.data), { failOnError: true });
       invalidatePhoneNumberCache('owned');
       return res.status(201).json({ order: payload.data });
     }
