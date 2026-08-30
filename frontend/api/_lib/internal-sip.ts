@@ -1,7 +1,19 @@
 import type { PbxConfig } from './pbx-config-store.js';
 
 const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)$/i;
+const carrierSipAddress = /^(?:sip:)?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?:;[^<>\s]+)?$/i;
 const telnyxSipHost = 'sip.telnyx.com';
+
+export function canonicalVoiceDestination(destination: string) {
+  const value = destination.trim().replace(/^<|>$/g, '');
+  const sip = value.match(carrierSipAddress);
+  if (sip) return `sip:${sip[1]}@${sip[2].toLowerCase()}`;
+  return value.replace(/[\s()-]/g, '');
+}
+
+export function voiceDestinationsMatch(left: string, right: string) {
+  return Boolean(left && right && canonicalVoiceDestination(left) === canonicalVoiceDestination(right));
+}
 
 export function parseInternalSipUser(destination: string) {
   const match = destination.trim().match(sipUri);

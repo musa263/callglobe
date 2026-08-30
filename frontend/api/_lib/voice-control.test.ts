@@ -32,17 +32,15 @@ test('normalizes single and forked Telnyx Dial response legs', () => {
   assert.deepEqual(dialCallLegs({}), []);
 });
 
-test('uses Telnyx atomic bridge-on-answer settings for linked extension calls', () => {
+test('keeps extension dialing separate from its acknowledged bridge transaction', () => {
   process.env.TELNYX_CALL_CONTROL_APP_ID = 'call-control-app';
   const body = dialCallBody({
     to: ['sip:device-a@sip.telnyx.com', 'sip:device-b@sip.telnyx.com'],
     from: '+18447161777',
-    state: { flow: 'outbound_destination', bridgeOnAnswer: true },
-    linkTo: 'parked-client-leg',
+    state: { flow: 'outbound_destination', bridgeOnAnswer: false },
   });
   assert.equal(body.from, '+18447161777');
-  assert.equal(body.link_to, 'parked-client-leg');
-  assert.equal(body.bridge_intent, true);
-  assert.equal(body.bridge_on_answer, true);
-  assert.equal(body.prevent_double_bridge, true);
+  assert.equal('link_to' in body, false);
+  assert.equal('bridge_intent' in body, false);
+  assert.equal('bridge_on_answer' in body, false);
 });

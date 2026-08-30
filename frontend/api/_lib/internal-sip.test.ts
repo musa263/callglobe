@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { activeOrganizationExtensionTargets, extensionSipUsernames, isAllowedInternalSipDestination, organizationExtensionSipUri, parseInternalSipUser } from './internal-sip.js';
+import { activeOrganizationExtensionTargets, canonicalVoiceDestination, extensionSipUsernames, isAllowedInternalSipDestination, organizationExtensionSipUri, parseInternalSipUser, voiceDestinationsMatch } from './internal-sip.js';
 
 test('Telnyx SIP URIs are recognized as internal destinations', () => {
   assert.equal(parseInternalSipUser('sip:2000@sip.telnyx.com'), '2000');
@@ -18,6 +18,12 @@ test('organization extension routing always produces a Telnyx SIP URI', () => {
 test('rejects untrusted SIP hosts', () => {
   assert.equal(parseInternalSipUser('sip:2000@untrusted.invalid'), null);
   assert.equal(isAllowedInternalSipDestination('sip:2000@evil.example.com'), false);
+});
+
+test('matches a Telnyx webhook address after the carrier strips its SIP scheme', () => {
+  assert.equal(canonicalVoiceDestination('device-user@sip.telnyx.com'), 'sip:device-user@sip.telnyx.com');
+  assert.equal(voiceDestinationsMatch('sip:device-user@sip.telnyx.com', 'device-user@sip.telnyx.com'), true);
+  assert.equal(voiceDestinationsMatch('sip:device-user@sip.telnyx.com', 'other-user@sip.telnyx.com'), false);
 });
 
 test('fans out an extension to every active credential alias in the same tenant', () => {

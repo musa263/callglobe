@@ -25,7 +25,7 @@ import { normalizeE164 } from '../tenancy.js';
 import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
-import { activeOrganizationExtensionTargets, extensionSipUri, isAllowedInternalSipDestination, organizationExtensionSipUri } from '../internal-sip.js';
+import { activeOrganizationExtensionTargets, extensionSipUri, isAllowedInternalSipDestination, organizationExtensionSipUri, voiceDestinationsMatch } from '../internal-sip.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
 import { claimReplayKey, releaseReplayKey } from '../object-store.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools, inboundAiCommandId, inboundAiRoutingKey } from '../ai-transfer.js';
@@ -144,7 +144,6 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
     },
     from: dialFrom,
     fromDisplayName: callerDisplay(remoteIdentity ? `${businessName} - ${remoteIdentity}` : `${businessName} call`),
-    linkTo: callControlId,
     commandId: `${eventId}-agent`,
     timeoutSeconds,
   });
@@ -543,7 +542,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         destination: payload?.to || existingPair?.destination || '',
         status: 'direct' as const,
         phase: 'ringing' as const,
-        bridgeOnAnswer: existingPair?.bridgeOnAnswer || state.bridgeOnAnswer === true,
+        bridgeOnAnswer: false,
         updatedAt: new Date().toISOString(),
       };
       await saveOutboundCallPair(pair);
@@ -568,22 +567,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         destination: payload?.to || existingPair?.destination || '',
         status: 'direct',
         phase: 'ringing',
-        bridgeOnAnswer: true,
+        bridgeOnAnswer: false,
         updatedAt: new Date().toISOString(),
       });
       return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.initiated' && isParkedVocivoClient && payload?.state === 'parked') {
-      const destination = customHeader(payload, 'X-Vocivo-Destination') || payload.to || '';
+      const observedDestination = customHeader(payload, 'X-Vocivo-Destination') || payload.to || '';
       const selectedCallerId = customHeader(payload, 'X-Vocivo-Caller-ID');
       const requestedRouteId = customHeader(payload, 'X-Vocivo-Route-ID');
       const routeId = isVoiceRouteId(requestedRouteId) ? requestedRouteId : '';
       const signedReservation = verifyVoiceRouteToken(customHeader(payload, 'X-Vocivo-Route-Token'));
       // Persistent state remains a migration fallback for app builds released before signed routes.
       const reservation = signedReservation?.routeId === routeId ? signedReservation : routeId ? await readVoiceRoute(routeId) : null;
+      if (!reservation) {
+        console.warn('Vocivo rejected a parked call route', { eventId, routeId, flow: parkedFlow, reason: 'missing_reservation' });
+        await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch((error) => logWebhookFailure('hang up invalid destination', error));
+        return res.status(200).json({ received: true });
+      }
       const effectiveCallerId = selectedCallerId || reservation?.callerId || '';
-      if (!reservation || reservation.destination !== destination || reservation.flow !== parkedFlow || (reservation.callerId || '') !== effectiveCallerId || (!e164.test(destination) && !isAllowedInternalSipDestination(destination))) {
+      const destination = reservation.destination;
+      const invalidReason = !voiceDestinationsMatch(reservation.destination, observedDestination)
+        ? 'destination_mismatch'
+        : reservation.flow !== parkedFlow
+          ? 'flow_mismatch'
+          : (reservation.callerId || '') !== effectiveCallerId
+            ? 'caller_identity_mismatch'
+            : (!e164.test(destination) && !isAllowedInternalSipDestination(destination))
+              ? 'unsupported_destination'
+              : '';
+      if (invalidReason) {
+        console.warn('Vocivo rejected a parked call route', { eventId, routeId, flow: parkedFlow, reason: invalidReason });
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch((error) => logWebhookFailure('hang up invalid destination', error));
         return res.status(200).json({ received: true });
       }
@@ -633,7 +648,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             sourcePhotoUrl: reservation.callerPhotoUrl,
             destinationExtensionId: reservation.destinationExtensionId, destinationExtension: reservation.destinationExtension,
             destinationName: reservation.destinationName,
-            bridgeOnAnswer: reservation.flow === 'internal',
+            bridgeOnAnswer: false,
           },
           fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
             ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
@@ -646,7 +661,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             ...(businessName ? [{ name: 'X-Vocivo-Company-Name', value: businessName }] : []),
             { name: 'X-Vocivo-Organization-ID', value: reservation.organizationId },
           ] : undefined,
-          linkTo: reservation.flow === 'internal' ? callControlId : undefined,
           commandId: `${eventId}-destination`,
         });
       } catch (dialError) {
@@ -673,7 +687,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           destination,
           status: 'direct' as const,
           phase: 'ringing' as const,
-          bridgeOnAnswer: reservation.flow === 'internal',
+          bridgeOnAnswer: false,
           updatedAt: new Date().toISOString(),
       };
       await saveOutboundCallPair(pair);
@@ -715,21 +729,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             await terminateOutboundPair(claim.pair, `${eventId}-terminal`);
             return res.status(200).json({ received: true });
           }
-          const automaticBridge = state?.bridgeOnAnswer === true || claim.pair.bridgeOnAnswer === true;
-          if (!automaticBridge) {
-            // Keep the proven PSTN path unchanged. Extension calls use the
-            // atomic bridge-on-answer command sent with Dial instead.
-            await callAction(parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` })
-              .catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
-            await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
+          // The answered destination webhook is the single bridge authority for
+          // PSTN and extension calls. This gives every winner an acknowledged
+          // media transition instead of relying on Dial's asynchronous shortcut.
+          const stopRingback = callAction(parentCallControlId, 'playback_stop', {
+              stop: 'all',
+              command_id: `${eventId}-stop-ringback`,
+            });
+          if (existingRoute?.flow === 'internal') {
+            background('stop answered-call ringback', stopRingback);
           } else {
-            // An answered fork is not yet a connected conversation. Telnyx's
-            // bridge-on-answer Dial completes asynchronously and emits
-            // call.bridged only after the two media legs are joined. Marking
-            // the route connected here exposes a live UI before RTP exists and
-            // creates the intermittent silent extension calls seen in production.
-            return res.status(200).json({ received: true });
+            await stopRingback.catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
           }
+          await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
           const connectedAt = new Date().toISOString();
           await saveOutboundCallPair({
             ...claim.pair,
@@ -892,7 +904,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           destination: payload?.to || '',
           status: 'direct' as const,
           phase: 'ringing' as const,
-          bridgeOnAnswer: true,
+          bridgeOnAnswer: false,
           updatedAt: new Date().toISOString(),
         };
         const claim = await claimOutboundCallWinner(pair, callControlId);
@@ -903,6 +915,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (claim.loserIds.length) {
           background('cancel losing agent device forks', terminateOutboundLegs(claim.pair, claim.loserIds, `${eventId}-cancel-agent`));
         }
+        try {
+          await bridgeOutboundCalls(state.parentCallControlId, callControlId, eventId);
+        } catch (bridgeError) {
+          console.error('Vocivo agent bridge failed', { eventId, error: publicError(bridgeError) });
+          await terminateOutboundPair(claim.pair, `${eventId}-agent-bridge-failed`);
+          throw bridgeError;
+        }
+        const connectedAt = new Date().toISOString();
+        await saveOutboundCallPair({
+          ...claim.pair,
+          selectedDestinationCallControlId: callControlId,
+          phase: 'connected',
+          connectedAt,
+          updatedAt: connectedAt,
+        });
       }
       await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop waiting playback', error));
       if (targetExtensionId) {

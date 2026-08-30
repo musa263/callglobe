@@ -97,7 +97,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         forwardNoAnswer: profile?.forwardNoAnswer,
         forwardUnavailable: profile?.forwardUnavailable,
       },
-      linkTo: authorization.callControlId,
       commandId: `${prefix}-devices`,
       timeoutSeconds: userNoAnswerSeconds(profile, business.voicemailDelaySeconds),
     });
