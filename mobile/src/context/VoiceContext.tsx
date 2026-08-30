@@ -150,7 +150,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       ? durationRef.current
       : nativeCall?.currentDuration ?? (snapshot.connectedAt ? Math.max(0, Math.floor((Date.now() - snapshot.connectedAt) / 1000)) : 0);
     const totalCost = snapshot.ratePerMinute ? Math.ceil(seconds / 60) * snapshot.ratePerMinute : 0;
-    addHistory({
+    const historyEntry = {
       id,
       destination_number: snapshot.number,
       destination_name: snapshot.displayName !== snapshot.destinationCountry ? snapshot.displayName : undefined,
@@ -159,7 +159,17 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       total_cost: Number(totalCost.toFixed(4)),
       status: phase === 'ended' && Boolean(snapshot.connectedAt) ? 'completed' : snapshot.isIncoming ? 'missed' : 'no_answer',
       started_at: new Date(snapshot.startedAt).toISOString(),
-    }).catch((failure) => reportVoiceError('save call history', failure));
+    } as const;
+
+    try {
+      void Promise.resolve(addHistory(historyEntry)).catch((failure) => {
+        loggedCalls.current.delete(id);
+        reportVoiceError('save call history', failure);
+      });
+    } catch (failure) {
+      loggedCalls.current.delete(id);
+      reportVoiceError('save call history', failure);
+    }
   }, [addHistory, describeCall, reportVoiceError]);
 
   const confirmMediaConnected = useCallback(async (call: Call) => {
