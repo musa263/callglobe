@@ -8,12 +8,14 @@ export type ConferenceCall = {
   hostCallControlId: string;
   conferenceId: string;
   guestCallControlIds: string[];
+  ended?: boolean;
   updatedAt: string;
 };
 
 function key() { return createHash('sha256').update(`${requiredEnv('AUTH_SECRET')}:conference-calls`).digest(); }
 function id(value: string) { return createHash('sha256').update(value).digest('hex'); }
 function pathname(room: string) { return `vocivo/conference-calls/${id(room)}.bin`; }
+function endedPathname(room: string) { return `vocivo/conference-calls/${id(room)}.ended.bin`; }
 function encrypt(value: ConferenceCall) {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key(), iv);
   const body = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]);
@@ -23,6 +25,18 @@ function decrypt(value: Buffer) {
   const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12));
   decipher.setAuthTag(value.subarray(12, 28));
   return JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as ConferenceCall;
+}
+
+export async function markConferenceEnded(room: string) {
+  await put(endedPathname(room), Buffer.from('ended'), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
+}
+
+export async function isConferenceEnded(room: string) {
+  try {
+    return Boolean(await readStoredObject(endedPathname(room)));
+  } catch {
+    return false;
+  }
 }
 
 export async function saveConferenceCall(value: ConferenceCall) {

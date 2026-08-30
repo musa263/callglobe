@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
-import { readOutboundCallPairByRoute, saveOutboundCallPair, liveOutboundDestinationId, type OutboundCallPair } from '../outbound-call-store.js';
+import { readOutboundCallPairByRoute, saveOutboundCallPair, liveOutboundDestinationId, updateOutboundCallPair, type OutboundCallPair } from '../outbound-call-store.js';
+import { hangupConferenceParticipant } from '../outbound-cancel.js';
 import { callAction } from '../voice-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute } from '../voice-route-store.js';
@@ -70,8 +71,24 @@ async function restoreDirectCalls(activePair: OutboundCallPair, heldPair: Outbou
     ]);
     const updatedAt = new Date().toISOString();
     await Promise.all([
-      saveOutboundCallPair({ ...activePair, status: 'direct', updatedAt }),
-      saveOutboundCallPair({ ...heldPair, status: 'direct', updatedAt }),
+      updateOutboundCallPair(activePair, (current) => ({
+        ...current,
+        status: 'direct',
+        conferenceId: undefined,
+        conferenceRole: undefined,
+        peerClientCallControlId: undefined,
+        peerDestinationCallControlId: undefined,
+        updatedAt,
+      })),
+      updateOutboundCallPair(heldPair, (current) => ({
+        ...current,
+        status: 'direct',
+        conferenceId: undefined,
+        conferenceRole: undefined,
+        peerClientCallControlId: undefined,
+        peerDestinationCallControlId: undefined,
+        updatedAt,
+      })),
     ]);
   } catch (rollbackError) {
     await Promise.all([
@@ -106,14 +123,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }).catch((error) => {
         if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
       });
-      await callAction(leaveId, 'hangup', { command_id: `vocivo-remove-hangup-${Date.now()}` }).catch((error) => {
-        if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
-      });
-      const updatedAt = new Date().toISOString();
-      await Promise.all([
-        saveOutboundCallPair({ ...pair, phase: 'ended', updatedAt }),
-        updateVoiceRoute(routeId, { phase: 'ended' }),
-      ]);
+      await hangupConferenceParticipant(pair, leaveId, `vocivo-remove-${Date.now()}`);
+      await updateVoiceRoute(routeId, { phase: 'ended' });
       return res.status(200).json({ removed: true, routeId, conferenceId });
     }
     const routeIds = Array.isArray(req.body?.routeIds)
@@ -136,8 +147,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (activePair.clientCallControlId === heldPair.clientCallControlId) return res.status(409).json({ error: 'Choose two different live calls to merge.' });
     const now = new Date().toISOString();
     await Promise.all([
-      saveOutboundCallPair({ ...activePair, status: 'merging', updatedAt: now }),
-      saveOutboundCallPair({ ...heldPair, status: 'merging', updatedAt: now }),
+      saveOutboundCallPair({ ...activePair, status: 'merging', peerClientCallControlId: heldPair.clientCallControlId, peerDestinationCallControlId: liveOutboundDestinationId(heldPair), updatedAt: now }),
+      saveOutboundCallPair({ ...heldPair, status: 'merging', peerClientCallControlId: activePair.clientCallControlId, peerDestinationCallControlId: liveOutboundDestinationId(activePair), updatedAt: now }),
     ]);
 
     const room = `vocivo-merge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

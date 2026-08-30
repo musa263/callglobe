@@ -8,7 +8,7 @@ import { clearActiveCallRouteIfMatches, saveActiveCallRoute } from '../call-rout
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { claimOutboundCallWinner, clearOutboundCallPair, liveOutboundDestinationId, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
-import { terminateOutboundLegs, terminateOutboundPair } from '../outbound-cancel.js';
+import { terminateOutboundLegs, terminateOutboundPair, hangupConferenceParticipant } from '../outbound-cancel.js';
 import { isInboundCallAnswered, isInboundCallInitiated, isParkedClientCall, ivrMenuSelection, voiceRouteHangupOutcome } from '../voice-routing.js';
 import { bridgeOutboundCalls } from '../outbound-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
@@ -19,7 +19,7 @@ import { verifyTelnyxWebhook } from '../telnyx-webhook-auth.js';
 import { quarantineSecurityEvent } from '../security-quarantine.js';
 import { storeCallEvent } from '../call-event-store.js';
 import { clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
-import { clearConferenceCall, readConferenceCall, saveConferenceCall } from '../conference-call-store.js';
+import { clearConferenceCall, isConferenceEnded, markConferenceEnded, readConferenceCall, saveConferenceCall } from '../conference-call-store.js';
 import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
@@ -282,6 +282,7 @@ async function routeAfterAgentFailure(state: NonNullable<ReturnType<typeof decod
 
 async function endConferenceRoom(room: string | undefined, eventId: string) {
   if (!room) return;
+  await markConferenceEnded(room);
   const conference = await readConferenceCall(room);
   await Promise.all((conference?.guestCallControlIds || []).map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-guest-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end conference guest', error))));
   if (conference?.conferenceId) {
@@ -695,7 +696,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
         if (state.routeId) await updateVoiceRoute(state.routeId, outcome);
-        if (pair) {
+        if (pair && (pair.status === 'conference' || pair.status === 'merging')) {
+          await hangupConferenceParticipant(pair, callControlId, `${eventId}-destination-hangup`);
+        } else if (pair) {
           await terminateOutboundPair(pair, `${eventId}-destination-hangup`);
         } else if (state.parentCallControlId) {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch((error) => logWebhookFailure('stop failed-call ringback', error));
@@ -1017,21 +1020,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return dialCallLegs(result.value).map((leg) => leg.call_control_id).filter((id): id is string => Boolean(id));
       });
       if (state.room) {
-        await saveConferenceCall({
-          room: state.room,
-          hostCallControlId: callControlId,
-          conferenceId,
-          guestCallControlIds,
-          updatedAt: new Date().toISOString(),
-        });
+        if (await isConferenceEnded(state.room)) {
+          await Promise.all(guestCallControlIds.map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-orphan-guest-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end orphan conference guest', error))));
+        } else {
+          await saveConferenceCall({
+            room: state.room,
+            hostCallControlId: callControlId,
+            conferenceId,
+            guestCallControlIds,
+            updatedAt: new Date().toISOString(),
+          });
+          if (await isConferenceEnded(state.room)) {
+            await Promise.all(guestCallControlIds.map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-orphan-guest-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end orphan conference guest', error))));
+          }
+        }
       }
     }
 
     if (eventType === 'call.answered' && state?.flow === 'conference_guest' && state.conferenceId) {
-      await telnyx(`/conferences/${encodeURIComponent(state.conferenceId)}/actions/join`, {
-        method: 'POST',
-        body: JSON.stringify({ call_control_id: callControlId, beep_enabled: 'on_enter', command_id: `${eventId}-join` }),
-      });
+      try {
+        await telnyx(`/conferences/${encodeURIComponent(state.conferenceId)}/actions/join`, {
+          method: 'POST',
+          body: JSON.stringify({ call_control_id: callControlId, beep_enabled: 'on_enter', command_id: `${eventId}-join` }),
+        });
+      } catch (joinError) {
+        logWebhookFailure('join conference guest', joinError);
+        await callAction(callControlId, 'hangup', { command_id: `${eventId}-end-failed-guest` }).catch((error) => logWebhookFailure('hang up failed conference guest', error));
+      }
     }
 
     if (isInboundAnswered) {

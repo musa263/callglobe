@@ -3,6 +3,7 @@ import { TelnyxApiError } from './telnyx.js';
 import {
   clearOutboundCallPair,
   liveOutboundDestinationId,
+  readOutboundCallPairByClient,
   updateOutboundCallPair,
   type OutboundCallPair,
   type OutboundTerminationState,
@@ -17,6 +18,48 @@ export function outboundCallControlIds(pair: OutboundCallPair) {
     pair.peerClientCallControlId,
     pair.peerDestinationCallControlId,
   ].filter((id): id is string => Boolean(id)))];
+}
+
+export function conferenceParticipantTeardown(pair: OutboundCallPair, hangingCallControlId: string) {
+  const hangIds = [hangingCallControlId];
+  if (pair.status === 'merging') {
+    hangIds.push(pair.clientCallControlId, pair.destinationCallControlId, ...(pair.forkDestinationCallControlIds || []));
+    return { hangIds: [...new Set(hangIds.filter(Boolean))], keepPair: null as OutboundCallPair | null, peerAction: 'unlink' as const };
+  }
+  const hangingRemote = hangingCallControlId === liveOutboundDestinationId(pair) || hangingCallControlId === pair.destinationCallControlId;
+  if (pair.conferenceRole === 'host' && hangingCallControlId === pair.peerDestinationCallControlId) {
+    return {
+      hangIds: [...new Set(hangIds.filter(Boolean))],
+      keepPair: {
+        ...pair,
+        peerClientCallControlId: undefined,
+        peerDestinationCallControlId: undefined,
+      },
+      peerAction: 'clear' as const,
+    };
+  }
+  if (pair.conferenceRole === 'host' && hangingRemote) {
+    const nextDest = pair.peerDestinationCallControlId && pair.peerDestinationCallControlId !== hangingCallControlId
+      ? pair.peerDestinationCallControlId
+      : '';
+    if (!nextDest) {
+      hangIds.push(pair.clientCallControlId);
+      return { hangIds: [...new Set(hangIds.filter(Boolean))], keepPair: null as OutboundCallPair | null, peerAction: 'clear' as const };
+    }
+    return {
+      hangIds: [...new Set(hangIds.filter(Boolean))],
+      keepPair: {
+        ...pair,
+        destinationCallControlId: nextDest,
+        selectedDestinationCallControlId: nextDest,
+        peerClientCallControlId: undefined,
+        peerDestinationCallControlId: undefined,
+        forkDestinationCallControlIds: [],
+      },
+      peerAction: 'clear' as const,
+    };
+  }
+  return { hangIds: [...new Set(hangIds.filter(Boolean))], keepPair: null as OutboundCallPair | null, peerAction: 'unlink' as const };
 }
 
 function errorText(error: unknown) {
@@ -97,6 +140,37 @@ export async function terminateOutboundLegs(pair: OutboundCallPair, ids: string[
     termination: { ...(current.termination || {}), ...Object.fromEntries(results) },
     updatedAt: new Date().toISOString(),
   }));
+}
+
+export async function hangupConferenceParticipant(pair: OutboundCallPair, hangingCallControlId: string, commandPrefix: string) {
+  const plan = conferenceParticipantTeardown(pair, hangingCallControlId);
+  await terminateOutboundLegs(pair, plan.hangIds, commandPrefix);
+  if (pair.peerClientCallControlId) {
+    const peer = await readOutboundCallPairByClient(pair.peerClientCallControlId);
+    if (peer) {
+      if (plan.peerAction === 'clear') await clearOutboundCallPair(peer);
+      else {
+        await updateOutboundCallPair(peer, (current) => ({
+          ...current,
+          status: current.status === 'merging' ? 'direct' : current.status,
+          conferenceId: current.status === 'merging' ? undefined : current.conferenceId,
+          conferenceRole: current.status === 'merging' ? undefined : current.conferenceRole,
+          peerClientCallControlId: undefined,
+          peerDestinationCallControlId: undefined,
+          updatedAt: new Date().toISOString(),
+        }));
+      }
+    }
+  }
+  if (plan.keepPair) {
+    await updateOutboundCallPair(pair, (current) => ({
+      ...plan.keepPair!,
+      termination: current.termination,
+      updatedAt: new Date().toISOString(),
+    }));
+  } else {
+    await clearOutboundCallPair(pair);
+  }
 }
 
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {

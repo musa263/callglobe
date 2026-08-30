@@ -12,9 +12,14 @@ test.after(() => {
 
 test('round trips a signed outbound authorization', () => {
   const token = createVoiceRouteToken({ routeId: 'vc_route', organizationId: 'primary', destination: '+2348000000000', callerId: '+18447161777', flow: 'outbound' });
-  assert.deepEqual(verifyVoiceRouteToken(token), {
-    routeId: 'vc_route', organizationId: 'primary', destination: '+2348000000000', callerId: '+18447161777', flow: 'outbound', expiresAt: Math.floor(Date.now() / 1000) + 300,
-  });
+  const authorization = verifyVoiceRouteToken(token);
+  assert.equal(authorization?.routeId, 'vc_route');
+  assert.equal(authorization?.organizationId, 'primary');
+  assert.equal(authorization?.destination, '+2348000000000');
+  assert.equal(authorization?.callerId, '+18447161777');
+  assert.equal(authorization?.flow, 'outbound');
+  const expectedExpiry = Math.floor(Date.now() / 1000) + 300;
+  assert.ok(authorization && Math.abs((authorization.expiresAt || 0) - expectedExpiry) <= 1);
 });
 
 test('rejects tampered and expired authorizations', () => {

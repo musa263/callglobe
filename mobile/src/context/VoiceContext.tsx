@@ -42,6 +42,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const multiCallBusyRef = useRef(false);
   const startingCallRef = useRef(false);
   const startAttemptRef = useRef(0);
+  const attachTimersRef = useRef(new Map());
   const activeCallRef = useRef<ActiveCall | null>(null);
   const durationRef = useRef(0);
   const loggedCalls = useRef(new Set<string>());
@@ -89,7 +90,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       iceListenerCleanupRef.current.delete(id);
       callSubscriptions.current.get(id)?.forEach((subscription) => subscription.unsubscribe());
       callSubscriptions.current.delete(id);
+      (attachTimersRef.current.get(id) || []).forEach((timer) => clearTimeout(timer));
+      attachTimersRef.current.delete(id);
     });
+    if (!callId) {
+      attachTimersRef.current.forEach((timers) => timers.forEach((timer) => clearTimeout(timer)));
+      attachTimersRef.current.clear();
+    }
   }, []);
 
   const terminateCall = useCallback((callId: string, routeId?: string) => lifecycleRef.current.terminate(callId, async () => {
@@ -258,8 +265,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           callRouteIdsRef.current.delete(call.callId);
           callMetaRef.current.delete(call.callId);
           clearCallSubscriptions(call.callId);
-          setTimeout(() => lifecycleRef.current.release(call.callId), 60_000);
-          setTimeout(() => {
+          const releaseTimer = setTimeout(() => lifecycleRef.current.release(call.callId), 60_000);
+          const resumeTimer = setTimeout(() => {
             const remaining = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
             if (!remaining) {
               attachCall(null);
@@ -269,6 +276,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
             voipClient.setActiveCall(remaining.callId);
             attachCall(remaining);
           }, 200);
+          attachTimersRef.current.set(call.callId, [releaseTimer, resumeTimer]);
         }
       }),
       call.isMuted$.subscribe((muted) => setActiveCall((current) => current ? { ...current, muted } : current)),
@@ -293,6 +301,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
 
   const emergencyTransportCleanup = useCallback((state: TelnyxConnectionState) => {
+    startAttemptRef.current += 1;
     if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
     transportLossTimerRef.current = null;
     networkMigrationGraceUntilRef.current = 0;
@@ -537,11 +546,24 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     if (!callerNumber?.phone_number) throw new Error('Choose a caller ID before adding an external caller.');
     multiCallBusyRef.current = true;
     const routeId = createRouteId();
+    const attempt = startAttemptRef.current;
     try {
       await current.hold();
+      if (startAttemptRef.current !== attempt) throw new Error('The first call ended before the second caller could be added.');
       const reservation = await api.post<{ routeId: string; routeToken: string; callerId?: string }>('/api/voice/route', { routeId, destination: number, callerId: callerNumber?.phone_number, flow: 'outbound' });
+      if (startAttemptRef.current !== attempt) {
+        await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel superseded second-call route', failure));
+        throw new Error('The first call ended before the second caller could be added.');
+      }
       startRingback();
       const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+      if (startAttemptRef.current !== attempt) {
+        await Promise.all([
+          call.hangup().catch((failure) => reportVoiceError('hang up superseded second call', failure)),
+          api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel superseded second-call route', failure)),
+        ]);
+        throw new Error('The first call ended before the second caller could be added.');
+      }
       callRouteIdsRef.current.set(call.callId, routeId);
       callMetaRef.current.set(call.callId, { displayName: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now(), routeId, callerId: reservation.callerId });
       voipClient.setActiveCall(call.callId);
@@ -754,6 +776,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     startingCallRef.current = false;
     cancelRoutePolling();
     stopRingback();
+    attachTimersRef.current.forEach((timers) => timers.forEach((timer) => clearTimeout(timer)));
+    attachTimersRef.current.clear();
     if (conferenceCallIdsRef.current.size) {
       const mergedIds = [...conferenceCallIdsRef.current];
       try {

@@ -1,8 +1,56 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isAlreadyTerminatedHangupError, isRetryableHangupError, outboundCallControlIds, shouldClaimTermination } from './outbound-cancel.js';
+import { conferenceParticipantTeardown, isAlreadyTerminatedHangupError, isRetryableHangupError, outboundCallControlIds, shouldClaimTermination } from './outbound-cancel.js';
 import { mergeOutboundCallPair } from './outbound-call-store.js';
 import { TelnyxApiError } from './telnyx.js';
+
+test('conference participant teardown never hangs the surviving remote', () => {
+  const host = {
+    clientCallControlId: 'client-a',
+    destinationCallControlId: 'destination-a',
+    selectedDestinationCallControlId: 'destination-a',
+    peerClientCallControlId: 'client-b',
+    peerDestinationCallControlId: 'destination-b',
+    destination: '+15550000000',
+    status: 'conference' as const,
+    conferenceRole: 'host' as const,
+    updatedAt: new Date(0).toISOString(),
+  };
+  const removedRemote = conferenceParticipantTeardown(host, 'destination-b');
+  assert.deepEqual(removedRemote.hangIds, ['destination-b']);
+  assert.equal(removedRemote.keepPair?.destinationCallControlId, 'destination-a');
+  assert.equal(removedRemote.keepPair?.peerDestinationCallControlId, undefined);
+  assert.equal(removedRemote.peerAction, 'clear');
+
+  const removedHostRemote = conferenceParticipantTeardown(host, 'destination-a');
+  assert.deepEqual(removedHostRemote.hangIds, ['destination-a']);
+  assert.equal(removedHostRemote.keepPair?.destinationCallControlId, 'destination-b');
+  assert.equal(removedHostRemote.peerAction, 'clear');
+  const clobbered = mergeOutboundCallPair(host, removedHostRemote.keepPair!);
+  assert.equal(clobbered.selectedDestinationCallControlId, 'destination-a');
+  const applied = { ...removedHostRemote.keepPair! };
+  assert.equal(applied.selectedDestinationCallControlId, 'destination-b');
+  assert.deepEqual(applied.forkDestinationCallControlIds, []);
+});
+
+test('merging teardown hangs only the failed pair and unlinks the peer', () => {
+  const merging = {
+    clientCallControlId: 'client-a',
+    destinationCallControlId: 'destination-a',
+    selectedDestinationCallControlId: 'destination-a',
+    peerClientCallControlId: 'client-b',
+    peerDestinationCallControlId: 'destination-b',
+    destination: '+15550000000',
+    status: 'merging' as const,
+    updatedAt: new Date(0).toISOString(),
+  };
+  const plan = conferenceParticipantTeardown(merging, 'destination-a');
+  assert.deepEqual(plan.hangIds.sort(), ['client-a', 'destination-a']);
+  assert.equal(plan.keepPair, null);
+  assert.equal(plan.peerAction, 'unlink');
+  assert.ok(!plan.hangIds.includes('destination-b'));
+  assert.ok(!plan.hangIds.includes('client-b'));
+});
 
 test('returns every unique call leg in a merged outbound pair', () => {
   assert.deepEqual(outboundCallControlIds({

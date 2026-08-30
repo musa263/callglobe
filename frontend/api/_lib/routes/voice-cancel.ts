@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
-import { terminateOutboundPair } from '../outbound-cancel.js';
-import { readOutboundCallPairByRoute } from '../outbound-call-store.js';
+import { hangupConferenceParticipant, terminateOutboundPair } from '../outbound-cancel.js';
+import { liveOutboundDestinationId, readOutboundCallPairByRoute } from '../outbound-call-store.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 
@@ -17,7 +17,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!route || route.userId !== session.sub) return res.status(404).json({ error: 'Call route not found.' });
 
     const pair = await readOutboundCallPairByRoute(routeId);
-    if (pair) await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`);
+    if (pair) {
+      if (pair.status === 'conference' && pair.conferenceRole !== 'host') {
+        await hangupConferenceParticipant(pair, liveOutboundDestinationId(pair) || pair.destinationCallControlId, `cancel-${routeId.slice(-10)}`);
+      } else {
+        await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`);
+      }
+    }
     await updateVoiceRoute(routeId, { phase: 'ended', failureCause: 'caller_hangup' });
 
     res.setHeader('Cache-Control', 'no-store');
