@@ -570,24 +570,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             background('reject losing answered fork', terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-losing-fork`));
             return res.status(200).json({ received: true });
           }
-          if (claim.loserIds.length) background('cancel losing extension forks', terminateOutboundLegs(claim.pair, claim.loserIds, `${eventId}-cancel-fork`));
+          if (claim.loserIds.length) {
+            background('cancel losing extension forks', terminateOutboundLegs(claim.pair, claim.loserIds, `${eventId}-cancel-fork`));
+          }
           const existingRoute = connectedRouteId ? await readVoiceRoute(connectedRouteId) : null;
           if (existingRoute && ['ended', 'failed'].includes(existingRoute.phase)) {
             await terminateOutboundPair(claim.pair, `${eventId}-terminal`);
             return res.status(200).json({ received: true });
           }
-          // The answered destination webhook is the single bridge authority for
-          // PSTN and extension calls. This gives every winner an acknowledged
-          // media transition instead of relying on Dial's asynchronous shortcut.
-          const stopRingback = callAction(parentCallControlId, 'playback_stop', {
-              stop: 'all',
-              command_id: `${eventId}-stop-ringback`,
-            });
-          if (existingRoute?.flow === 'internal') {
-            background('stop answered-call ringback', stopRingback);
-          } else {
-            await stopRingback.catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
-          }
+          // Stop carrier ringback on the parked caller before bridging. Leaving
+          // playback attached keeps the web caller in ringing audio with no
+          // path to the answered extension.
+          await callAction(parentCallControlId, 'playback_stop', {
+            stop: 'all',
+            command_id: `${eventId}-stop-ringback`,
+          }).catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
           await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
           const connectedAt = new Date().toISOString();
           await saveOutboundCallPair({

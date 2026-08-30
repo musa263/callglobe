@@ -1,7 +1,7 @@
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { listExtensionSipUsernames } from '../pbx.js';
 import { accessForOrganization } from '../saas-access.js';
-import { extensionSipUri, isAllowedInternalSipDestination, voiceDestinationsMatch } from '../internal-sip.js';
+import { destinationSipUrisForInternalDial, isAllowedInternalSipDestination, voiceDestinationsMatch } from '../internal-sip.js';
 import { saveOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundPair } from '../outbound-cancel.js';
 import { callAction, dialCall, dialCallLegs, primaryVoiceCallerId } from '../voice-control.js';
@@ -97,6 +97,9 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
     reservation.flow === 'internal' && reservation.destinationExtensionId
       ? listExtensionSipUsernames(reservation.destinationExtensionId)
       : Promise.resolve([]),
+    reservation.flow === 'internal' && reservation.sourceExtensionId
+      ? listExtensionSipUsernames(reservation.sourceExtensionId)
+      : Promise.resolve([]),
     reservation.flow === 'internal' ? primaryVoiceCallerId() : Promise.resolve(reservation.callerId),
   ]).then(
     (value) => ({ value }),
@@ -114,9 +117,10 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
   try {
     const prepared = await destinationPreparation;
     if ('error' in prepared) throw prepared.error;
-    const [businessName, sipUsers, resolvedVoiceCallerId] = prepared.value;
-    const destinations = sipUsers.map(extensionSipUri);
+    const [businessName, sipUsers, sourceSipUsers, resolvedVoiceCallerId] = prepared.value;
+    const destinations = destinationSipUrisForInternalDial(sipUsers, sourceSipUsers, destination);
     if (!resolvedVoiceCallerId) throw new Error('The signed call route has no authorized caller identity.');
+    if (reservation.flow === 'internal' && !destinations.length) throw new Error('The internal destination has no reachable SIP alias.');
     destinationCall = await dialCall({
       to: destinations.length > 1 ? destinations : destinations[0] || destination,
       from: resolvedVoiceCallerId,

@@ -31,6 +31,18 @@ export function extensionSipUri(sipUsername: string) {
   return `sip:${sipUsername}@${telnyxSipHost}`;
 }
 
+export function destinationSipUrisForInternalDial(
+  destinationUsernames: string[],
+  sourceUsernames: string[],
+  fallbackDestination: string,
+) {
+  const blocked = new Set(sourceUsernames.map((username) => extensionSipUri(username)));
+  const destinations = [...new Set(destinationUsernames.map(extensionSipUri).filter((uri) => !blocked.has(uri)))];
+  if (destinations.length) return destinations;
+  const fallback = isAllowedInternalSipDestination(fallbackDestination) ? canonicalVoiceDestination(fallbackDestination) : '';
+  return fallback && !blocked.has(fallback) ? [fallback] : [];
+}
+
 type ExtensionSipIdentity = {
   organizationId: string;
   extension: string;

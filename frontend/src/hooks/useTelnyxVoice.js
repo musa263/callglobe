@@ -78,12 +78,14 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const [dialedNumber, setDialedNumber] = useState('');
   const [endedCall, setEndedCall] = useState(null);
   const [routePhase, setRoutePhase] = useState(null);
+  const routePhaseRef = useRef(null);
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const [remoteIdentity, setRemoteIdentity] = useState({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [loginGeneration, setLoginGeneration] = useState(0);
   const [callStarting, setCallStarting] = useState(false);
   const [mediaReady, setMediaReady] = useState(false);
+  useEffect(() => { routePhaseRef.current = routePhase; }, [routePhase]);
 
   const resumeAudio = useCallback(async () => {
     const media = document.getElementById('remoteMedia');
@@ -95,6 +97,16 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setAudioBlocked(true);
       throw playbackError;
     }
+  }, []);
+
+  const confirmWebMedia = useCallback(async (call, callId) => {
+    if (!callId) return;
+    const ready = call ? await waitForWebCallMedia(call, routePhaseRef.current === 'connected' ? 1_500 : 4_000) : false;
+    if (getCallId(callRef.current) !== callId) return;
+    const hasRemoteAudio = Boolean(call?.remoteStream?.getAudioTracks?.()?.some((track) => track.readyState === 'live'));
+    if (!ready && !hasRemoteAudio && routePhaseRef.current !== 'connected') return;
+    if (!connectedAtByCallIdRef.current.has(callId)) connectedAtByCallIdRef.current.set(callId, Date.now());
+    setMediaReady(true);
   }, []);
 
   // The parked Telnyx leg supplies ringback. A second browser loop can survive
@@ -366,15 +378,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           incomingCallRef.current = null;
           setIncomingCall(null);
           stopIncomingRingtone();
-          const liveCall = updatedCall;
-          const liveCallId = callId;
-          void waitForWebCallMedia(liveCall).then((ready) => {
-            if (!ready || getCallId(callRef.current) !== liveCallId) return;
-            if (liveCallId && !connectedAtByCallIdRef.current.has(liveCallId)) {
-              connectedAtByCallIdRef.current.set(liveCallId, Date.now());
-              setMediaReady(true);
-            }
-          });
+          const outboundStillRinging = Boolean(routeIdRef.current) && routePhaseRef.current !== 'connected' && nextState !== 'held';
+          if (!outboundStillRinging) {
+            void confirmWebMedia(updatedCall, callId);
+          }
           resumeAudio().catch((failure) => reportWebVoiceError('resume connected-call audio', failure));
         }
         if (TERMINAL_STATES.has(nextState)) {
@@ -431,7 +438,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setStatusLabel('Unable to connect');
     });
     return () => { cancelled = true; disconnect(); };
-  }, [disconnect, enabled, loginGeneration, resumeAudio, startIncomingRingtone, stopIncomingRingtone, stopRingback, token]);
+  }, [confirmWebMedia, disconnect, enabled, loginGeneration, resumeAudio, startIncomingRingtone, stopIncomingRingtone, stopRingback, token]);
 
   const followRoute = useCallback(async (routeId) => {
     const generation = ++routePollRef.current;
@@ -444,8 +451,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         if (routePollRef.current !== generation) return;
         if (result.phase === 'connected') {
           setRoutePhase('connected');
+          routePhaseRef.current = 'connected';
           stopRingback();
           resumeAudio().catch((failure) => reportWebVoiceError('resume bridged-call audio', failure));
+          void confirmWebMedia(callRef.current, getCallId(callRef.current));
           return;
         }
         if (['failed', 'ended'].includes(result.phase)) {
@@ -468,7 +477,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       stopRingback();
       setError(lastRouteError ? 'Call status could not be confirmed. The live call remains available.' : 'Call setup is taking longer than expected.');
     }
-  }, [resumeAudio, stopRingback]);
+  }, [confirmWebMedia, resumeAudio, stopRingback]);
 
   const startCall = useCallback(async (destinationNumber, callerNumber) => {
     if (callActionBusyRef.current) throw new Error('A call is already being started.');
