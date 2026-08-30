@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { retailRateFromWholesale, walletBalanceAfter } from './wallet-store.js';
+import { outboundWalletBlockReason, retailRateFromWholesale, walletBalanceAfter } from './wallet-store.js';
 
 test('retail pricing protects the configured gross margin', () => {
   assert.equal(retailRateFromWholesale({ wholesaleRateMicros: 10_000, grossMarginBps: 3000 }), 14_286);
@@ -26,4 +26,15 @@ test('wallet cannot be debited below zero', () => {
 
 test('wallet rejects fractional minor units', () => {
   assert.throws(() => walletBalanceAfter(5_00, 'credit', 1.25), /invalid/i);
+});
+
+test('blocks outbound calling on frozen or empty tenant wallets', () => {
+  const base = {
+    organizationId: 'primary', currency: 'USD', reservedMinor: 0, lowBalanceMinor: 0,
+    autoRechargeEnabled: false, autoRechargeThresholdMinor: 0, autoRechargeAmountMinor: 0,
+    version: 1, updatedAt: new Date().toISOString(),
+  };
+  assert.equal(outboundWalletBlockReason({ ...base, status: 'active', availableMinor: 500 }), '');
+  assert.match(outboundWalletBlockReason({ ...base, status: 'frozen', availableMinor: 500 }) || '', /frozen/i);
+  assert.match(outboundWalletBlockReason({ ...base, status: 'active', availableMinor: 0 }) || '', /credit/i);
 });

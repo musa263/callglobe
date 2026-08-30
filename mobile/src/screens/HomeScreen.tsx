@@ -37,7 +37,7 @@ export function HomeScreen({ onDial, onConference, onBusiness, onWallet, onRecen
   return <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
     <View style={styles.header}>
       <BrandMark compact />
-      <Pressable accessibilityLabel="Open calling balance" onPress={onWallet} style={styles.balance}><CircleDollarSign size={17} color={colors.mint} /><Text style={styles.balanceText}>${Number(profile?.balance ?? 0).toFixed(2)}</Text></Pressable>
+      <Pressable accessibilityLabel="Open calling balance" onPress={onWallet} style={styles.balance}><CircleDollarSign size={17} color={colors.mint} /><Text style={styles.balanceText}>{profile?.balance == null ? 'Managed' : `$${Number(profile.balance).toFixed(2)}`}</Text></Pressable>
     </View>
 
     <View style={styles.welcome}><Text style={styles.eyebrow}>VOCIVO WORKSPACE</Text><Text style={styles.title}>Hello, {firstName}</Text><Text style={styles.subtitle}>Your international phone system, ready when you are.</Text></View>

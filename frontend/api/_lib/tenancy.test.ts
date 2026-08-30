@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { numberOrganizationId, normalizeE164, organizationForInboundNumber, sessionOrganizationId } from './tenancy.js';
+import { numberAssignmentConflict, numberOrganizationId, normalizeE164, organizationForInboundNumber, sessionOrganizationId } from './tenancy.js';
 import { assertTenantRowOwnership } from './object-store.js';
 import type { VocivoSession } from './auth.js';
 
@@ -26,6 +26,12 @@ test('tenant sessions fail closed without a verified organization claim', () => 
   assert.throws(() => sessionOrganizationId(missing, config), /Unauthorized/);
   assert.throws(() => sessionOrganizationId(unknown, config), /Unauthorized/);
   assert.equal(sessionOrganizationId({ ...missing, organizationId: 'primary' }, config), 'primary');
+});
+
+test('refuses to reassign a number that already belongs to another company', () => {
+  assert.equal(numberAssignmentConflict(undefined, 'company-b'), false);
+  assert.equal(numberAssignmentConflict({ organizationId: 'company-b' }, 'company-b'), false);
+  assert.equal(numberAssignmentConflict({ organizationId: 'company-a' }, 'company-b'), true);
 });
 
 test('database tenant guards reject rows owned by another company', () => {

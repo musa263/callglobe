@@ -5,10 +5,12 @@ import { TelnyxApiError } from './telnyx.js';
 
 test('retries a transient bridge race with a fresh command id', async () => {
   const commands: string[] = [];
+  const bodies: Array<Record<string, unknown>> = [];
   const waits: number[] = [];
   let attempts = 0;
   const action = async (_callId: string, _action: string, body: Record<string, unknown> = {}) => {
     commands.push(String(body.command_id));
+    bodies.push(body);
     attempts += 1;
     if (attempts === 1) throw new TelnyxApiError(422, 'Call leg is not ready');
     return new Response('{}', { status: 200 });
@@ -18,6 +20,8 @@ test('retries a transient bridge race with a fresh command id', async () => {
 
   assert.deepEqual(commands, ['event-bridge-1', 'event-bridge-2']);
   assert.deepEqual(waits, [250]);
+  assert.equal(bodies[1]?.park_after_unbridge, undefined);
+  assert.equal(bodies[1]?.hold_after_unbridge, undefined);
 });
 
 test('does not retry a permanent bridge request error', async () => {

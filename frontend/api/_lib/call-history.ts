@@ -96,7 +96,7 @@ export function callHistoryFromEvents(events: StoredCallEvent[], organizationId:
   const calls: ServerCallHistory[] = [];
   for (const [id, values] of sessions) {
     const ordered = values.sort((a, b) => a.event_timestamp.localeCompare(b.event_timestamp));
-    const isInternal = ordered.some((event) => event.flow === 'internal' || event.sourceExtensionId || event.destinationExtensionId);
+    const isInternal = ordered.some((event) => event.flow === 'internal');
     if (isInternal) {
       const call = internalHistory(id, ordered, viewer);
       if (call) calls.push(call);

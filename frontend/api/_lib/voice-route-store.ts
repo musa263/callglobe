@@ -46,7 +46,13 @@ export async function readVoiceRoute(routeId: string) {
     if (!value) return null;
     const route = decrypt(value);
     return new Date(route.expiresAt).getTime() > Date.now() ? route : null;
-  } catch { return null; }
+  } catch (error) {
+    console.error('Vocivo could not read a voice route', {
+      routeIdHash: routeHash(routeId).slice(0, 12),
+      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
+    });
+    return null;
+  }
 }
 
 export async function saveVoiceRoute(route: ReservedVoiceRoute) {

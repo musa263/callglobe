@@ -109,6 +109,7 @@ export async function requireSession(req: VercelRequest) {
   }
   if (payload.sub.startsWith('vocivo-account:')) {
     if (typeof payload.accountId !== 'string' || typeof payload.organizationId !== 'string' || !['company_owner', 'company_admin'].includes(String(payload.role))) throw new Error('Unauthorized');
+    if (!await activeTenantAdmin(payload.accountId, payload.organizationId)) throw new Error('Unauthorized');
   }
   return payload as VocivoSession;
 }

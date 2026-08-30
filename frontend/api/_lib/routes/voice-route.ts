@@ -12,6 +12,8 @@ import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
 import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
+import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
+import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 
@@ -77,6 +79,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internationalAllowed: profile?.permissions?.international !== false,
       }, destination, callerId);
     }
+    // Tenant wallets do not fund internal calls. Vocivo's carrier account still
+    // has to be operational because Telnyx transports both managed call legs.
+    await assertTelnyxVoiceReady();
+    if (requestedFlow !== 'internal') {
+      const wallet = await readTenantWallet(organizationId);
+      const blocked = outboundWalletBlockReason(wallet);
+      if (blocked) return res.status(402).json({ error: blocked });
+    }
     const now = Date.now();
     const route = await saveVoiceRoute({
       routeId,
@@ -125,6 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destination: route.destination,
     });
   } catch (error) {
+    if (error instanceof Error && /wallet is frozen|Calling credit/i.test(error.message)) return res.status(402).json({ error: error.message });
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });
     if (error instanceof Error && /Caller ID|organization|owned|verified|Internal calling|destination|outbound rule|International calling/i.test(error.message)) return res.status(403).json({ error: error.message });

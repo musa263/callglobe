@@ -28,10 +28,11 @@ Passing source checks do not replace carrier and physical-device acceptance test
 ## Automated Evidence
 
 - Frontend API TypeScript: passed.
-- Frontend tests: 82 passed.
+- Backend and web voice tests: 106 passed.
 - Frontend production build: passed.
 - Mobile TypeScript: passed.
-- Mobile unit and VoIP lifecycle tests: 9 passed.
+- Mobile unit and VoIP lifecycle tests: 17 passed.
+- Mounted mobile voice integration tests: 2 passed.
 - Android native Kotlin compilation: passed.
 - iOS native project generation: passed.
 - Deployment shell syntax and repository whitespace validation: passed.

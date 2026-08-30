@@ -1,17 +1,15 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { waitUntil } from '@vercel/functions';
 import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
-import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState, primaryVoiceCallerId } from '../voice-control.js';
+import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState } from '../voice-control.js';
 import { clearActiveCallRouteIfMatches, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { claimOutboundCallWinner, clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundLegs, terminateOutboundPair } from '../outbound-cancel.js';
-import { isInboundCallAnswered, isInboundCallInitiated } from '../voice-routing.js';
-import { isVoiceRouteId } from '../voice-route-id.js';
+import { isInboundCallAnswered, isInboundCallInitiated, isParkedClientCall, ivrMenuSelection, voiceRouteHangupOutcome } from '../voice-routing.js';
 import { bridgeOutboundCalls } from '../outbound-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
@@ -25,63 +23,16 @@ import { normalizeE164 } from '../tenancy.js';
 import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
-import { activeOrganizationExtensionTargets, extensionSipUri, isAllowedInternalSipDestination, organizationExtensionSipUri, voiceDestinationsMatch } from '../internal-sip.js';
+import { activeOrganizationExtensionTargets, extensionSipUri, organizationExtensionSipUri } from '../internal-sip.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
 import { claimReplayKey, releaseReplayKey } from '../object-store.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools, inboundAiCommandId, inboundAiRoutingKey } from '../ai-transfer.js';
 import { createAiTransferToken } from '../ai-transfer-token.js';
+import type { VoiceEvent } from '../voice-webhook/contracts.js';
+import { handleParkedClientInitiated } from '../voice-webhook/parked-client-handler.js';
+import { background, callerDisplay, customHeader, enterpriseRingbackUrl, logWebhookFailure } from '../voice-webhook/support.js';
 
-type VoiceEvent = {
-  data?: {
-    id?: string;
-    event_type?: string;
-    occurred_at?: string;
-    payload?: {
-      call_control_id?: string;
-      call_session_id?: string;
-      call_leg_id?: string;
-      connection_id?: string;
-      client_state?: string;
-      direction?: string;
-      state?: string;
-      custom_headers?: Array<{ name?: string; value?: string; header_name?: string; header_value?: string }>;
-      digits?: string;
-      result?: string;
-      from?: string;
-      to?: string;
-      caller_id_name?: string;
-      hangup_cause?: string;
-      hangup_source?: string;
-      recording_id?: string;
-      recording_started_at?: string;
-      recording_ended_at?: string;
-      recording_urls?: { mp3?: string; wav?: string };
-      public_recording_urls?: { mp3?: string; wav?: string };
-    };
-  };
-};
-
-type VoicePayload = NonNullable<NonNullable<VoiceEvent['data']>['payload']>;
 const e164 = /^\+[1-9]\d{6,14}$/;
-function callerDisplay(value: string) {
-  return value.replace(/[^A-Za-z0-9 _~!.+-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 128) || 'Vocivo';
-}
-function customHeader(payload: VoicePayload | undefined, name: string) {
-  const match = payload?.custom_headers?.find((header) => (header.name || header.header_name || '').toLowerCase() === name.toLowerCase());
-  return (match?.value || match?.header_value || '').trim();
-}
-
-function enterpriseRingbackUrl() {
-  return `${requiredEnv('VITE_APP_URL').replace(/\/+$/, '')}/audio/ringback.wav?v=enterprise-2`;
-}
-
-function background(label: string, task: Promise<unknown>) {
-  waitUntil(task.catch((error) => console.warn(`Vocivo background ${label} failed`, publicError(error))));
-}
-
-function logWebhookFailure(operation: string, error: unknown) {
-  console.warn('Vocivo voice webhook best-effort operation failed', { operation, error: publicError(error) });
-}
 
 async function speakPrompt(callControlId: string, input: { payload: string; voice: string; [key: string]: unknown }) {
   const audioUrl = await renderVocivoPrompt(input.payload, input.voice);
@@ -199,7 +150,7 @@ async function resolveOrganizationDestination(organizationId: string, inboundNum
     const extension = await getExtension(assignment.destinationId).catch(() => null);
     if (extension?.status === 'active' && extension.organizationId === organizationId) return extension;
   }
-  if (preferMain && organizationId === 'primary') return null;
+  if (preferMain) return null;
   const extensions = (await listExtensions(organizationId)).filter((item) => item.status === 'active' && item.sipUsername);
   const departmental = department ? extensions.find((item) => item.department.toLowerCase() === department.toLowerCase()) : null;
   return departmental || extensions[0] || null;
@@ -514,9 +465,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const isInboundInitiated = isInboundCallInitiated({ ...routeInput, direction: payload?.direction });
     const isInboundAnswered = eventType === 'call.answered'
       && (state?.flow === 'inbound_root' || isInboundCallAnswered({ ...routeInput, hasOutboundPair: Boolean(outboundPair) }));
-    const isParkedVocivoClient = payload?.connection_id === requiredEnv('TELNYX_CONNECTION_ID')
-      && payload?.direction === 'outgoing'
-      && ['outbound', 'internal'].includes(parkedFlow);
+    const isParkedVocivoClient = isParkedClientCall({
+      connectionId: payload?.connection_id,
+      credentialConnectionId: requiredEnv('TELNYX_CONNECTION_ID'),
+      direction: payload?.direction,
+      flow: parkedFlow,
+      flowDestination: payload?.flow_destination,
+      state: payload?.state,
+    });
 
     if (eventType === 'call.initiated' && state?.flow === 'outbound_destination' && state.parentCallControlId) {
       const existingRoute = state.routeId ? await readVoiceRoute(state.routeId) : null;
@@ -573,128 +529,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ received: true });
     }
 
-    if (eventType === 'call.initiated' && isParkedVocivoClient && payload?.state === 'parked') {
-      const observedDestination = customHeader(payload, 'X-Vocivo-Destination') || payload.to || '';
-      const selectedCallerId = customHeader(payload, 'X-Vocivo-Caller-ID');
-      const requestedRouteId = customHeader(payload, 'X-Vocivo-Route-ID');
-      const routeId = isVoiceRouteId(requestedRouteId) ? requestedRouteId : '';
-      const signedReservation = verifyVoiceRouteToken(customHeader(payload, 'X-Vocivo-Route-Token'));
-      // Persistent state remains a migration fallback for app builds released before signed routes.
-      const reservation = signedReservation?.routeId === routeId ? signedReservation : routeId ? await readVoiceRoute(routeId) : null;
-      if (!reservation) {
-        console.warn('Vocivo rejected a parked call route', { eventId, routeId, flow: parkedFlow, reason: 'missing_reservation' });
-        await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch((error) => logWebhookFailure('hang up invalid destination', error));
-        return res.status(200).json({ received: true });
-      }
-      const effectiveCallerId = selectedCallerId || reservation?.callerId || '';
-      const destination = reservation.destination;
-      const invalidReason = !voiceDestinationsMatch(reservation.destination, observedDestination)
-        ? 'destination_mismatch'
-        : reservation.flow !== parkedFlow
-          ? 'flow_mismatch'
-          : (reservation.callerId || '') !== effectiveCallerId
-            ? 'caller_identity_mismatch'
-            : (!e164.test(destination) && !isAllowedInternalSipDestination(destination))
-              ? 'unsupported_destination'
-              : '';
-      if (invalidReason) {
-        console.warn('Vocivo rejected a parked call route', { eventId, routeId, flow: parkedFlow, reason: invalidReason });
-        await callAction(callControlId, 'hangup', { command_id: `${eventId}-invalid-destination` }).catch((error) => logWebhookFailure('hang up invalid destination', error));
-        return res.status(200).json({ received: true });
-      }
-      if (!signedReservation) {
-        try {
-          const access = await accessForOrganization(reservation.organizationId);
-          const feature = reservation.flow === 'internal' ? 'internalCalling' : 'outboundCalling';
-          if (!access.features[feature]) throw new Error('Feature not enabled');
-        } catch (error) {
-          logWebhookFailure('verify tenant outbound entitlement', error);
-          await callAction(callControlId, 'hangup', { command_id: `${eventId}-service-unavailable` }).catch((error) => logWebhookFailure('hang up unavailable service', error));
-          return res.status(200).json({ received: true });
-        }
-      }
-      const destinationPreparation = Promise.all([
-        reservation.flow === 'internal'
-          ? readBusinessVoiceConfig(reservation.organizationId).then((config) => config.companyName)
-          : Promise.resolve(''),
-        reservation.flow === 'internal' && reservation.destinationExtensionId
-          ? listExtensionSipUsernames(reservation.destinationExtensionId)
-          : Promise.resolve([]),
-        reservation.flow === 'internal' ? primaryVoiceCallerId() : Promise.resolve(reservation.callerId),
-      ]).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      await callAction(callControlId, 'answer', { command_id: `${eventId}-answer-client` });
-      background('carrier ringback', callAction(callControlId, 'playback_start', {
-        audio_url: enterpriseRingbackUrl(),
-        loop: 'infinity',
-        command_id: `${eventId}-ringback`,
-      }));
-      let destinationCall;
-      try {
-        const prepared = await destinationPreparation;
-        if ('error' in prepared) throw prepared.error;
-        const [businessName, sipUsers, resolvedVoiceCallerId] = prepared.value;
-        const destinations = sipUsers.map(extensionSipUri);
-        const dialFrom = resolvedVoiceCallerId;
-        if (!dialFrom) throw new Error('The signed call route has no authorized caller identity.');
-        destinationCall = await dialCall({
-          to: destinations.length > 1 ? destinations : destinations[0] || destination,
-          from: dialFrom,
-          state: {
-            flow: 'outbound_destination', parentCallControlId: callControlId, organizationId: reservation.organizationId, routeId,
-            sourceExtensionId: reservation.sourceExtensionId, sourceExtension: reservation.callerExtension, sourceName: reservation.callerName,
-            sourcePhotoUrl: reservation.callerPhotoUrl,
-            destinationExtensionId: reservation.destinationExtensionId, destinationExtension: reservation.destinationExtension,
-            destinationName: reservation.destinationName,
-            bridgeOnAnswer: false,
-          },
-          fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
-            ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
-            : payload.caller_id_name || 'Vocivo'),
-          customHeaders: reservation.flow === 'internal' ? [
-            { name: 'X-Vocivo-Call-Type', value: 'internal' },
-            ...(reservation.callerName ? [{ name: 'X-Vocivo-Caller-Name', value: reservation.callerName }] : []),
-            ...(reservation.callerExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: reservation.callerExtension }] : []),
-            ...(reservation.callerPhotoUrl ? [{ name: 'X-Vocivo-Caller-Photo', value: reservation.callerPhotoUrl }] : []),
-            ...(businessName ? [{ name: 'X-Vocivo-Company-Name', value: businessName }] : []),
-            { name: 'X-Vocivo-Organization-ID', value: reservation.organizationId },
-          ] : undefined,
-          commandId: `${eventId}-destination`,
-        });
-      } catch (dialError) {
-        background('failed route state', updateVoiceRoute(routeId, { phase: 'failed', failureCause: dialError instanceof Error ? dialError.message : 'destination_dial_failed' }));
-        await callAction(callControlId, 'hangup', { command_id: `${eventId}-dial-failed` }).catch((error) => logWebhookFailure('hang up failed dial', error));
-        return res.status(200).json({ received: true });
-      }
-      const destinationLegs = dialCallLegs(destinationCall);
-      if (!destinationLegs.length) {
-        // Multi-destination Dial may only identify each child leg in its
-        // call.initiated webhook. Keep the parked caller alive while those
-        // authoritative destination events register the route.
-        await updateVoiceRoute(routeId, { phase: 'ringing' });
-        return res.status(200).json({ received: true });
-      }
-      const destinationCallControlIds = destinationLegs
-        .map((leg) => leg.call_control_id)
-        .filter((id): id is string => Boolean(id));
-      const pair = {
-          clientCallControlId: callControlId,
-          destinationCallControlId: destinationCallControlIds[0],
-          forkDestinationCallControlIds: destinationCallControlIds,
-          routeId,
-          destination,
-          status: 'direct' as const,
-          phase: 'ringing' as const,
-          bridgeOnAnswer: false,
-          updatedAt: new Date().toISOString(),
-      };
-      await saveOutboundCallPair(pair);
-      const updatedRoute = await updateVoiceRoute(routeId, { phase: 'ringing' });
-      if (updatedRoute && ['ended', 'failed'].includes(updatedRoute.phase)) {
-        await terminateOutboundPair(pair, `${eventId}-canceled`);
-      }
+    if (eventType === 'call.initiated' && isParkedVocivoClient) {
+      await handleParkedClientInitiated({ callControlId, eventId, parkedFlow, payload });
       return res.status(200).json({ received: true });
     }
 
@@ -845,8 +681,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           });
           return res.status(200).json({ received: true });
         }
-        const phase = payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed';
-        if (state.routeId) await updateVoiceRoute(state.routeId, { phase, failureCause: payload?.hangup_cause });
+        const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
+        if (state.routeId) await updateVoiceRoute(state.routeId, outcome);
         if (pair) {
           await terminateOutboundPair(pair, `${eventId}-destination-hangup`);
         } else if (state.parentCallControlId) {
@@ -857,13 +693,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const pair = endedOutboundPair || await readOutboundCallPairByDestination(callControlId);
       if (pair?.status === 'direct') {
-        const phase = payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed';
-        const endedPair = await saveOutboundCallPair({ ...pair, phase, failureCause: payload?.hangup_cause, updatedAt: new Date().toISOString() });
-        if (pair.routeId) await updateVoiceRoute(pair.routeId, { phase, failureCause: payload?.hangup_cause });
+        const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
+        const endedPair = await saveOutboundCallPair({ ...pair, ...outcome, updatedAt: new Date().toISOString() });
+        if (pair.routeId) await updateVoiceRoute(pair.routeId, outcome);
         await terminateOutboundPair(endedPair, `${eventId}-destination-hangup`);
       } else if (!pair && state?.routeId) {
-        const phase = payload?.hangup_cause === 'normal_clearing' ? 'ended' : 'failed';
-        await updateVoiceRoute(state.routeId, { phase, failureCause: payload?.hangup_cause });
+        const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
+        await updateVoiceRoute(state.routeId, outcome);
         if (state.parentCallControlId) {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-ringback` }).catch((error) => logWebhookFailure('stop canceled-call ringback', error));
           await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-client` }).catch((error) => logWebhookFailure('end canceled client leg', error));
@@ -876,10 +712,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const routeId = state?.routeId || eventRoute?.routeId;
       const pair = await readOutboundCallPairByClient(callControlId)
         || (routeId ? await readOutboundCallPairByRoute(routeId) : null);
-      if (!pair && routeId) await updateVoiceRoute(routeId, { phase: 'ended', failureCause: payload?.hangup_cause });
+      const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
+      if (!pair && routeId) await updateVoiceRoute(routeId, outcome);
       if (!pair) return res.status(200).json({ received: true });
       if (pair.status === 'direct') {
-        if (pair.routeId) await updateVoiceRoute(pair.routeId, { phase: 'ended', failureCause: payload?.hangup_cause });
+        if (pair.routeId) await updateVoiceRoute(pair.routeId, outcome);
         await terminateOutboundPair(pair, `${eventId}-client-hangup`);
       } else if (pair.status === 'conference' && pair.conferenceRole === 'host') {
         await Promise.all([pair.destinationCallControlId, pair.peerDestinationCallControlId]
@@ -963,6 +800,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (isUnansweredAgentCause(cause)) {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop rejected waiting playback', error));
           await routeAfterAgentFailure(state, cause, eventId);
+        } else {
+          await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-caller` }).catch((error) => logWebhookFailure('end inbound caller after agent hangup', error));
         }
       } else if (targetExtensionId) {
         await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
@@ -1003,17 +842,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (eventType === 'call.answered' && state?.flow === 'queue_agent' && state.queueName && state.parentCallControlId) {
       const queue = await readQueueCall(state.queueName);
-      if (!queue || queue.status === 'connected') {
+      if (!queue || queue.status === 'connected' || queue.status === 'connecting') {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-duplicate-agent` }).catch((error) => logWebhookFailure('hang up duplicate agent', error));
         return res.status(200).json({ received: true });
       }
-      await saveQueueCall({ ...queue, status: 'connected', updatedAt: new Date().toISOString() });
+      await saveQueueCall({ ...queue, status: 'connecting', updatedAt: new Date().toISOString() });
       try {
         await callAction(callControlId, 'bridge', { queue: state.queueName, command_id: `${eventId}-bridge-queue` });
       } catch (bridgeError) {
+        await saveQueueCall({ ...queue, status: 'dialing', updatedAt: new Date().toISOString() }).catch((error) => logWebhookFailure('restore queue after failed bridge', error));
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-queue-bridge-failed` }).catch((error) => logWebhookFailure('hang up failed queue bridge', error));
         throw bridgeError;
       }
+      await saveQueueCall({ ...queue, status: 'connected', updatedAt: new Date().toISOString() });
       return res.status(200).json({ received: true });
     }
 
@@ -1217,8 +1058,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (eventType === 'call.gather.ended' && state?.flow === 'ivr' && state.organizationId) {
       const config = await readBusinessVoiceConfig(state.organizationId);
-      const digit = Number(payload?.digits || payload?.result || '1');
-      if (digit === 9 && (await listExtensions(state.organizationId)).length) {
+      const hasExtensions = (await listExtensions(state.organizationId)).length > 0;
+      const rawDigit = String(payload?.digits || payload?.result || '').trim();
+      if (rawDigit === '9' && hasExtensions) {
         await gatherPrompt(callControlId, {
           payload: 'Please enter the extension number now.',
           invalid_payload: 'That extension was not recognized.',
@@ -1231,7 +1073,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         return res.status(200).json({ received: true });
       }
-      const department = config.departments[digit - 1] || config.departments[0];
+      const digit = ivrMenuSelection(payload || {}, config.departments.length);
+      if (digit == null) {
+        await routeUnavailable(callControlId, state.organizationId, eventId, state.callerNumber, state.callerName);
+        return res.status(200).json({ received: true });
+      }
+      const department = config.departments[digit - 1];
+      if (!department) {
+        await routeUnavailable(callControlId, state.organizationId, eventId, state.callerNumber, state.callerName);
+        return res.status(200).json({ received: true });
+      }
       await routeToAvailableAgent({ callControlId, department, eventId, organizationId: state.organizationId, inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
     }
 

@@ -32,6 +32,17 @@ test('keeps tenants separate and marks unanswered incoming calls missed', () => 
   assert.equal(result[0].status, 'missed');
 });
 
+test('keeps extension-originated PSTN calls on the public number history path', () => {
+  const result = callHistoryFromEvents([
+    event({ flow: 'outbound', sourceExtensionId: 'musa', sourceExtension: '2000' }),
+    event({ name: 'call.answered', flow: 'outbound_destination', sourceExtensionId: 'musa', event_timestamp: '2026-08-25T10:00:05.000Z' }),
+    event({ name: 'call.hangup', flow: 'outbound_destination', sourceExtensionId: 'musa', event_timestamp: '2026-08-25T10:01:05.000Z', hangup_cause: 'normal_clearing' }),
+  ], 'primary', 100, { extensionId: 'musa' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].destination_number, '+2348012345678');
+  assert.equal(result[0].internal, undefined);
+});
+
 test('does not expose internal agent legs as separate recent calls', () => {
   assert.deepEqual(callHistoryFromEvents([event({ direction: 'outgoing', flow: 'agent', to: 'sip:user@sip.telnyx.com' })], 'primary'), []);
 });

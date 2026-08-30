@@ -31,11 +31,17 @@ export async function organizationForNumber(phoneNumber: string) {
   return organizationForInboundNumber(phoneNumber, config);
 }
 
+export function numberAssignmentConflict(current: { organizationId?: string } | undefined, organizationId: string) {
+  return Boolean(current?.organizationId && current.organizationId !== organizationId);
+}
+
 export async function assignNumberToOrganization(phoneNumber: string, organizationId: string, patch: Omit<PbxConfig['numberAssignments'][string], 'organizationId'> = {}) {
   const normalized = normalizeE164(phoneNumber);
   await savePbxConfig((config) => {
     if (!config.organizations.some((item) => item.id === organizationId)) throw new Error('Organization not found.');
-    return { numberAssignments: { ...config.numberAssignments, [normalized]: { ...config.numberAssignments[normalized], ...patch, organizationId } } };
+    const current = config.numberAssignments[normalized];
+    if (numberAssignmentConflict(current, organizationId)) throw new Error('This number already belongs to another organization.');
+    return { numberAssignments: { ...config.numberAssignments, [normalized]: { ...current, ...patch, organizationId } } };
   });
 }
 

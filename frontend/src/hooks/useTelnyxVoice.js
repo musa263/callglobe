@@ -2,42 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { TelnyxRTC } from '@telnyx/webrtc';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
+import { describeRemote, getCallId } from '../voice/callIdentity';
+import { reportWebVoiceError, telnyxErrorMessage } from '../voice/telemetry';
 
 const TERMINAL_STATES = new Set(['hangup', 'destroy', 'purge']);
-
-function callHeader(call, name) {
-  const headers = call?.options?.customHeaders || call?.options?.dialogParams?.customHeaders || [];
-  const header = headers.find((item) => String(item?.name || item?.header_name || '').toLowerCase() === name.toLowerCase());
-  return header?.value || header?.header_value;
-}
-
-function describeRemote(call, fallbackNumber = '') {
-  const rawNumber = call?.options?.remoteCallerNumber || call?.options?.callerNumber || call?.options?.destinationNumber || fallbackNumber;
-  const rawName = call?.options?.remoteCallerName || call?.options?.callerName || '';
-  const displayMatch = String(rawName).trim().match(/^(.+?)\s*-\s*Ext(?:ension)?\s+(\d{2,5})$/i);
-  const extension = callHeader(call, 'X-Vocivo-Caller-Extension') || displayMatch?.[2];
-  const employeeName = callHeader(call, 'X-Vocivo-Caller-Name') || displayMatch?.[1];
-  const safeNumber = String(rawNumber || '').startsWith('sip:') ? 'Internal call' : rawNumber;
-  return {
-    name: employeeName || rawName || (extension ? 'Company colleague' : 'Phone call'),
-    number: extension ? `Extension ${extension}` : safeNumber || 'Unknown caller',
-    internal: Boolean(extension || callHeader(call, 'X-Vocivo-Call-Type') === 'internal'),
-    photoUrl: callHeader(call, 'X-Vocivo-Caller-Photo') || '',
-  };
-}
-
-function getCallId(call) {
-  return call?.id || call?.callId || '';
-}
-
-function telnyxErrorMessage(event) {
-  return event?.error?.message || event?.message || event?.payload?.message || 'The web phone could not connect.';
-}
-
-function reportWebVoiceError(operation, failure) {
-  const error = failure instanceof Error ? failure : new Error(String(failure));
-  console.error(`[Vocivo Web Voice] ${operation} failed`, { message: error.message, stack: error.stack });
-}
 
 export function useTelnyxVoice(token, enabled, identity = {}) {
   const clientRef = useRef(null);
@@ -400,8 +368,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     }
     if (routePollRef.current === generation) {
       stopRingback();
-      setError(lastRouteError ? 'Call setup could not be confirmed. Please try again.' : 'Call setup timed out. Please try again.');
-      try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up timed-out route', failure); }
+      setError(lastRouteError ? 'Call status could not be confirmed. The live call remains available.' : 'Call setup is taking longer than expected.');
     }
   }, [resumeAudio, stopRingback]);
 

@@ -38,7 +38,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
   const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
-  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : Boolean(selectedCaller && number.length >= 4 && profile?.can_call !== false);
+  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : Boolean(selectedCaller && number.length >= 4 && profile?.can_call !== false && (!balanceVisible || balance > 0));
   const displayNumber = useMemo(() => number.replace(/(.{3})/g, '$1 ').trim(), [number]);
 
   useEffect(() => {

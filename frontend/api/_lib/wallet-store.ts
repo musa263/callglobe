@@ -340,6 +340,13 @@ export function retailRateFromWholesale(input: {
   return Math.ceil(buffered / (1 - margin / 10_000) + Math.max(0, input.surchargeMicros || 0));
 }
 
+export function outboundWalletBlockReason(wallet: Pick<Wallet, 'status' | 'availableMinor'> | null | undefined) {
+  if (!wallet) return 'Calling credit is not available.';
+  if (wallet.status === 'frozen') return 'This account wallet is frozen.';
+  if (wallet.availableMinor <= 0) return 'Calling credit is required before placing this call.';
+  return '';
+}
+
 export function walletBalanceAfter(currentMinor: number, direction: 'credit' | 'debit', amountMinor: number) {
   if (!Number.isSafeInteger(currentMinor) || currentMinor < 0) throw new Error('Current wallet balance is invalid.');
   if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new Error('Wallet adjustment amount is invalid.');

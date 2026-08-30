@@ -9,7 +9,7 @@ export type QueueCall = {
   organizationId: string;
   handlingId: string;
   kind: 'ring_group' | 'queue';
-  status: 'waiting' | 'dialing' | 'connected';
+  status: 'waiting' | 'dialing' | 'connecting' | 'connected';
   agentCallControlIds: string[];
   updatedAt: string;
 };

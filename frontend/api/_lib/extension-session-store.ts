@@ -20,7 +20,9 @@ export async function isExtensionSessionRevoked(extensionId: string, issuedAtSec
     const revokedAt = value ? Number(value.toString('utf8')) || 0 : 0;
     cache.set(extensionId, { revokedAt, checkedAt: Date.now() });
     return revokedAt > issuedAtSeconds * 1000;
-  } catch {
-    return false;
+  } catch (error) {
+    if (cached) return cached.revokedAt > issuedAtSeconds * 1000;
+    console.error('Vocivo could not read extension session revocation state', error);
+    return true;
   }
 }

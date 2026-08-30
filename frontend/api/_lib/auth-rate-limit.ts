@@ -102,8 +102,8 @@ export async function recordLoginFailure(email: string, ip: string): Promise<Log
 
 export async function clearAccountLoginFailures(email: string, ip: string) {
   const value = context(email, ip);
-  await transactObjectGroup(`auth-login-success:${value.accountHash}`, [value.accountPath], () => ({
-    deletes: [value.accountPath],
+  await transactObjectGroup(`auth-login-success:${value.accountHash}:${value.ipHash}`, [value.accountPath, value.ipPath], () => ({
+    deletes: [value.accountPath, value.ipPath],
     result: undefined,
   }));
 }

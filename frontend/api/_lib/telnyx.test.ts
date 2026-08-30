@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { TelnyxApiError, telnyx, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
+import { TelnyxApiError, telnyx, telnyxCarrierHasCredit, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.TELNYX_API_KEY;
@@ -71,4 +71,10 @@ test('turns an unreachable carrier into a bounded gateway timeout', async () => 
     assert.match(error.message, /did not respond/i);
     return true;
   });
+});
+
+test('requires positive platform carrier credit before placing calls', () => {
+  assert.equal(telnyxCarrierHasCredit({ data: { balance: '-0.07', available_credit: '-0.07' } }), false);
+  assert.equal(telnyxCarrierHasCredit({ data: { balance: '10.00', available_credit: '10.00' } }), true);
+  assert.equal(telnyxCarrierHasCredit({ data: {} }), false);
 });

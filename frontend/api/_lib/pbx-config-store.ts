@@ -145,7 +145,19 @@ export function organizationSettingsFrom(config: PbxConfig): OrganizationPbxSett
 
 export function pbxForOrganization(config: PbxConfig, organizationId: string): PbxConfig {
   const settings = config.organizationSettings[organizationId];
-  return settings ? { ...config, ...settings, activeOrganizationId: organizationId } : { ...config, activeOrganizationId: organizationId };
+  if (settings) return { ...config, ...settings, activeOrganizationId: organizationId };
+  const organization = config.organizations.find((item) => item.id === organizationId);
+  const ownsSharedConfig = organizationId === config.activeOrganizationId || organizationId === 'primary';
+  if (ownsSharedConfig) return { ...config, activeOrganizationId: organizationId };
+  const isolated = defaultPbxConfig();
+  return {
+    ...config,
+    ...organizationSettingsFrom(isolated),
+    company: { ...isolated.company, name: organization?.name || isolated.company.name },
+    ai: { ...isolated.ai, enabled: false, assistantId: '' },
+    callHandling: { ringGroups: [], queues: [], ivrs: [] },
+    activeOrganizationId: organizationId,
+  };
 }
 
 function validateOrganizations(config: PbxConfig) {

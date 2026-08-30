@@ -24,6 +24,41 @@ export class TelnyxApiError extends Error {
   }
 }
 
+export class TelnyxCarrierUnavailableError extends Error {
+  constructor() {
+    super('Vocivo calling is temporarily unavailable.');
+    this.name = 'TelnyxCarrierUnavailableError';
+  }
+}
+
+type CarrierHealth = {
+  checkedAt: number;
+  ready: boolean;
+};
+
+let carrierHealth: CarrierHealth | undefined;
+const carrierHealthTtlMs = 15_000;
+
+export function telnyxCarrierHasCredit(payload: unknown) {
+  const data = payload && typeof payload === 'object' && 'data' in payload
+    ? (payload as { data?: unknown }).data
+    : undefined;
+  if (!data || typeof data !== 'object') return false;
+  const balance = data as { available_credit?: string | number; balance?: string | number };
+  const availableCredit = Number(balance.available_credit ?? balance.balance);
+  return Number.isFinite(availableCredit) && availableCredit > 0;
+}
+
+export async function assertTelnyxVoiceReady() {
+  const now = Date.now();
+  if (!carrierHealth || now - carrierHealth.checkedAt >= carrierHealthTtlMs) {
+    const response = await telnyx('/balance');
+    const payload = await response.json();
+    carrierHealth = { checkedAt: now, ready: telnyxCarrierHasCredit(payload) };
+  }
+  if (!carrierHealth.ready) throw new TelnyxCarrierUnavailableError();
+}
+
 function requestTimeoutMs() {
   const configured = Number(process.env.TELNYX_REQUEST_TIMEOUT_MS);
   return Number.isFinite(configured) ? Math.min(30_000, Math.max(250, configured)) : 7_000;

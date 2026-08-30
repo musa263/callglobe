@@ -2,6 +2,8 @@
 
 Vocivo is a mobile and web VoIP phone built on Telnyx. The native app uses React Native and Expo; the browser phone uses React, Vite, and the Telnyx WebRTC SDK. Both clients share a Vercel Functions backend and do not use Supabase.
 
+New engineers should begin with [ARCHITECTURE.md](ARCHITECTURE.md). Development rules and required checks are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Apps
 
 - `mobile/`: iOS and Android app with native Telnyx voice support
@@ -34,8 +36,7 @@ Use an Expo development build, not Expo Go. Telnyx, CallKit, PushKit, and WebRTC
 ## Checks
 
 ```bash
-cd frontend && npm run build && npm run check:api
-cd mobile && npm run typecheck
+./verify.sh
 ```
 
 The non-billable HTTP capacity check is available at `frontend/scripts/load-test.mjs`. It does not place carrier calls. `/api/health` measures cached control-plane liveness; use `/api/health?deep=1` only for low-concurrency database diagnostics.

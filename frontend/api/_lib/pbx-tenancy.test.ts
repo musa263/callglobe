@@ -26,3 +26,18 @@ test('keeps company PBX routing and AI settings isolated', () => {
   assert.equal(tenant.ai.name, 'Second Company Receptionist');
   assert.equal(tenant.callHandling.ringGroups[0]?.name, 'Support');
 });
+
+test('does not let a new tenant inherit the primary AI receptionist', () => {
+  const config = defaultPbxConfig();
+  config.ai.enabled = true;
+  config.ai.assistantId = 'asst_primary';
+  config.organizations.push({
+    id: 'second-company', name: 'Second Company', slug: 'second-company', accountType: 'business',
+    ownerDisplayName: 'Second Company', ownerEmail: 'owner@example.com', extensionStart: 3000,
+    extensionEnd: 3019, internalCallingEnabled: true, status: 'active',
+  });
+  const tenant = pbxForOrganization(config, 'second-company');
+  assert.equal(tenant.ai.enabled, false);
+  assert.equal(tenant.ai.assistantId, '');
+  assert.equal(pbxForOrganization(config, 'primary').ai.assistantId, 'asst_primary');
+});

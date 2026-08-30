@@ -10,6 +10,7 @@ import { api, clearSession, getStoredSession, storeSession } from './lib/api';
 import { buildDialingDirectory } from './lib/countries';
 import { useVoice } from './hooks/useVoice';
 import AdminConsole from './admin/AdminConsole';
+import { describeRemote } from './voice/callIdentity';
 
 const KEYS = [
   ['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
@@ -97,19 +98,11 @@ function CallerIdMenu({ numbers, selected, onSelect, open, onToggle }) {
 }
 
 function IncomingCall({ call, onAnswer, onDecline }) {
-  const headers = call?.options?.customHeaders || call?.options?.dialogParams?.customHeaders || [];
-  const header = (key) => { const item = headers.find((value) => String(value?.name || value?.header_name || '').toLowerCase() === key.toLowerCase()); return item?.value || item?.header_value; };
-  const remoteName = call?.options?.remoteCallerName || '';
-  const displayMatch = String(remoteName).trim().match(/^(.+?)\s*-\s*Ext(?:ension)?\s+(\d{2,5})$/i);
-  const extension = header('X-Vocivo-Caller-Extension') || displayMatch?.[2];
-  const remoteNumber = call?.options?.remoteCallerNumber || call?.options?.callerNumber || 'Unknown caller';
-  const number = extension ? `Extension ${extension}` : String(remoteNumber).startsWith('sip:') ? 'Internal call' : remoteNumber;
-  const name = header('X-Vocivo-Caller-Name') || displayMatch?.[1] || remoteName || 'Incoming call';
-  const photoUrl = header('X-Vocivo-Caller-Photo');
+  const identity = describeRemote(call);
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal incoming-modal">
-        {photoUrl ? <img className="ring-icon incoming-photo" src={photoUrl} alt="" /> : <span className="ring-icon"><PhoneIncoming size={29} /></span>}<p className="eyebrow">INCOMING CALL</p><h2>{name}</h2><p className="call-number">{extension ? number : formatPhone(number)}</p>
+        {identity.photoUrl ? <img className="ring-icon incoming-photo" src={identity.photoUrl} alt="" /> : <span className="ring-icon"><PhoneIncoming size={29} /></span>}<p className="eyebrow">INCOMING CALL</p><h2>{identity.name}</h2><p className="call-number">{identity.internal ? identity.number : formatPhone(identity.number)}</p>
         <div className="incoming-actions"><button className="round-action decline" onClick={onDecline} title="Decline call"><PhoneOff /></button><button className="round-action answer" onClick={onAnswer} title="Answer call"><Phone /></button></div>
         <div className="action-labels"><span>Decline</span><span>Answer</span></div>
       </div>
@@ -205,7 +198,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
   useEffect(() => { if (!country && rates.length) setCountry(rates[0]); }, [country, rates]);
   const filteredRates = rates.filter((rate) => `${rate.country_name} ${rate.dial_code}`.toLowerCase().includes(search.toLowerCase()));
   const fullNumber = number.startsWith('+') ? number : `${country?.dial_code || ''}${number}`;
-  const minutes = country?.rate_per_min ? Math.floor(balance / country.rate_per_min) : null;
+  const minutes = country?.rate_per_min && Number.isFinite(balance) ? Math.floor(balance / country.rate_per_min) : null;
   const destinationCountry = parsePhoneNumberFromString(fullNumber)?.country || country?.country_code;
   const callerCountry = selectedNumber?.country_code || parsePhoneNumberFromString(selectedNumber?.phone_number || '')?.country;
   const routeRisk = selectedNumber?.source === 'verified' && callerCountry === destinationCountry && !['US', 'CA'].includes(destinationCountry || '');
@@ -225,6 +218,10 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
     }
     if (routeRisk) {
       setCallError(`Local carriers may not ring when ${selectedNumber.phone_number} is used for this same-country call. Switch to your Vocivo number.`);
+      return;
+    }
+    if (dialMode !== 'extension' && Number.isFinite(balance) && balance <= 0) {
+      setCallError('Calling credit is required before placing this call.');
       return;
     }
     setCallError('');
@@ -260,7 +257,7 @@ function WalletView({ balance, preview }) {
   return <section className="content-view wallet-view">
     <header className="workspace-header"><div><p className="eyebrow">CALLING CREDIT</p><h1>Top up balance</h1></div></header>
     <div className="wallet-layout">
-      <div className="wallet-balance"><span className="balance-icon"><CircleDollarSign size={21} /></span><div><small>AVAILABLE VOCIVO CREDIT</small><strong>${balance.toFixed(2)}</strong><p>Eligible call charges are deducted from your Vocivo wallet.</p></div><span>USD</span></div>
+      <div className="wallet-balance"><span className="balance-icon"><CircleDollarSign size={21} /></span><div><small>AVAILABLE VOCIVO CREDIT</small><strong>{Number.isFinite(balance) ? `$${balance.toFixed(2)}` : 'Organization managed'}</strong><p>Eligible call charges are deducted from your Vocivo wallet.</p></div><span>USD</span></div>
       <div className="payment-panel">
         <div className="payment-heading"><span><CreditCard size={20} /></span><div><h2>Vocivo billing</h2><p>Calling credit and subscription payments are managed by Vocivo without exposing the underlying carrier account.</p></div></div>
         <div className="payment-facts"><span><Check size={16} /><strong>Account</strong><small>Vocivo calling credit</small></span><span><ShieldCheck size={16} /><strong>Payment security</strong><small>Secure billing support</small></span><span><WalletCards size={16} /><strong>Currency</strong><small>USD</small></span></div>
@@ -326,7 +323,7 @@ export default function App() {
   const [preview, setPreview] = useState(false);
   const [loading, setLoading] = useState(Boolean(initialSession));
   const [profile, setProfile] = useState(null);
-  const [balance, setBalance] = useState(0);
+  const [balance, setBalance] = useState(null);
   const [rates, setRates] = useState([]);
   const [numbers, setNumbers] = useState([]);
   const [verifiedNumbers, setVerifiedNumbers] = useState([]);
@@ -352,7 +349,7 @@ export default function App() {
         if (!active) return;
         setProfile(resolvedProfile);
         if (resolvedProfile.admin_only) {
-          setBalance(0); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
+          setBalance(null); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
         }
         let bootstrap;
@@ -367,7 +364,7 @@ export default function App() {
         const owned = (bootstrap.numbers || []).filter((number) => number.source === 'owned');
         const verified = (bootstrap.numbers || []).filter((number) => number.source === 'verified');
         setProfile(resolvedProfile);
-        setBalance(Number(bootstrap.account?.balance) || 0);
+        setBalance(bootstrap.account?.balance == null ? null : Number(bootstrap.account.balance));
         setRates(buildDialingDirectory(bootstrap.account?.rates || []));
         setNumbers(owned);
         setVerifiedNumbers(verified);
