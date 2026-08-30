@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Call } from '@telnyx/react-voice-commons-sdk';
 import { CallLifecycleRegistry, transactCallWaiting } from '../../src/lib/callLifecycle';
-import { attachIceFailureListener, hasConfirmedBidirectionalMedia, isBidirectionalMediaReady, isTransportNetworkMigration, isVoiceSessionFresh, waitForBidirectionalMedia, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
+import { attachIceFailureListener, hasConfirmedBidirectionalMedia, isBidirectionalMediaReady, isSetupSignalingBlip, isTransportNetworkMigration, isVoiceSessionFresh, waitForBidirectionalMedia, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
 
 class MockPeerConnection {
   connectionState = 'connected';
@@ -113,25 +113,31 @@ test('media readiness requires live inbound and outbound audio tracks', async ()
   assert.equal(isBidirectionalMediaReady(call), false);
 });
 
-test('devices without getStats wait for stable tracks before starting the timer', async () => {
+test('devices without getStats do not start the call timer from SIP ACTIVE tracks', async () => {
   const peer = new MockPeerConnection();
   const call = mockTelnyxCall(peer);
-  const started = Date.now();
-  assert.equal(await waitForBidirectionalMedia(call, 2_000), true);
-  assert.ok(Date.now() - started >= 1_000, 'tracks-only media must not start the timer at SIP ACTIVE');
+  assert.equal(await waitForBidirectionalMedia(call, 400), false);
 });
 
-test('RTP confirmation waits for packets in both directions before starting the timer', async () => {
+test('a microphone-permission signaling drop during dial setup is not a lost call', () => {
+  assert.equal(isSetupSignalingBlip(0, undefined), true);
+  assert.equal(isSetupSignalingBlip(0, ''), true);
+  assert.equal(isSetupSignalingBlip(1, 'call-1'), false);
+  assert.equal(isSetupSignalingBlip(0, 'call-1'), false);
+});
+
+test('RTP confirmation waits for conversation packets after ringback', async () => {
   const peer = new MockPeerConnection();
-  let packets = false;
+  let inbound = 8;
+  let outbound = 8;
   peer.getStats = async () => new Map([
-    ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: packets ? 2 : 0 }],
-    ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: packets ? 2 : 0 }],
+    ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: outbound }],
+    ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: inbound }],
   ]);
   const call = mockTelnyxCall(peer);
-  assert.equal(await hasConfirmedBidirectionalMedia(call), false);
-  setTimeout(() => { packets = true; }, 120);
-  assert.equal(await waitForBidirectionalMedia(call, 500), true);
+  assert.equal(await hasConfirmedBidirectionalMedia(call, { inbound: 8, outbound: 8 }), false);
+  setTimeout(() => { inbound = 22; outbound = 22; }, 80);
+  assert.equal(await waitForBidirectionalMedia(call, 800), true);
 });
 
 test('network recovery ignores NetInfo initialization and only handles Wi-Fi/cellular migrations', () => {

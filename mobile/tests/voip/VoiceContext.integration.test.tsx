@@ -1,6 +1,11 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+jest.mock('expo-audio', () => ({
+  getRecordingPermissionsAsync: jest.fn(async () => ({ granted: true })),
+  requestRecordingPermissionsAsync: jest.fn(async () => ({ granted: true })),
+}));
+
 jest.mock('@react-native-community/netinfo', () => {
   let listener: ((state: unknown) => void) | null = null;
   return {
@@ -119,6 +124,7 @@ function immediateSubject<T>(initial: T) {
 test('mounted VoiceProvider confirms already-active media and tears down on transport loss', async () => {
   const observed: { current: ReturnType<typeof useVoice> | null } = { current: null };
   const callState$ = immediateSubject('active');
+  let packets = 0;
   const call = {
     callId: 'mounted-active-call',
     currentState: 'active',
@@ -141,10 +147,13 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
           iceConnectionState: 'connected',
           getSenders: () => [{ track: { kind: 'audio', enabled: true, readyState: 'live' } }],
           getReceivers: () => [{ track: { kind: 'audio', readyState: 'live' } }],
-          getStats: async () => new Map([
-            ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: 2 }],
-            ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: 2 }],
-          ]),
+          getStats: async () => {
+            packets += 16;
+            return new Map([
+              ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: packets }],
+              ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: packets }],
+            ]);
+          },
           restartIce: jest.fn(),
           addEventListener: jest.fn(),
           removeEventListener: jest.fn(),
@@ -166,7 +175,7 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
     const mediaReadyStartedAt = Date.now();
     (voipClient as any).__emitCall(call);
     await Promise.resolve();
-    expect(Date.now() - mediaReadyStartedAt).toBeLessThan(250);
+    expect(Date.now() - mediaReadyStartedAt).toBeLessThan(450);
   });
 
   if (!observed.current) throw new Error('VoiceContext did not mount.');

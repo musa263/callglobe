@@ -14,7 +14,8 @@ import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { loadVoiceSession, persistVoiceSession, voipClient } from '../lib/voipClient';
 import { CallLifecycleRegistry, isSettledLocalHangupError, isTerminalCallState, transactCallWaiting } from '../lib/callLifecycle';
-import { attachIceFailureListener, isBidirectionalMediaReady, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator, waitForBidirectionalMedia } from '../lib/voiceRecovery';
+import { attachIceFailureListener, isSetupSignalingBlip, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator, waitForBidirectionalMedia } from '../lib/voiceRecovery';
+import { ensureCallMicrophonePermission } from '../lib/callAudioPermission';
 import type { ActiveCall, CallerNumber, CallRate, MergedConference } from '../types';
 import { inviteHeader, visibleCallAddress } from '../voice/callIdentity';
 import { toLifecycleState, toUiCallPhase, waitForCallState } from '../voice/callState';
@@ -49,6 +50,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const lifecycleRef = useRef(new CallLifecycleRegistry());
   const callSubscriptions = useRef(new Map<string, Array<{ unsubscribe: () => void }>>());
   const routePollsRef = useRef(new Map<string, { cancelled: boolean; timer?: ReturnType<typeof setTimeout>; wake?: () => void }>());
+  const routePhaseByCallRef = useRef(new Map<string, string>());
+  const mediaConfirmInFlightRef = useRef(new Set<string>());
   const loginConfigRef = useRef<VoiceLoginConfig | null>(null);
   const iceListenerCleanupRef = useRef(new Map<string, () => void>());
   const lastNetworkTypeRef = useRef<NetInfoStateType | null>(null);
@@ -165,6 +168,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const described = nativeCall ? describeCall(nativeCall) : null;
     const snapshot = current?.id === id ? current : described ? { ...described, ...meta, id } : null;
     if (!snapshot || !id) return;
+    routePhaseByCallRef.current.delete(id);
     if (loggedCalls.current.has(id)) return;
     loggedCalls.current.add(id);
     const seconds = current?.id === id
@@ -194,9 +198,35 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [addHistory, describeCall, reportVoiceError]);
 
   const confirmMediaConnected = useCallback(async (call: Call) => {
+    if (mediaConfirmInFlightRef.current.has(call.callId)) return;
+    mediaConfirmInFlightRef.current.add(call.callId);
+    try {
     const stillThisCall = () => activeCallRef.current?.id === call.callId
       && call.currentState === TelnyxCallState.ACTIVE
       && !lifecycleRef.current.isTerminating(call.callId);
+    if (!call.isIncoming && callRouteIdsRef.current.has(call.callId)) {
+      const deadline = Date.now() + 20_000;
+      const routeId = callRouteIdsRef.current.get(call.callId);
+      while (Date.now() < deadline && stillThisCall() && routePhaseByCallRef.current.get(call.callId) !== 'connected') {
+        if (routeId) {
+          try {
+            const result = await api.get<{ phase: string }>(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
+            if (result.phase === 'connected') {
+              routePhaseByCallRef.current.set(call.callId, 'connected');
+              break;
+            }
+          } catch (failure) {
+            reportVoiceError('confirm outbound bridge status', failure);
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      if (!stillThisCall()) return;
+      if (routePhaseByCallRef.current.get(call.callId) !== 'connected') {
+        if (stillThisCall()) setError('The call is connected, but audio is still starting. Stay on the call.');
+        return;
+      }
+    }
     let mediaReady = await waitForBidirectionalMedia(call);
     if (!stillThisCall()) return;
     if (!mediaReady) {
@@ -208,8 +238,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (!stillThisCall()) return;
       mediaReady = await waitForBidirectionalMedia(call);
     }
-    if (!stillThisCall()) return;
-    if (!mediaReady && isBidirectionalMediaReady(call)) mediaReady = true;
     if (!mediaReady) {
       if (stillThisCall()) setError('The call is connected, but audio is still starting. Stay on the call.');
       return;
@@ -224,6 +252,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       activeCallRef.current = next;
       return next;
     });
+    } finally {
+      mediaConfirmInFlightRef.current.delete(call.callId);
+    }
   }, [reportVoiceError]);
 
   const attachCall = useCallback((call: Call | null) => {
@@ -276,7 +307,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         }
         const phase = toUiCallPhase(state, callMetaRef.current.get(call.callId)?.connectedAt);
         if (state === TelnyxCallState.ACTIVE) {
-          cancelRoutePolling(call.callId);
           stopRingback();
           void confirmMediaConnected(call).catch((failure) => reportVoiceError('confirm bidirectional media', failure));
         }
@@ -378,6 +408,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         }, delay);
         return;
       }
+      if (state === TelnyxConnectionState.DISCONNECTED) {
+        const liveCount = voipClient.currentCalls.filter((call) => ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)).length;
+        if (isSetupSignalingBlip(liveCount, activeCallRef.current?.id)) return;
+      }
       if (state === TelnyxConnectionState.ERROR || state === TelnyxConnectionState.DISCONNECTED) {
         emergencyTransportCleanup(state);
       }
@@ -412,6 +446,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       lifecycleRef.current.clear();
     };
   }, [attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup, reportVoiceError]);
+
+  useEffect(() => {
+    if (!isAuthenticated || isPreview) return;
+    void ensureCallMicrophonePermission().catch((failure) => reportVoiceError('request microphone permission', failure));
+  }, [isAuthenticated, isPreview, reportVoiceError]);
 
   useVoiceRegistration({
     activeCallRef,
@@ -455,18 +494,17 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     for (let attempt = 0; attempt < 100 && !monitor.cancelled; attempt += 1) {
       try {
         const result = await api.get<{ phase: 'dialing' | 'ringing' | 'connected' | 'ended' | 'failed'; connectedAt?: string; failureCause?: string }>(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
+        if (result.phase === 'connected') {
+          routePhaseByCallRef.current.set(callId, 'connected');
+          stopRingback();
+        }
         if (monitor.cancelled) return;
         const sdkCall = voipClient.getCall(callId);
-        const sdkIsLive = sdkCall && [TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(sdkCall.currentState);
-        if (sdkIsLive) {
+        const sdkIsLive = Boolean(sdkCall && [TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(sdkCall.currentState));
+        if (sdkIsLive && (result.phase === 'connected' || result.phase === 'ended' || result.phase === 'failed')) {
           cancelRoutePolling(callId);
           stopRingback();
-          return;
-        }
-        if (result.phase === 'connected') {
-          // Route status confirms the server bridge only. The SDK ACTIVE event
-          // remains authoritative for UI state and media timer inception.
-          stopRingback();
+          if (result.phase === 'connected') return;
         }
         if (result.phase === 'failed' || result.phase === 'ended') {
           stopRingback();
@@ -511,7 +549,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setError(lastRouteError instanceof Error ? 'Call status could not be confirmed. The live call remains available.' : 'Call setup is taking longer than expected.');
     }
     if (routePollsRef.current.get(callId) === monitor) routePollsRef.current.delete(callId);
-  }, [cancelRoutePolling, reportVoiceError, stopRingback, terminateCall]);
+  }, [cancelRoutePolling, confirmMediaConnected, reportVoiceError, stopRingback, terminateCall]);
 
   const startCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string, photoUrl?: string) => {
     setError(null);
@@ -524,7 +562,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 1700);
       return;
     }
-    if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
+    await ensureCallMicrophonePermission();
+    await waitForVoiceConnection();
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
     const startedAt = Date.now();
@@ -619,6 +658,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 900);
       return;
     }
+    await ensureCallMicrophonePermission();
+    await waitForVoiceConnection();
     const destination = `sip:${sipUsername}@sip.telnyx.com`;
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
@@ -628,7 +669,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     setActiveCall(optimisticCall);
     startingCallRef.current = true;
     try {
-      await waitForVoiceConnection();
       const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string; destinationName?: string; destinationExtension?: string; destination: string }>('/api/voice/route', { routeId, destination, targetExtension: extension, flow: 'internal' });
       if (startAttemptRef.current !== attempt) {
         await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed internal route', failure));
@@ -677,6 +717,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const incoming = voipClient.getCall(waitingCall.id);
     const current = voipClient.currentActiveCall;
     if (!incoming) return;
+    await ensureCallMicrophonePermission();
     await transactCallWaiting({
       answerIncoming: async () => {
         await incoming.answer();
@@ -870,6 +911,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     if (!call || !call.isIncoming) return;
     if (![TelnyxCallState.RINGING, TelnyxCallState.CONNECTING].includes(call.currentState)) return;
     setError(null);
+    await ensureCallMicrophonePermission();
     setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'connecting' } : current);
     try {
       voipClient.setActiveCall(call.callId);

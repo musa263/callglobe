@@ -3,43 +3,10 @@ import { TelnyxRTC } from '@telnyx/webrtc';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
 import { describeRemote, getCallId } from '../voice/callIdentity';
+import { waitForWebCallMedia } from '../voice/webCallMedia';
 import { reportWebVoiceError, telnyxErrorMessage } from '../voice/telemetry';
 
 const TERMINAL_STATES = new Set(['hangup', 'destroy', 'purge']);
-
-async function waitForWebCallMedia(call, timeoutMs = 4_000) {
-  const deadline = Date.now() + timeoutMs;
-  let tracksReadySince = null;
-  while (Date.now() < deadline) {
-    const peer = call?.peer?.instance;
-    const remoteTracks = call?.remoteStream?.getAudioTracks?.() || [];
-    const hasRemoteAudio = remoteTracks.some((track) => track.readyState === 'live');
-    if (peer?.getStats) {
-      try {
-        const stats = await peer.getStats();
-        let inbound = false;
-        let outbound = false;
-        stats.forEach((record) => {
-          const audio = !record.kind || record.kind === 'audio';
-          if (record.type === 'inbound-rtp' && audio && (Number(record.packetsReceived || 0) > 0 || Number(record.bytesReceived || 0) > 0)) inbound = true;
-          if (record.type === 'outbound-rtp' && audio && (Number(record.packetsSent || 0) > 0 || Number(record.bytesSent || 0) > 0)) outbound = true;
-        });
-        if (inbound && outbound) return true;
-      } catch {
-        // Fall through to remote-track hold below.
-      }
-    }
-    if (hasRemoteAudio) {
-      tracksReadySince ??= Date.now();
-      if (Date.now() - tracksReadySince >= 1_200) return true;
-    } else {
-      tracksReadySince = null;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  const remoteTracks = call?.remoteStream?.getAudioTracks?.() || [];
-  return remoteTracks.some((track) => track.readyState === 'live');
-}
 
 function cancelWebRoute(routeId) {
   return api('/api/voice/cancel', { method: 'POST', body: { routeId } })
@@ -101,10 +68,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
 
   const confirmWebMedia = useCallback(async (call, callId) => {
     if (!callId) return;
-    const ready = call ? await waitForWebCallMedia(call, routePhaseRef.current === 'connected' ? 1_500 : 4_000) : false;
+    const ready = call ? await waitForWebCallMedia(call, 8_000) : false;
     if (getCallId(callRef.current) !== callId) return;
-    const hasRemoteAudio = Boolean(call?.remoteStream?.getAudioTracks?.()?.some((track) => track.readyState === 'live'));
-    if (!ready && !hasRemoteAudio && routePhaseRef.current !== 'connected') return;
+    if (!ready) return;
     if (!connectedAtByCallIdRef.current.has(callId)) connectedAtByCallIdRef.current.set(callId, Date.now());
     setMediaReady(true);
   }, []);

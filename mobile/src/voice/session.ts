@@ -25,7 +25,7 @@ export function createRouteId() {
   return `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function waitForVoiceConnection(timeoutMs = 3000) {
+export async function waitForVoiceConnection(timeoutMs = 12_000) {
   const deadline = Date.now() + timeoutMs;
   while (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
