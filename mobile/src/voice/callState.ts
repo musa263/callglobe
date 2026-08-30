@@ -11,6 +11,11 @@ export function toCallPhase(state: TelnyxCallState): CallPhase {
   return 'ended';
 }
 
+export function toUiCallPhase(state: TelnyxCallState, connectedAt?: number): CallPhase {
+  if (state === TelnyxCallState.ACTIVE && !connectedAt) return 'connecting';
+  return toCallPhase(state);
+}
+
 export function toLifecycleState(state: TelnyxCallState): CallLifecycleState {
   if (state === TelnyxCallState.CONNECTING) return 'CONNECTING';
   if (state === TelnyxCallState.RINGING) return 'RINGING';

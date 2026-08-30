@@ -8,6 +8,11 @@ export function isTerminalCallState(state: CallLifecycleState) {
   return terminalStates.has(state);
 }
 
+export function isSettledLocalHangupError(error: unknown) {
+  const text = error instanceof Error ? error.message : String(error ?? '');
+  return /already (?:ended|hung|terminated)|no longer active|call (?:has )?ended|not found|no active call|invalid call (?:id|state)/i.test(text);
+}
+
 export function canTransitionCallState(current: CallLifecycleState, next: CallLifecycleState, terminationRequested = false) {
   if (current === next || isTerminalCallState(current)) return false;
   if (terminationRequested && !isTerminalCallState(next)) return false;

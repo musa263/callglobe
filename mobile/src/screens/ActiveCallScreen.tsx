@@ -85,6 +85,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const [answerBusy, setAnswerBusy] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
   const [removingParticipant, setRemovingParticipant] = useState('');
+  const [endingCall, setEndingCall] = useState(false);
   useEffect(() => {
     if (!activeCall) { setRemotePhoto(undefined); return; }
     if (activeCall.photoUrl) { setRemotePhoto(activeCall.photoUrl); return; }
@@ -124,6 +125,12 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
     try { await transferCall(target.id); setShowTransfer(false); }
     catch (transferFailure) { setTransferError(transferFailure instanceof Error ? transferFailure.message : 'The call could not be transferred.'); }
     finally { setTransferBusy(''); }
+  };
+  const hangup = async () => {
+    if (endingCall) return;
+    setEndingCall(true);
+    try { await endCall(); }
+    finally { setEndingCall(false); }
   };
   const merge = async () => {
     if (!heldCall || mergeBusy || conference) return;
@@ -178,7 +185,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
       </View>
 
       {incomingPending ? <View style={[styles.incomingActions, { paddingBottom: Math.max(insets.bottom + 28, 42) }]}>
-        <Pressable accessibilityLabel="Decline incoming call" disabled={answerBusy} onPress={endCall} style={({ pressed }) => [styles.incomingAction, styles.incomingDecline, pressed && styles.endPressed]}><PhoneOff size={29} color={colors.white} /><Text style={styles.incomingActionLabel}>Decline</Text></Pressable>
+        <Pressable accessibilityLabel="Decline incoming call" disabled={answerBusy || endingCall} onPress={hangup} style={({ pressed }) => [styles.incomingAction, styles.incomingDecline, pressed && styles.endPressed]}><PhoneOff size={29} color={colors.white} /><Text style={styles.incomingActionLabel}>Decline</Text></Pressable>
         <Pressable accessibilityLabel="Answer incoming call" disabled={answerBusy} onPress={acceptIncoming} style={({ pressed }) => [styles.incomingAction, styles.incomingAccept, pressed && styles.endPressed]}>{answerBusy ? <ActivityIndicator color={colors.ink} /> : <Phone size={29} color={colors.ink} fill={colors.ink} />}<Text style={[styles.incomingActionLabel, styles.incomingAcceptLabel]}>{answerBusy ? 'Answering' : 'Answer'}</Text></Pressable>
       </View> : <View style={[styles.controlsSection, { paddingBottom: Math.max(insets.bottom + 20, 34) }]}>
         <View style={styles.controlsRow}>
@@ -191,7 +198,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall?.routeId || !activeCall.routeId || activeCall.phase !== 'active' || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall?.routeId && activeCall.routeId && activeCall.phase === 'active' ? colors.text : colors.textFaint} />}</Control>
           <Control label="Transfer" disabled={!transferEnabled} onPress={openTransfer}><PhoneForwarded size={24} color={transferEnabled ? colors.text : colors.textFaint} /></Control>
         </View>
-        <Pressable accessibilityLabel="End call" onPress={endCall} style={({ pressed }) => [styles.end, pressed && styles.endPressed]}><PhoneOff size={30} color={colors.white} strokeWidth={2.4} /></Pressable>
+        <Pressable accessibilityLabel="End call" disabled={endingCall} onPress={hangup} style={({ pressed }) => [styles.end, pressed && styles.endPressed]}>{endingCall ? <ActivityIndicator color={colors.white} /> : <PhoneOff size={30} color={colors.white} strokeWidth={2.4} />}</Pressable>
       </View>}
 
       <Modal visible={showKeypad} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowKeypad(false)}>

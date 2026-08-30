@@ -141,6 +141,10 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
           iceConnectionState: 'connected',
           getSenders: () => [{ track: { kind: 'audio', enabled: true, readyState: 'live' } }],
           getReceivers: () => [{ track: { kind: 'audio', readyState: 'live' } }],
+          getStats: async () => new Map([
+            ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: 2 }],
+            ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: 2 }],
+          ]),
           restartIce: jest.fn(),
           addEventListener: jest.fn(),
           removeEventListener: jest.fn(),

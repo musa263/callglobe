@@ -7,6 +7,39 @@ import { reportWebVoiceError, telnyxErrorMessage } from '../voice/telemetry';
 
 const TERMINAL_STATES = new Set(['hangup', 'destroy', 'purge']);
 
+async function waitForWebCallMedia(call, timeoutMs = 4_000) {
+  const deadline = Date.now() + timeoutMs;
+  let tracksReadySince = null;
+  while (Date.now() < deadline) {
+    const peer = call?.peer?.instance;
+    const remoteTracks = call?.remoteStream?.getAudioTracks?.() || [];
+    const hasRemoteAudio = remoteTracks.some((track) => track.readyState === 'live');
+    if (peer?.getStats) {
+      try {
+        const stats = await peer.getStats();
+        let inbound = false;
+        let outbound = false;
+        stats.forEach((record) => {
+          const audio = !record.kind || record.kind === 'audio';
+          if (record.type === 'inbound-rtp' && audio && (Number(record.packetsReceived || 0) > 0 || Number(record.bytesReceived || 0) > 0)) inbound = true;
+          if (record.type === 'outbound-rtp' && audio && (Number(record.packetsSent || 0) > 0 || Number(record.bytesSent || 0) > 0)) outbound = true;
+        });
+        if (inbound && outbound) return true;
+      } catch {
+        // Fall through to remote-track hold below.
+      }
+    }
+    if (hasRemoteAudio) {
+      tracksReadySince ??= Date.now();
+      if (Date.now() - tracksReadySince >= 1_200) return true;
+    } else {
+      tracksReadySince = null;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
 export function useTelnyxVoice(token, enabled, identity = {}) {
   const clientRef = useRef(null);
   const clientListenerCleanupRef = useRef(null);
@@ -43,6 +76,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [loginGeneration, setLoginGeneration] = useState(0);
   const [callStarting, setCallStarting] = useState(false);
+  const [mediaReady, setMediaReady] = useState(false);
 
   const resumeAudio = useCallback(async () => {
     const media = document.getElementById('remoteMedia');
@@ -145,6 +179,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     setConference(null);
     setState(null);
     setRoutePhase(null);
+    setMediaReady(false);
     setCallStarting(false);
   }, [stopIncomingRingtone, stopRingback]);
 
@@ -252,6 +287,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         setConference(null);
         setState(null);
         setMuted(false);
+        setMediaReady(false);
         setRoutePhase(null);
         setRemoteIdentity({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
         setAudioBlocked(false);
@@ -323,7 +359,15 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           incomingCallRef.current = null;
           setIncomingCall(null);
           stopIncomingRingtone();
-          if (callId && !connectedAtByCallIdRef.current.has(callId)) connectedAtByCallIdRef.current.set(callId, Date.now());
+          const liveCall = updatedCall;
+          const liveCallId = callId;
+          void waitForWebCallMedia(liveCall).then((ready) => {
+            if (!ready || getCallId(callRef.current) !== liveCallId) return;
+            if (liveCallId && !connectedAtByCallIdRef.current.has(liveCallId)) {
+              connectedAtByCallIdRef.current.set(liveCallId, Date.now());
+              setMediaReady(true);
+            }
+          });
           resumeAudio().catch((failure) => reportWebVoiceError('resume connected-call audio', failure));
         }
         if (TERMINAL_STATES.has(nextState)) {
@@ -352,6 +396,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           setIncomingCall(null);
           setState(null);
           setMuted(false);
+          setMediaReady(false);
           setRemoteIdentity({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
           const held = heldCallRef.current;
           if (held && !conferenceRef.current) {
@@ -363,6 +408,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
               setCall(held.call);
               setState('active');
               setRoutePhase('connected');
+              setMediaReady(true);
               setRemoteIdentity(held.identity);
             }).catch((failure) => reportWebVoiceError('resume held call after peer ended', failure));
           } else if (conferenceRef.current) {
@@ -606,6 +652,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     setConference(null);
     setState(null);
     setMuted(false);
+    setMediaReady(false);
     setRoutePhase('ended');
   }, [stopIncomingRingtone, stopRingback]);
   const toggleMute = useCallback(() => {
@@ -734,7 +781,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   return {
     ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state: state === 'held' ? 'held' : (routePhase === 'connected' ? 'active' : routePhase || state), muted, dialedNumber, endedCall, callStarting,
     canMerge: Boolean(heldCall && !conference && heldCall.routeId && routeIdRef.current),
-    connected: routePhase ? routePhase === 'connected' : ['active', 'held'].includes(state),
+    connected: mediaReady || state === 'held',
     incoming: String(call?.direction || '').toLowerCase() === 'inbound',
     active: (routePhase ? ['requesting', 'ringing', 'connected'].includes(routePhase) : ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state)) && !incomingCall,
     notificationPermission, enableBrowserAlerts, audioBlocked, resumeAudio,

@@ -100,7 +100,9 @@ function statRecords(report: unknown): Array<Record<string, unknown>> {
 export async function hasConfirmedBidirectionalMedia(call: Call | null) {
   if (!isBidirectionalMediaReady(call)) return false;
   const peer = peerConnectionForCall(call);
-  if (!peer?.getStats) return true;
+  // ICE + live tracks are not enough: Telnyx can report ACTIVE (SIP 200)
+  // before the first audible RTP packet. Missing getStats must not start the timer.
+  if (!peer?.getStats) return false;
   const records = statRecords(await peer.getStats());
   const isAudio = (record: Record<string, unknown>) => !record.kind || record.kind === 'audio' || record.mediaType === 'audio';
   const outbound = records.some((record) => record.type === 'outbound-rtp' && isAudio(record)
@@ -110,10 +112,20 @@ export async function hasConfirmedBidirectionalMedia(call: Call | null) {
   return outbound && inbound;
 }
 
+const TRACKS_ONLY_HOLD_MS = 1_200;
+
 export async function waitForBidirectionalMedia(call: Call, timeoutMs = 4_000) {
   const deadline = Date.now() + timeoutMs;
+  let tracksReadySince: number | null = null;
   while (Date.now() < deadline) {
     if (await hasConfirmedBidirectionalMedia(call)) return true;
+    if (isBidirectionalMediaReady(call)) {
+      tracksReadySince ??= Date.now();
+      const peer = peerConnectionForCall(call);
+      if (!peer?.getStats && Date.now() - tracksReadySince >= TRACKS_ONLY_HOLD_MS) return true;
+    } else {
+      tracksReadySince = null;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return hasConfirmedBidirectionalMedia(call);

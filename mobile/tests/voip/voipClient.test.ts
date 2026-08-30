@@ -107,11 +107,18 @@ test('media readiness requires live inbound and outbound audio tracks', async ()
   const peer = new MockPeerConnection();
   const call = mockTelnyxCall(peer);
   assert.equal(isBidirectionalMediaReady(call), true);
-  const started = Date.now();
-  assert.equal(await waitForBidirectionalMedia(call, 250), true);
-  assert.ok(Date.now() - started < 100, 'ready media should not wait for an ICE timeout');
+  assert.equal(await hasConfirmedBidirectionalMedia(call), false);
+  assert.equal(await waitForBidirectionalMedia(call, 250), false);
   peer.getReceivers = () => [];
   assert.equal(isBidirectionalMediaReady(call), false);
+});
+
+test('devices without getStats wait for stable tracks before starting the timer', async () => {
+  const peer = new MockPeerConnection();
+  const call = mockTelnyxCall(peer);
+  const started = Date.now();
+  assert.equal(await waitForBidirectionalMedia(call, 2_000), true);
+  assert.ok(Date.now() - started >= 1_000, 'tracks-only media must not start the timer at SIP ACTIVE');
 });
 
 test('RTP confirmation waits for packets in both directions before starting the timer', async () => {

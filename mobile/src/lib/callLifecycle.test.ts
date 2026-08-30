@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canTransitionCallState, SerialTaskQueue, SingleFlightTermination } from './callLifecycle';
+import { canTransitionCallState, isSettledLocalHangupError, SerialTaskQueue, SingleFlightTermination } from './callLifecycle';
+
+test('already-ended SDK hangup errors are treated as settled', () => {
+  assert.equal(isSettledLocalHangupError(new Error('The call has already ended')), true);
+  assert.equal(isSettledLocalHangupError(new Error('call is no longer active')), true);
+  assert.equal(isSettledLocalHangupError(new Error('network timeout')), false);
+});
 
 test('termination executes SIP signaling only once', async () => {
   const lock = new SingleFlightTermination();
