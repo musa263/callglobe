@@ -1,14 +1,29 @@
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts
-index 7776025..16506a9 100644
+index 7776025..f9e2b1a 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts
-@@ -483 +483 @@ export class Call extends EventEmitter<CallEvents> {
+@@ -480,7 +480,7 @@ export class Call extends EventEmitter<CallEvents> {
+    * close the peer connection, and set the call state to 'ended'.
+    * @param customHeaders Optional custom headers to include with the hangup request
+    */
 -  public hangup = (customHeaders?: { name: string; value: string }[]) => {
 +  public hangup = async (customHeaders?: { name: string; value: string }[]) => {
-@@ -493 +493 @@ export class Call extends EventEmitter<CallEvents> {
+     // Log local hangup to call report
+     this.callReportCollector?.log('info', 'Call ended', {
+       cause: 'USER_BUSY',
+@@ -490,7 +490,7 @@ export class Call extends EventEmitter<CallEvents> {
+     // Stop debug stats collection before ending the call
+     this.stopDebugStats();
+ 
 -    this.connection.send(
 +    await this.connection.sendAndWait(
-@@ -508,0 +509,28 @@ export class Call extends EventEmitter<CallEvents> {
+       createHangupRequest({
+         callId: this.callId,
+         telnyxLegId: this.telnyxLegId!,
+@@ -505,6 +505,34 @@ export class Call extends EventEmitter<CallEvents> {
+     this.closePeerAfterCallReport('done');
+     this.setState('ended');
+   };
 +  /**
 +   * Restart ICE and renegotiate the active Telnyx media dialog after a network
 +   * interface migration. The attach transaction is Telnyx's supported
@@ -37,18 +52,30 @@ index 7776025..16506a9 100644
 +    if (this.isTrickleIceEnabled()) this.peer.flushPendingLocalCandidates();
 +  };
 +
+ 
+   /**
+    * Hold the call
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
-index edab35e..fe1fa99 100644
+index edab35e..d5b21a3 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
-@@ -31,0 +32,2 @@ export interface ClientOptions {
+@@ -28,6 +28,8 @@ export interface ClientOptions {
+    * Outbound calls can override this per call with peerConnectionOptions.useTrickleIce.
+    * @default false
+    */
 +  /** ICE servers used by inbound calls and as the default for outbound calls. */
 +  iceServers?: RTCIceServer[];
+   useTrickleIce?: boolean;
+   /**
+    * The push notification device token, used for receiving push notifications on a specific device.
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
-index 74f800d..6566451 100644
+index 74f800d..f26feda 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
-@@ -434 +434,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+@@ -431,7 +431,13 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+       telnyxSessionId: null,
+       telnyxLegId: null,
+       callId: null,
 -      options,
 +      options: {
 +        ...options,
@@ -57,15 +84,33 @@ index 74f800d..6566451 100644
 +          iceServers: options.peerConnectionOptions?.iceServers ?? this.options.iceServers,
 +        },
 +      },
-@@ -1127,0 +1134 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+       debug: this.options.debug,
+       callReportConfig: this.getCallReportConfig(),
+       pushWhenActive: this.options.pushWhenActive,
+@@ -1124,6 +1130,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+         options: {
+           destinationNumber: msg.params.caller_id_number,
+           peerConnectionOptions: {
 +            iceServers: this.options.iceServers,
-@@ -1278,0 +1286 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+             useTrickleIce: this.options.useTrickleIce,
+           },
+         },
+@@ -1275,6 +1282,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
+       options: {
+         destinationNumber: msg.params.caller_id_number,
+         peerConnectionOptions: {
 +          iceServers: this.options.iceServers,
+           useTrickleIce: this.options.useTrickleIce,
+         },
+       },
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts
 index 50b0269..48afeec 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts
-@@ -175 +175,8 @@ export class Connection extends EventEmitter<ConnectionEvents> {
+@@ -172,7 +172,14 @@ export class Connection extends EventEmitter<ConnectionEvents> {
+     const deferred = createDeferredPromise<unknown>();
+     this.transactions.set(msg.id, deferred);
+     this.send(msg);
 -    return deferred.promise;
 +    let timeout: ReturnType<typeof setTimeout>;
 +    const deadline = new Promise<never>((_resolve, reject) => {
@@ -75,17 +120,37 @@ index 50b0269..48afeec 100644
 +      }, 12_000);
 +    });
 +    return Promise.race([deferred.promise, deadline]).finally(() => clearTimeout(timeout));
+   };
+ 
+   public close = () => {
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts
-index 547b9e8..3e3e18b 100644
+index 547b9e8..6d3ac89 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts
-@@ -98 +98,3 @@ export class Peer {
+@@ -95,7 +95,9 @@ export class Peer {
+     if (this.iceGatheringComplete) {
+       // Inbound pre-accept flows may never await ICE completion. Attach a handler
+       // before rejecting so close() is marked handled while awaited callers still reject.
 -      this.iceGatheringComplete.promise.catch(() => {});
 +      this.iceGatheringComplete.promise.catch((error) => {
 +        log.debug('[Peer] ICE gathering promise closed during teardown', error);
 +      });
-@@ -178 +180 @@ export class Peer {
+       this.iceGatheringComplete.reject(new Error('Peer connection closed'));
+       this.iceGatheringComplete = null;
+     }
+@@ -175,13 +177,14 @@ export class Peer {
+ 
+     return this;
+   };
 -  public createOffer = async () => {
 +  public createOffer = async (options?: { iceRestart?: boolean }) => {
-@@ -182,0 +185 @@ export class Peer {
+     if (!this.instance) {
+       throw new Error('[Peer] Cannot create offer before peer connection');
+     }
+     const offer = await this.instance.createOffer({
+       offerToReceiveAudio: true,
+       offerToReceiveVideo: false,
 +      ...(options?.iceRestart ? { iceRestart: true } : {}),
+     });
+ 
+     await this.instance.setLocalDescription(offer).catch((error) => {
