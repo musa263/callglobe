@@ -42,7 +42,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const multiCallBusyRef = useRef(false);
   const startingCallRef = useRef(false);
   const startAttemptRef = useRef(0);
-  const attachTimersRef = useRef(new Map());
+  const attachTimersRef = useRef(new Map<string, Array<ReturnType<typeof setTimeout>>>());
   const activeCallRef = useRef<ActiveCall | null>(null);
   const durationRef = useRef(0);
   const loggedCalls = useRef(new Set<string>());
