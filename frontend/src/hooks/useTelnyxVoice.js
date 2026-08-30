@@ -37,7 +37,14 @@ async function waitForWebCallMedia(call, timeoutMs = 4_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return false;
+  const remoteTracks = call?.remoteStream?.getAudioTracks?.() || [];
+  return remoteTracks.some((track) => track.readyState === 'live');
+}
+
+function cancelWebRoute(routeId) {
+  return api('/api/voice/cancel', { method: 'POST', body: { routeId } })
+    .catch(() => api('/api/voice/cancel', { method: 'POST', body: { routeId } }))
+    .catch((failure) => reportWebVoiceError('cancel route during hangup', failure));
 }
 
 export function useTelnyxVoice(token, enabled, identity = {}) {
@@ -639,7 +646,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     routeIdRef.current = null;
     stopRingback();
     stopIncomingRingtone();
-    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch((failure) => reportWebVoiceError('cancel route during hangup', failure)));
+    [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => cancelWebRoute(id));
     try { current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up active browser call', failure); }
     try { held?.call?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up held browser call', failure); }
     callRef.current = null;

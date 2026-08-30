@@ -14,7 +14,7 @@ import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { loadVoiceSession, persistVoiceSession, voipClient } from '../lib/voipClient';
 import { CallLifecycleRegistry, isSettledLocalHangupError, isTerminalCallState, transactCallWaiting } from '../lib/callLifecycle';
-import { attachIceFailureListener, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator, waitForBidirectionalMedia } from '../lib/voiceRecovery';
+import { attachIceFailureListener, isBidirectionalMediaReady, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator, waitForBidirectionalMedia } from '../lib/voiceRecovery';
 import type { ActiveCall, CallerNumber, CallRate, MergedConference } from '../types';
 import { inviteHeader, visibleCallAddress } from '../voice/callIdentity';
 import { toLifecycleState, toUiCallPhase, waitForCallState } from '../voice/callState';
@@ -99,15 +99,16 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
   }, []);
 
+  const cancelRemoteRoute = useCallback((routeId?: string) => {
+    if (!routeId) return Promise.resolve();
+    return api.post('/api/voice/cancel', { routeId }).catch(() => api.post('/api/voice/cancel', { routeId })).catch((failure) => {
+      reportVoiceError('cancel route during hangup', failure);
+    });
+  }, [reportVoiceError]);
+
   const terminateCall = useCallback((callId: string, routeId?: string) => lifecycleRef.current.terminate(callId, async () => {
     const call = voipClient.getCall(callId);
-    // Hang up the local SDK immediately so End Call is not blocked on Vercel or
-    // Telnyx Call Control retries. Forked destinations are cancelled in parallel.
-    const cancelRemote = routeId
-      ? api.post('/api/voice/cancel', { routeId }).catch((failure) => {
-        reportVoiceError('cancel route during hangup', failure);
-      })
-      : Promise.resolve();
+    const cancelRemote = cancelRemoteRoute(routeId);
     try {
       if (call) await call.hangup();
       else await VoicePnBridge.endCall(callId);
@@ -120,7 +121,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (!alreadyEnded) throw error;
     }
     void cancelRemote;
-  }), [reportVoiceError]);
+  }), [cancelRemoteRoute]);
 
   useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
@@ -193,19 +194,26 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [addHistory, describeCall, reportVoiceError]);
 
   const confirmMediaConnected = useCallback(async (call: Call) => {
+    const stillThisCall = () => activeCallRef.current?.id === call.callId
+      && call.currentState === TelnyxCallState.ACTIVE
+      && !lifecycleRef.current.isTerminating(call.callId);
     let mediaReady = await waitForBidirectionalMedia(call);
-    if (call.currentState !== TelnyxCallState.ACTIVE) return;
+    if (!stillThisCall()) return;
     if (!mediaReady) {
-      setError('The call connected, but the audio path is still recovering.');
       try {
         await mediaRecoveryRef.current.recover(call, 'active-call-media-not-ready');
       } catch (failure) {
         reportVoiceError('recover active call media', failure);
       }
-      if (call.currentState !== TelnyxCallState.ACTIVE) return;
+      if (!stillThisCall()) return;
       mediaReady = await waitForBidirectionalMedia(call);
     }
-    if (!mediaReady || call.currentState !== TelnyxCallState.ACTIVE) return;
+    if (!stillThisCall()) return;
+    if (!mediaReady && isBidirectionalMediaReady(call)) mediaReady = true;
+    if (!mediaReady) {
+      if (stillThisCall()) setError('The call is connected, but audio is still starting. Stay on the call.');
+      return;
+    }
     const existing = callMetaRef.current.get(call.callId) ?? {};
     const connectedAt = existing.connectedAt ?? Date.now();
     callMetaRef.current.set(call.callId, { ...existing, connectedAt });
@@ -796,8 +804,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     startingCallRef.current = false;
     cancelRoutePolling();
     stopRingback();
-    attachTimersRef.current.forEach((timers) => timers.forEach((timer) => clearTimeout(timer)));
-    attachTimersRef.current.clear();
+    const endingIds = conferenceCallIdsRef.current.size
+      ? [...conferenceCallIdsRef.current]
+      : [activeCall?.id || callRef.current?.callId].filter((id): id is string => Boolean(id));
+    endingIds.forEach((id) => {
+      (attachTimersRef.current.get(id) || []).forEach((timer) => clearTimeout(timer));
+      attachTimersRef.current.delete(id);
+    });
     if (conferenceCallIdsRef.current.size) {
       const mergedIds = [...conferenceCallIdsRef.current];
       try {

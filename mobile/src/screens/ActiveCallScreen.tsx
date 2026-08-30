@@ -71,7 +71,7 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
 export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const insets = useSafeAreaInsets();
   const { rates, callerNumbers, profile } = useAuth();
-  const { activeCall, waitingCall, heldCall, conference, duration, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant } = useVoice();
+  const { activeCall, waitingCall, heldCall, conference, duration, error: voiceError, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant } = useVoice();
   const [showKeypad, setShowKeypad] = useState(false);
   const [showAddCall, setShowAddCall] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -182,6 +182,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
         {activeCall.ratePerMinute ? <Text style={styles.rate}>${activeCall.ratePerMinute.toFixed(3)} per minute</Text> : null}
         {conference ? <Pressable accessibilityRole="button" accessibilityLabel="Manage conference participants" onPress={() => setShowParticipants(true)} style={styles.conference}><View style={styles.conferenceIcon}><Merge size={15} color={colors.ink} /></View><View style={styles.conferenceCopy}><Text style={styles.conferenceLabel}>MERGED CONFERENCE</Text><Text numberOfLines={1} style={styles.conferenceNames}>{conference.participants.map((participant) => participant.displayName || participant.number).join(' + ')}</Text></View><View style={styles.liveBadge}><Text style={styles.liveBadgeText}>MANAGE</Text></View></Pressable> : heldCall ? <View style={styles.held}><View style={styles.heldCheck}><Check size={13} color={colors.mint} /></View><Text numberOfLines={1} style={styles.heldText}>{heldCall.displayName || heldCall.number} is on hold</Text><Pressable disabled={swapBusy} onPress={swap} style={styles.swapButton}><Text style={styles.swapText}>{swapBusy ? 'Wait' : 'Swap'}</Text></Pressable></View> : null}
         {!!mergeError && <Text style={styles.mergeError}>{mergeError}</Text>}
+        {!!voiceError && <Text style={styles.mergeError}>{voiceError}</Text>}
       </View>
 
       {incomingPending ? <View style={[styles.incomingActions, { paddingBottom: Math.max(insets.bottom + 28, 42) }]}>
