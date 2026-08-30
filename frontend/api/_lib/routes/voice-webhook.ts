@@ -20,7 +20,7 @@ import { quarantineSecurityEvent } from '../security-quarantine.js';
 import { storeCallEvent } from '../call-event-store.js';
 import { clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
 import { normalizeE164 } from '../tenancy.js';
-import { forwardingTargetForCause, isUnansweredAgentCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
+import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
 import { activeOrganizationExtensionTargets, extensionSipUri, organizationExtensionSipUri } from '../internal-sip.js';
@@ -797,11 +797,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (targetExtensionId) await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
         const cause = (payload?.hangup_cause || '').toLowerCase();
         if (pair) await clearOutboundCallPair(pair);
-        if (isUnansweredAgentCause(cause)) {
+        if (pair?.phase === 'connected') {
+          await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-caller` }).catch((error) => logWebhookFailure('end inbound caller after agent hangup', error));
+        } else {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop rejected waiting playback', error));
           await routeAfterAgentFailure(state, cause, eventId);
-        } else {
-          await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-caller` }).catch((error) => logWebhookFailure('end inbound caller after agent hangup', error));
         }
       } else if (targetExtensionId) {
         await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);

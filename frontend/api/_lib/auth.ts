@@ -109,7 +109,18 @@ export async function requireSession(req: VercelRequest) {
   }
   if (payload.sub.startsWith('vocivo-account:')) {
     if (typeof payload.accountId !== 'string' || typeof payload.organizationId !== 'string' || !['company_owner', 'company_admin'].includes(String(payload.role))) throw new Error('Unauthorized');
-    if (!await activeTenantAdmin(payload.accountId, payload.organizationId)) throw new Error('Unauthorized');
+    const account = await activeTenantAdmin(payload.accountId, payload.organizationId);
+    if (!account) throw new Error('Unauthorized');
+    return {
+      ...payload,
+      email: account.email,
+      name: account.name,
+      role: account.role,
+      extensionId: account.extensionId,
+      extension: account.extension,
+      organizationId: account.organizationId,
+      forcePasswordChange: account.forcePasswordChange,
+    } as VocivoSession;
   }
   return payload as VocivoSession;
 }
@@ -121,23 +132,7 @@ export async function requireOwner(req: VercelRequest) {
 }
 
 export async function requireAdmin(req: VercelRequest) {
-  let session = await requireSession(req);
-  if (session.sub?.startsWith('vocivo-account:')) {
-    const account = session.accountId && session.organizationId
-      ? await activeTenantAdmin(session.accountId, session.organizationId, await readPbxConfig())
-      : null;
-    if (!account) throw new Error('Unauthorized');
-    session = {
-      ...session,
-      email: account.email,
-      name: account.name,
-      role: account.role,
-      extensionId: account.extensionId,
-      extension: account.extension,
-      organizationId: account.organizationId,
-      forcePasswordChange: account.forcePasswordChange,
-    };
-  }
+  const session = await requireSession(req);
   const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
   const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['admin', 'company_owner', 'company_admin'].includes(session.role || ''));
   if (!superadmin && !companyAdmin) throw new Error('Forbidden');

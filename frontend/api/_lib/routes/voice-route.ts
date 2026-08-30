@@ -135,6 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destination: route.destination,
     });
   } catch (error) {
+    if (error instanceof TelnyxCarrierUnavailableError) return res.status(503).json({ error: error.message });
     if (error instanceof Error && /wallet is frozen|Calling credit/i.test(error.message)) return res.status(402).json({ error: error.message });
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });
