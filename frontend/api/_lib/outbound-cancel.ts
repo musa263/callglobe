@@ -2,6 +2,7 @@ import { callAction } from './voice-control.js';
 import { TelnyxApiError } from './telnyx.js';
 import {
   clearOutboundCallPair,
+  liveOutboundDestinationId,
   updateOutboundCallPair,
   type OutboundCallPair,
   type OutboundTerminationState,
@@ -10,6 +11,7 @@ import {
 export function outboundCallControlIds(pair: OutboundCallPair) {
   return [...new Set([
     pair.clientCallControlId,
+    liveOutboundDestinationId(pair),
     pair.destinationCallControlId,
     ...(pair.forkDestinationCallControlIds || []),
     pair.peerClientCallControlId,

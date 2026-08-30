@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { telnyx } from '../telnyx.js';
 import {
@@ -166,7 +166,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     return res.status(200).json(await responseFor());
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && (error.message === 'Forbidden' || error.message === 'SuperadminRequired')) return res.status(403).json({ error: 'Only a Vocivo superadmin can manage customer wallets and pricing.' });
     if (error instanceof Error && /invalid|required|customer|wallet|amount|balance|margin|currency|top-up|direction|type/i.test(error.message)) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });

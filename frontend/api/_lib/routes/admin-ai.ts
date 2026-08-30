@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice } from '../voice-catalog.js';
@@ -52,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ ai: saved, synced: Boolean(saved.assistantId) });
   } catch (error) {
     if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'AI receptionist is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }

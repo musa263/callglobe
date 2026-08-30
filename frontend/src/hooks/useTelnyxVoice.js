@@ -18,6 +18,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const routePollRef = useRef(0);
   const callIdentityRef = useRef(new Map());
   const locallyEndedCallIdsRef = useRef(new Set());
+  const connectedAtRef = useRef(null);
   const incomingToneRef = useRef(null);
   const incomingNotificationRef = useRef(null);
   const incomingCallRef = useRef(null);
@@ -247,6 +248,17 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         const heldId = heldCallRef.current?.id;
         if (callId && heldId === callId && activeId !== callId) {
           if (TERMINAL_STATES.has(nextState)) {
+            const duration = connectedAtRef.current ? Math.max(0, Math.floor((Date.now() - connectedAtRef.current) / 1000)) : 0;
+            const localIdentity = callIdentityRef.current.get(callId) || heldCallRef.current?.identity;
+            if (endedIdRef.current !== callId) {
+              endedIdRef.current = callId;
+              setEndedCall({
+                id: callId,
+                number: localIdentity?.number || 'Unknown',
+                direction: String(updatedCall.direction || '').toLowerCase() === 'inbound' ? 'incoming' : 'outgoing',
+                duration,
+              });
+            }
             heldCallRef.current = null;
             setHeldCall(null);
           } else {
@@ -285,6 +297,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           incomingCallRef.current = null;
           setIncomingCall(null);
           stopIncomingRingtone();
+          if (nextState === 'active') connectedAtRef.current = Date.now();
+          else if (!connectedAtRef.current) connectedAtRef.current = Date.now();
           resumeAudio().catch((failure) => reportWebVoiceError('resume connected-call audio', failure));
         }
         if (TERMINAL_STATES.has(nextState)) {
@@ -295,13 +309,15 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           stopRingback();
           stopIncomingRingtone();
           const endedCallId = callId || `${Date.now()}`;
+          const duration = connectedAtRef.current ? Math.max(0, Math.floor((Date.now() - connectedAtRef.current) / 1000)) : 0;
+          connectedAtRef.current = null;
           if (endedIdRef.current !== endedCallId) {
             endedIdRef.current = endedCallId;
             const localIdentity = callIdentityRef.current.get(endedCallId);
             const number = localIdentity?.number || (direction === 'inbound'
               ? updatedCall.options?.remoteCallerNumber || updatedCall.options?.callerNumber
               : updatedCall.options?.destinationNumber || updatedCall.options?.remoteCallerNumber);
-            setEndedCall({ id: endedCallId, number: number || 'Unknown', direction: direction === 'inbound' ? 'incoming' : 'outgoing' });
+            setEndedCall({ id: endedCallId, number: number || 'Unknown', direction: direction === 'inbound' ? 'incoming' : 'outgoing', duration });
           }
           callRef.current = null;
           incomingCallRef.current = null;
@@ -357,7 +373,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           setRoutePhase(result.phase);
           stopRingback();
           if (result.phase === 'failed' && result.failureCause) setError(`Call failed: ${String(result.failureCause).replaceAll('_', ' ')}.`);
-          try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up failed route', failure); }
+          const liveState = String(callRef.current?.state || '').toLowerCase();
+          if (!['active', 'held'].includes(liveState)) {
+            try { callRef.current?.hangup?.(); } catch (failure) { reportWebVoiceError('hang up failed route', failure); }
+          }
           return;
         }
       } catch (routeError) {
@@ -679,6 +698,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   return {
     ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state: routePhase === 'connected' ? 'active' : routePhase || state, muted, dialedNumber, endedCall, callStarting,
     connected: routePhase ? routePhase === 'connected' : state === 'active',
+    incoming: String(call?.direction || '').toLowerCase() === 'inbound',
     active: (routePhase ? ['requesting', 'ringing', 'connected'].includes(routePhase) : ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state)) && !incomingCall,
     notificationPermission, enableBrowserAlerts, audioBlocked, resumeAudio,
     startCall, startInternalCall, startSecondCall, startSecondInternalCall, swapCalls, mergeCalls, removeConferenceParticipant, transferCall, sendDtmf, answer, decline, hangup, toggleMute, toggleHold, disconnect,

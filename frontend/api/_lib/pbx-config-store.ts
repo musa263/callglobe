@@ -147,7 +147,7 @@ export function pbxForOrganization(config: PbxConfig, organizationId: string): P
   const settings = config.organizationSettings[organizationId];
   if (settings) return { ...config, ...settings, activeOrganizationId: organizationId };
   const organization = config.organizations.find((item) => item.id === organizationId);
-  const ownsSharedConfig = organizationId === config.activeOrganizationId || organizationId === 'primary';
+  const ownsSharedConfig = organizationId === config.activeOrganizationId;
   if (ownsSharedConfig) return { ...config, activeOrganizationId: organizationId };
   const isolated = defaultPbxConfig();
   return {

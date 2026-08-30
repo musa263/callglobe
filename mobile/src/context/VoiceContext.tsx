@@ -287,6 +287,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     transportLossTimerRef.current = null;
     networkMigrationGraceUntilRef.current = 0;
     const calls = voipClient.currentCalls.filter((call) => ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState));
+    if (activeCallRef.current) finalizeCall('failed', activeCallRef.current.id);
+    if (heldCall) finalizeCall('failed', heldCall.id);
     if (!calls.length && !activeCallRef.current) return;
     cancelRoutePolling();
     stopRingback();
@@ -305,7 +307,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     calls.forEach((call) => {
       VoicePnBridge.endCall(call.callId).catch((failure) => reportVoiceError('close native call after transport loss', failure));
     });
-  }, [cancelRoutePolling, clearCallSubscriptions, reportVoiceError, stopRingback]);
+  }, [cancelRoutePolling, clearCallSubscriptions, finalizeCall, heldCall, reportVoiceError, stopRingback]);
 
   useEffect(() => {
     const connectionSubscription = voipClient.connectionState$.subscribe((state) => {
@@ -504,6 +506,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       followRoute(routeId, call.callId);
     } catch (startError) {
       stopRingback();
+      await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed outbound route', failure));
       if (startAttemptRef.current === attempt) {
         activeCallRef.current = null;
         setActiveCall(null);
@@ -522,9 +525,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const current = voipClient.currentActiveCall;
     if (!current || current.currentState !== TelnyxCallState.ACTIVE) throw new Error('Connect the first call before adding another caller.');
     multiCallBusyRef.current = true;
+    const routeId = createRouteId();
     try {
       await current.hold();
-      const routeId = createRouteId();
       const reservation = await api.post<{ routeId: string; routeToken: string; callerId?: string }>('/api/voice/route', { routeId, destination: number, callerId: callerNumber?.phone_number, flow: 'outbound' });
       startRingback();
       const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
@@ -535,6 +538,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       followRoute(routeId, call.callId);
     } catch (secondCallError) {
       stopRingback();
+      await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed second-call route', failure));
       await current.resume().catch((failure) => reportVoiceError('roll back held outbound call', failure));
       voipClient.setActiveCall(current.callId);
       attachCall(current);
@@ -591,6 +595,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       followRoute(routeId, call.callId);
     } catch (startError) {
       stopRingback();
+      await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed internal route', failure));
       if (startAttemptRef.current === attempt) {
         activeCallRef.current = null;
         setActiveCall(null);

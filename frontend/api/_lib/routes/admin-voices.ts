@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { vocivoVoices, voiceDefinition } from '../voice-catalog.js';
 import { telnyx } from '../telnyx.js';
 
@@ -44,7 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       carrierFallbacks,
     });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });
   }
 }

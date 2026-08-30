@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed } from '../http.js';
+import { allowMobile, methodNotAllowed, writeAuthError } from '../http.js';
 import { listCallEvents } from '../call-event-store.js';
 import { requireFeature } from '../saas-access.js';
 
@@ -15,7 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'private, max-age=15');
     return res.status(200).json({ events, meta: { source: 'vocivo-webhooks' } });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Analytics is not enabled for this company.' });
     console.error('Call event reporting unavailable', error);
     return res.status(200).json({ events: [], meta: {}, unavailable: true });

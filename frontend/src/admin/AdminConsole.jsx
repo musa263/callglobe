@@ -6,7 +6,7 @@ import {
   Server, Settings2, ShieldCheck, Smartphone, Trash2, Upload, UserRoundPlus, Users, Voicemail, WalletCards, X
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { api, apiAudio } from '../lib/api';
+import { api, apiAudio, getStoredSession, storeSession } from '../lib/api';
 import { buildDialingDirectory } from '../lib/countries';
 import './admin.css';
 import './admin-additions.css';
@@ -327,7 +327,7 @@ export default function AdminConsole({ profile }) {
   const refreshNumbers = async () => { const result = await api('/api/admin/numbers'); setNumberData(result); };
   const createApiKey = async () => { const name = prompt('Name this server API key'); if (!name?.trim()) return; try { const result = await api('/api/admin/api-keys', { method: 'POST', body: { name: name.trim() } }); setPlatformKeys((current) => [...current, result.key]); setRevealedToken(result.token); } catch (err) { setError(err.message); } };
   const revokeApiKey = async (item) => { if (!confirm(`Revoke ${item.name}? Existing integrations using it will stop immediately.`)) return; try { const result = await api(`/api/admin/api-keys?id=${encodeURIComponent(item.id)}`, { method: 'DELETE' }); setPlatformKeys((current) => current.map((key) => key.id === item.id ? result.key : key)); } catch (err) { setError(err.message); } };
-  const changePassword = async (event) => { event.preventDefault(); if (passwordDraft.newPassword !== passwordDraft.confirmPassword) { setError('The new passwords do not match.'); return; } setBusy(true); setError(''); try { await api('/api/auth/password', { method: 'POST', body: { current_password: passwordDraft.currentPassword, new_password: passwordDraft.newPassword } }); setPasswordDraft(null); } catch (err) { setError(err.message); } finally { setBusy(false); } };
+  const changePassword = async (event) => { event.preventDefault(); if (passwordDraft.newPassword !== passwordDraft.confirmPassword) { setError('The new passwords do not match.'); return; } setBusy(true); setError(''); try { const result = await api('/api/auth/password', { method: 'POST', body: { current_password: passwordDraft.currentPassword, new_password: passwordDraft.newPassword } }); if (result.token) storeSession({ ...getStoredSession(), token: result.token }); setPasswordDraft(null); } catch (err) { setError(err.message); } finally { setBusy(false); } };
   const activeCustomer = saas.organizations?.find((item) => item.id === config.activeOrganizationId) || saas.organizations?.[0];
   const entitlements = activeCustomer?.entitlements || {};
   const sectionAllowed = (id) => isSuperadmin || id === 'voice' ? isSuperadmin || Boolean(entitlements.aiReceptionist) : id === 'handling' ? Boolean(entitlements.queues || entitlements.ivr) : !sectionFeatures[id] || Boolean(entitlements[sectionFeatures[id]]);

@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { put } from '../object-store.js';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { requireFeature } from '../saas-access.js';
 
 const allowed = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -22,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const blob = await put(`vocivo/branding/${scope}/background-${Date.now()}.${extension}`, bytes, { access: 'public', contentType, addRandomSuffix: true });
     return res.status(201).json({ url: blob.url });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Custom branding is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }

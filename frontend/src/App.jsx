@@ -27,6 +27,23 @@ const SAMPLE_RATES = [
 const SAMPLE_NUMBER = { id: 'preview', phone_number: '+18447161777', label: 'Vocivo', country_code: 'US', receives_calls: true, source: 'owned' };
 const SAMPLE_DIRECTORY = buildDialingDirectory(SAMPLE_RATES);
 
+function historyStorageKey(userId) {
+  return userId ? `vocivo.history.${userId}` : '';
+}
+
+function readHistory(userId) {
+  const key = historyStorageKey(userId);
+  if (!key) return [];
+  try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; }
+}
+
+function writeHistory(userId, items) {
+  const key = historyStorageKey(userId);
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify(items));
+  localStorage.removeItem('vocivo.history');
+}
+
 function formatPhone(value) {
   if (!value) return '';
   const clean = value.replace(/[^+\d*#]/g, '');
@@ -167,7 +184,7 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
           <button className="control" disabled={!voice.connected || voice.heldCall || voice.conference} onClick={() => openTool('add')} title="Add caller"><UserPlus /><span>Add caller</span></button>
           <button className="control" disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.swapCalls)} title="Swap calls"><ArrowLeftRight /><span>Swap</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.mergeCalls)} title="Merge calls"><Merge /><span>Merge</span></button>
-          <button className="control" disabled={!voice.connected || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
+          <button className="control" disabled={!voice.connected || !voice.incoming || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.conference} onClick={() => openTool('participants')} title="Conference participants"><UserMinus /><span>Participants</span></button>
           <button className={voice.audioBlocked ? 'control attention' : 'control'} disabled={!voice.connected || busy} onClick={() => action(voice.resumeAudio)} title={voice.audioBlocked ? 'Resume browser audio' : 'Refresh browser audio'}><Volume2 /><span>{voice.audioBlocked ? 'Resume audio' : 'Audio'}</span></button>
         </div>
@@ -186,15 +203,26 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
   );
 }
 
-function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType }) {
+function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType, initialNumber }) {
   const [dialMode, setDialMode] = useState('external');
-  const [number, setNumber] = useState('');
+  const [number, setNumber] = useState(initialNumber || '');
   const [country, setCountry] = useState(rates[0]);
   const [countryOpen, setCountryOpen] = useState(false);
   const [callerOpen, setCallerOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [callError, setCallError] = useState('');
   const businessAccount = accountType === 'business';
+  useEffect(() => {
+    if (!initialNumber) return;
+    const digits = String(initialNumber).replace(/\D/g, '');
+    if (businessAccount && /^\d{2,5}$/.test(digits)) {
+      setDialMode('extension');
+      setNumber(digits);
+    } else {
+      setDialMode('external');
+      setNumber(String(initialNumber).replace(/[^\d+]/g, '').slice(0, 22));
+    }
+  }, [initialNumber, businessAccount]);
   useEffect(() => { if (!country && rates.length) setCountry(rates[0]); }, [country, rates]);
   const filteredRates = rates.filter((rate) => `${rate.country_name} ${rate.dial_code}`.toLowerCase().includes(search.toLowerCase()));
   const fullNumber = number.startsWith('+') ? number : `${country?.dial_code || ''}${number}`;
@@ -218,6 +246,10 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
     }
     if (routeRisk) {
       setCallError(`Local carriers may not ring when ${selectedNumber.phone_number} is used for this same-country call. Switch to your Vocivo number.`);
+      return;
+    }
+    if (dialMode !== 'extension' && !selectedNumber?.phone_number) {
+      setCallError('Choose a caller ID before placing an external call.');
       return;
     }
     if (dialMode !== 'extension' && Number.isFinite(balance) && balance <= 0) {
@@ -246,7 +278,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
           {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See live rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
           <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key, letters)}><strong>{key}</strong><small>{letters}</small></button>)}</div>
           {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
-          <button className={`call-button ${voice.callStarting ? 'starting' : ''}`} onClick={call} disabled={voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (!preview && !voice.ready)}><Phone size={22} /> {voice.callStarting ? 'Starting call...' : voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'}</button>
+          <button className={`call-button ${voice.callStarting ? 'starting' : ''}`} onClick={call} disabled={voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !preview && !selectedNumber?.phone_number) || (!preview && !voice.ready)}><Phone size={22} /> {voice.callStarting ? 'Starting call...' : voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
         </div>
       </div>
     </section>
@@ -329,7 +361,11 @@ export default function App() {
   const [verifiedNumbers, setVerifiedNumbers] = useState([]);
   const [selectedNumber, setSelectedNumber] = useState(null);
   const [view, setView] = useState(() => window.location.pathname.startsWith('/admin') ? 'admin' : 'dialer');
-  const [history, setHistory] = useState(() => { try { return JSON.parse(localStorage.getItem('vocivo.history') || '[]'); } catch { return []; } });
+  const [history, setHistory] = useState([]);
+  const [pendingDial, setPendingDial] = useState('');
+  const [passwordDraft, setPasswordDraft] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
   const [notice, setNotice] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const [verificationPending, setVerificationPending] = useState(null);
@@ -348,6 +384,7 @@ export default function App() {
         let resolvedProfile = sessionData.profile;
         if (!active) return;
         setProfile(resolvedProfile);
+        setHistory(readHistory(resolvedProfile.id || session.sub));
         if (resolvedProfile.admin_only) {
           setBalance(null); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
@@ -386,7 +423,12 @@ export default function App() {
   }, [voice.connected]);
   useEffect(() => {
     if (!voice.endedCall) return;
-    setHistory((current) => { const next = [{ id: `${Date.now()}`, number: voice.endedCall.number, direction: voice.endedCall.direction, duration: elapsed, date: new Date().toISOString() }, ...current].slice(0, 40); localStorage.setItem('vocivo.history', JSON.stringify(next)); return next; });
+    const userId = profile?.id || session?.sub;
+    setHistory((current) => {
+      const next = [{ id: voice.endedCall.id || `${Date.now()}`, number: voice.endedCall.number, direction: voice.endedCall.direction, duration: Number(voice.endedCall.duration) || 0, date: new Date().toISOString() }, ...current].slice(0, 40);
+      writeHistory(userId, next);
+      return next;
+    });
   }, [voice.endedCall]);
   const shellData = useMemo(() => preview ? { profile: { full_name: 'Vocivo Superadmin', email: 'preview@vocivo.app', role: 'superadmin', account_type: 'platform', organization_name: 'Vocivo Communications' }, balance: 42.8, rates: SAMPLE_DIRECTORY, numbers: [SAMPLE_NUMBER], verifiedNumbers: [] } : { profile, balance, rates, numbers, verifiedNumbers }, [preview, profile, balance, rates, numbers, verifiedNumbers]);
   const canAdmin = ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(shellData.profile?.role || '');
@@ -395,7 +437,38 @@ export default function App() {
   useEffect(() => {
     if (view === 'admin' && profile && !canAdmin) setView('dialer');
   }, [canAdmin, profile, view]);
-  function logout() { voice.disconnect(); clearSession(); setSession(null); setPreview(false); setProfile(null); }
+  function logout() {
+    voice.disconnect();
+    clearSession();
+    setSession(null);
+    setPreview(false);
+    setProfile(null);
+    setHistory([]);
+    setPendingDial('');
+  }
+  async function submitForcedPassword(event) {
+    event.preventDefault();
+    if (passwordDraft.newPassword !== passwordDraft.confirmPassword) {
+      setPasswordError('The new passwords do not match.');
+      return;
+    }
+    setPasswordBusy(true);
+    setPasswordError('');
+    try {
+      const result = await api('/api/auth/password', { method: 'POST', body: { current_password: passwordDraft.currentPassword, new_password: passwordDraft.newPassword } });
+      if (result.token) {
+        const next = { ...getStoredSession(), token: result.token };
+        storeSession(next);
+        setSession(next);
+      }
+      setProfile((current) => current ? { ...current, force_password_change: false } : current);
+      setPasswordDraft({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (error) {
+      setPasswordError(error.message);
+    } finally {
+      setPasswordBusy(false);
+    }
+  }
   async function refreshVerifiedNumbers() {
     const result = await api('/api/telnyx/verified-numbers');
     setVerifiedNumbers(result.numbers || []);
@@ -432,8 +505,9 @@ export default function App() {
       <main className="main-area">
         {preview && <div className="preview-banner"><span>You are viewing a safe preview. Calls are disabled.</span><button onClick={logout}><X size={15} /> Exit preview</button></div>}
         {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={15} /></button></div>}
-        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
-        {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
+        {profile?.force_password_change && !preview && <div className="modal-layer" role="dialog" aria-modal="true"><section className="modal"><header><div><h2>Update your password</h2><p>This account requires a new password before you can continue.</p></div></header><form className="modal-form" onSubmit={submitForcedPassword}><label>Current password<input type="password" autoComplete="current-password" value={passwordDraft.currentPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, currentPassword: event.target.value }))} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.newPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.confirmPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))} required /></label>{passwordError && <div className="form-error" role="alert">{passwordError}</div>}<button className="primary-button" type="submit" disabled={passwordBusy}>{passwordBusy ? 'Saving...' : 'Save password'}</button></form></section></div>}
+        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
+        {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setPendingDial(value); setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
         {view === 'wallet' && <WalletView balance={shellData.balance} preview={preview} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}
         {view === 'settings' && <SettingsView profile={shellData.profile} ownedNumbers={shellData.numbers} verifiedNumbers={shellData.verifiedNumbers} voice={voice} preview={preview} verification={{ pending: verificationPending, busy: verificationBusy, error: verificationError, request: requestVerification, verify: confirmVerification, remove: removeVerifiedNumber, cancel: () => { setVerificationPending(null); setVerificationError(''); } }} onLogout={logout} />}

@@ -95,6 +95,15 @@ async function verifySessionToken(req: VercelRequest) {
   return payload as JWTPayload & { sub: string };
 }
 
+function requestPath(req: VercelRequest) {
+  return String(req.url || '').split('?')[0];
+}
+
+function allowsForcedPasswordChange(req: VercelRequest) {
+  const path = requestPath(req);
+  return path.endsWith('/api/auth/session') || path.endsWith('/api/auth/password');
+}
+
 export async function requireSession(req: VercelRequest) {
   const payload = await verifySessionToken(req);
   const tenantSession = payload.sub.startsWith('vocivo-extension:') || payload.sub.startsWith('vocivo-account:');
@@ -111,7 +120,7 @@ export async function requireSession(req: VercelRequest) {
     if (typeof payload.accountId !== 'string' || typeof payload.organizationId !== 'string' || !['company_owner', 'company_admin'].includes(String(payload.role))) throw new Error('Unauthorized');
     const account = await activeTenantAdmin(payload.accountId, payload.organizationId);
     if (!account) throw new Error('Unauthorized');
-    return {
+    const session = {
       ...payload,
       email: account.email,
       name: account.name,
@@ -121,14 +130,16 @@ export async function requireSession(req: VercelRequest) {
       organizationId: account.organizationId,
       forcePasswordChange: account.forcePasswordChange,
     } as VocivoSession;
+    if (session.forcePasswordChange && !allowsForcedPasswordChange(req)) throw new Error('Password change required');
+    return session;
   }
   return payload as VocivoSession;
 }
 
 export async function requireOwner(req: VercelRequest) {
-  const session = await verifySessionToken(req) as VocivoSession;
-  if (session.sub !== 'vocivo-owner' || !['owner', 'superadmin'].includes(session.role || '')) throw new Error('Forbidden');
-  return session;
+  const payload = await verifySessionToken(req) as VocivoSession;
+  if (payload.sub !== 'vocivo-owner' || !['owner', 'superadmin'].includes(payload.role || '')) throw new Error('Forbidden');
+  return payload;
 }
 
 export async function requireAdmin(req: VercelRequest) {

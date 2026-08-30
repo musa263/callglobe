@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { terminateOutboundPair } from '../outbound-cancel.js';
 import { readOutboundCallPairByRoute } from '../outbound-call-store.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
@@ -16,14 +16,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const route = await readVoiceRoute(routeId);
     if (!route || route.userId !== session.sub) return res.status(404).json({ error: 'Call route not found.' });
 
-    await updateVoiceRoute(routeId, { phase: 'ended', failureCause: 'caller_hangup' });
     const pair = await readOutboundCallPairByRoute(routeId);
     if (pair) await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`);
+    await updateVoiceRoute(routeId, { phase: 'ended', failureCause: 'caller_hangup' });
 
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ canceled: true });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });
   }
 }

@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
-import { readOutboundCallPairByRoute, saveOutboundCallPair, type OutboundCallPair } from '../outbound-call-store.js';
+import { readOutboundCallPairByRoute, saveOutboundCallPair, liveOutboundDestinationId, type OutboundCallPair } from '../outbound-call-store.js';
 import { callAction } from '../voice-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute } from '../voice-route-store.js';
@@ -65,8 +65,8 @@ async function restoreDirectCalls(activePair: OutboundCallPair, heldPair: Outbou
 
   try {
     await Promise.all([
-      bridgeOutboundCalls(activePair.clientCallControlId, activePair.destinationCallControlId, `vocivo-merge-rollback-active-${room}`),
-      bridgeOutboundCalls(heldPair.clientCallControlId, heldPair.destinationCallControlId, `vocivo-merge-rollback-held-${room}`),
+      bridgeOutboundCalls(activePair.clientCallControlId, liveOutboundDestinationId(activePair), `vocivo-merge-rollback-active-${room}`),
+      bridgeOutboundCalls(heldPair.clientCallControlId, liveOutboundDestinationId(heldPair), `vocivo-merge-rollback-held-${room}`),
     ]);
     const updatedAt = new Date().toISOString();
     await Promise.all([
@@ -76,9 +76,9 @@ async function restoreDirectCalls(activePair: OutboundCallPair, heldPair: Outbou
   } catch (rollbackError) {
     await Promise.all([
       activePair.clientCallControlId,
-      activePair.destinationCallControlId,
+      liveOutboundDestinationId(activePair),
       heldPair.clientCallControlId,
-      heldPair.destinationCallControlId,
+      liveOutboundDestinationId(heldPair),
     ].map((id) => callAction(id, 'hangup', { command_id: `vocivo-merge-abort-${room}-${id.slice(-8)}` }).catch(() => undefined)));
     await Promise.all([activePair.routeId, heldPair.routeId].filter((id): id is string => Boolean(id)).map((id) => updateVoiceRoute(id, { phase: 'failed', failureCause: 'merge_rollback_failed' })));
     throw rollbackError;
@@ -99,13 +99,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!reservation || reservation.userId !== session.sub) return res.status(403).json({ error: 'This conference participant does not belong to your account.' });
       const pair = await waitForPair(readOutboundCallPairByRoute, routeId);
       if (!pair || pair.status !== 'conference' || pair.conferenceId !== conferenceId) return res.status(409).json({ error: 'This participant is no longer in the conference.' });
+      const leaveId = liveOutboundDestinationId(pair);
       await telnyx(`/conferences/${encodeURIComponent(conferenceId)}/actions/leave`, {
         method: 'POST',
-        body: JSON.stringify({ call_control_id: pair.destinationCallControlId, beep_enabled: 'never', command_id: `vocivo-remove-${Date.now()}` }),
+        body: JSON.stringify({ call_control_id: leaveId, beep_enabled: 'never', command_id: `vocivo-remove-${Date.now()}` }),
       }).catch((error) => {
         if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
       });
-      await callAction(pair.destinationCallControlId, 'hangup', { command_id: `vocivo-remove-hangup-${Date.now()}` }).catch((error) => {
+      await callAction(leaveId, 'hangup', { command_id: `vocivo-remove-hangup-${Date.now()}` }).catch((error) => {
         if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
       });
       const updatedAt = new Date().toISOString();
@@ -145,16 +146,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       await Promise.all([
         activePair.clientCallControlId,
-        activePair.destinationCallControlId,
+        liveOutboundDestinationId(activePair),
         heldPair.clientCallControlId,
-        heldPair.destinationCallControlId,
-      ].map(requireLiveCall));
+        liveOutboundDestinationId(heldPair),
+      ].map((id) => {
+        if (!id) throw new Error('A live destination could not be found for this merge.');
+        return requireLiveCall(id);
+      }));
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       const conferenceResponse = await withConferenceRetry(() => telnyx('/conferences', {
           method: 'POST',
           body: JSON.stringify({
-            call_control_id: activePair.destinationCallControlId,
+            call_control_id: liveOutboundDestinationId(activePair),
             name: room,
             beep_enabled: 'never',
             max_participants: 6,
@@ -165,17 +169,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const conferencePayload = await conferenceResponse.json() as { data?: { id?: string } };
       conferenceId = conferencePayload.data?.id || '';
       if (!conferenceId) throw new Error('Telnyx did not return a conference identifier.');
-      joinedCallControlIds.push(activePair.destinationCallControlId);
+      joinedCallControlIds.push(liveOutboundDestinationId(activePair));
 
-      for (const participantCallControlId of [heldPair.destinationCallControlId, activePair.clientCallControlId]) {
+      for (const participantCallControlId of [liveOutboundDestinationId(heldPair), activePair.clientCallControlId]) {
         await joinConference(conferenceId, participantCallControlId, `vocivo-merge-join-${room}-${joinedCallControlIds.length}`);
         joinedCallControlIds.push(participantCallControlId);
       }
 
       const updatedAt = new Date().toISOString();
       await Promise.all([
-        saveOutboundCallPair({ ...activePair, status: 'conference', conferenceId, conferenceRole: 'host', peerClientCallControlId: heldPair.clientCallControlId, peerDestinationCallControlId: heldPair.destinationCallControlId, updatedAt }),
-        saveOutboundCallPair({ ...heldPair, status: 'conference', conferenceId, conferenceRole: 'released', peerClientCallControlId: activePair.clientCallControlId, peerDestinationCallControlId: activePair.destinationCallControlId, updatedAt }),
+        saveOutboundCallPair({ ...activePair, status: 'conference', conferenceId, conferenceRole: 'host', peerClientCallControlId: heldPair.clientCallControlId, peerDestinationCallControlId: liveOutboundDestinationId(heldPair), updatedAt }),
+        saveOutboundCallPair({ ...heldPair, status: 'conference', conferenceId, conferenceRole: 'released', peerClientCallControlId: activePair.clientCallControlId, peerDestinationCallControlId: liveOutboundDestinationId(activePair), updatedAt }),
       ]);
       await callAction(heldPair.clientCallControlId, 'hangup', { command_id: `vocivo-merge-release-${room}` }).catch((error) => {
         if (!(error instanceof TelnyxApiError && error.code === '90018')) throw error;
@@ -189,7 +193,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ merged: true, conferenceId, room, participants: 3 });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof TelnyxApiError && [400, 404, 409, 422].includes(error.status)) {
       return res.status(409).json({ error: `Telnyx could not merge these calls: ${error.message}` });
     }

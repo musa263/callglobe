@@ -22,6 +22,23 @@ export function requiredEnv(name: string) {
   return value;
 }
 
+export function writeAuthError(res: VercelResponse, error: unknown) {
+  if (!(error instanceof Error)) return false;
+  if (error.message === 'Unauthorized') {
+    res.status(401).json({ error: 'Session expired.' });
+    return true;
+  }
+  if (error.message === 'Password change required') {
+    res.status(403).json({ error: 'Update your password before continuing.' });
+    return true;
+  }
+  if (error.message === 'Forbidden') {
+    res.status(403).json({ error: 'Administrative access is required.' });
+    return true;
+  }
+  return false;
+}
+
 export function publicError(error: unknown) {
   console.error(error);
   return error instanceof Error && error.message.startsWith('Missing server configuration:')

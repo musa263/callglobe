@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { telnyx, telnyxCredentialConnectionPath } from '../telnyx.js';
 import { deleteTrunkPolicy, normalizeTrunkPolicy, readTrunkPolicies, saveTrunkPolicy, type TrunkPolicy } from '../trunk-policy-store.js';
 import { requireFeature } from '../saas-access.js';
@@ -72,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const policy = await saveTrunkPolicy(payload.data.id, { ...(req.body?.policy ?? {}), organizationId: policyOrganizationId });
     return res.status(id ? 200 : 201).json({ trunk: safeUac(payload.data, policy) });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'SIP trunk management is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });
   }

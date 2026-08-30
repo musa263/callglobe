@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../_lib/auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../_lib/http.js';
 import { mobileRates } from '../_lib/rates.js';
 import { accessForSession } from '../_lib/saas-access.js';
 import { readRetailRateDirectory, readTenantWallet } from '../_lib/wallet-store.js';
@@ -27,7 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       rates,
     });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && ['Organization inactive', 'Subscription inactive'].includes(error.message)) return res.status(403).json({ error: 'This company account is inactive.' });
     return res.status(500).json({ error: publicError(error) });
   }

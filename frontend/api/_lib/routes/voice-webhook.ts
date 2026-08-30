@@ -7,7 +7,7 @@ import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState 
 import { clearActiveCallRouteIfMatches, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
-import { claimOutboundCallWinner, clearOutboundCallPair, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
+import { claimOutboundCallWinner, clearOutboundCallPair, liveOutboundDestinationId, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundLegs, terminateOutboundPair } from '../outbound-cancel.js';
 import { isInboundCallAnswered, isInboundCallInitiated, isParkedClientCall, ivrMenuSelection, voiceRouteHangupOutcome } from '../voice-routing.js';
 import { bridgeOutboundCalls } from '../outbound-bridge.js';
@@ -582,6 +582,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           await saveOutboundCallPair({
             ...claim.pair,
             selectedDestinationCallControlId: callControlId,
+            destinationCallControlId: callControlId,
             phase: 'connected',
             connectedAt,
             updatedAt: connectedAt,
@@ -611,6 +612,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           await saveOutboundCallPair({
             ...claim.pair,
             selectedDestinationCallControlId: callControlId,
+            destinationCallControlId: callControlId,
             phase: 'connected',
             connectedAt,
             updatedAt: connectedAt,
@@ -719,7 +721,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (pair.routeId) await updateVoiceRoute(pair.routeId, outcome);
         await terminateOutboundPair(pair, `${eventId}-client-hangup`);
       } else if (pair.status === 'conference' && pair.conferenceRole === 'host') {
-        await Promise.all([pair.destinationCallControlId, pair.peerDestinationCallControlId]
+        await Promise.all([liveOutboundDestinationId(pair), pair.peerDestinationCallControlId]
           .filter((id): id is string => Boolean(id))
           .map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end paired call leg', error))));
         const peer = pair.peerClientCallControlId ? await readOutboundCallPairByClient(pair.peerClientCallControlId) : null;
@@ -727,6 +729,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .catch((error) => logWebhookFailure('clear outbound call pair', error));
       }
       return res.status(200).json({ received: true });
+    }
+
+    if (eventType === 'call.hangup') {
+      const parentPair = await readOutboundCallPairByClient(callControlId);
+      if (parentPair && parentPair.status !== 'conference') {
+        const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
+        if (parentPair.routeId) await updateVoiceRoute(parentPair.routeId, outcome);
+        await terminateOutboundPair(parentPair, `${eventId}-parent-hangup`);
+        return res.status(200).json({ received: true });
+      }
     }
 
     if (eventType === 'call.answered' && (state?.flow === 'agent' || state?.flow === 'queue_agent') && state.parentCallControlId) {
@@ -763,6 +775,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await saveOutboundCallPair({
           ...claim.pair,
           selectedDestinationCallControlId: callControlId,
+          destinationCallControlId: callControlId,
           phase: 'connected',
           connectedAt,
           updatedAt: connectedAt,
@@ -802,6 +815,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } else {
           await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop rejected waiting playback', error));
           await routeAfterAgentFailure(state, cause, eventId);
+        }
+      } else if (state.flow === 'queue_agent' && state.parentCallControlId) {
+        if (targetExtensionId) await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
+        const queue = state.queueName ? await readQueueCall(state.queueName) : null;
+        if (queue && (queue.status === 'connected' || queue.status === 'connecting')) {
+          await Promise.all((queue.agentCallControlIds || []).filter((id) => id !== callControlId).map((id) => callAction(id, 'hangup', { command_id: `${eventId}-end-queue-agent-${id.slice(-8)}` }).catch((error) => logWebhookFailure('end remaining queue agent', error))));
+          await callAction(state.parentCallControlId, 'hangup', { command_id: `${eventId}-end-queued-caller` }).catch((error) => logWebhookFailure('end queued caller after agent hangup', error));
+          await clearQueueCall(state.queueName || queue.queueName);
         }
       } else if (targetExtensionId) {
         await clearActiveCallRouteIfMatches(targetExtensionId, callControlId);
@@ -861,7 +882,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.dequeued' && state?.flow === 'queue_wait' && state.queueName && state.organizationId) {
       const queue = await readQueueCall(state.queueName);
       await clearQueueCall(state.queueName);
-      if (!queue || queue.status === 'connected') return res.status(200).json({ received: true });
+      if (!queue || queue.status === 'connected' || queue.status === 'connecting') return res.status(200).json({ received: true });
       await routeCallGroupFallback({ callControlId, eventId, organizationId: state.organizationId, handlingId: state.handlingId || '', kind: queue?.kind || 'queue', inboundNumber: state.inboundNumber, callerNumber: state.callerNumber, callerName: state.callerName });
       return res.status(200).json({ received: true });
     }
@@ -937,8 +958,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       const conferencePayload = await conferenceResponse.json() as { data?: { id?: string } };
       const conferenceId = conferencePayload.data?.id;
-      if (conferenceId) {
-        if (!state.callerId) throw new Error('The conference has no authorized caller identity.');
+      if (!conferenceId) {
+        await callAction(callControlId, 'hangup', { command_id: `${eventId}-conference-create-failed` }).catch((error) => logWebhookFailure('end failed conference host', error));
+        return res.status(200).json({ received: true });
+      }
+      if (!state.callerId) throw new Error('The conference has no authorized caller identity.');
         const conferenceCallerId = state.callerId;
         const participants = state.conferenceParticipants ?? (state.participants ?? []).map((destination) => ({ destination, displayName: destination, internal: false }));
         await Promise.all(participants.map((participant, index) => dialCall({
@@ -956,7 +980,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ] : undefined,
           commandId: `${eventId}-guest-${index}`,
         })));
-      }
     }
 
     if (eventType === 'call.answered' && state?.flow === 'conference_guest' && state.conferenceId) {

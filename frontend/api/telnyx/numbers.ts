@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../_lib/auth.js';
-import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../_lib/http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../_lib/http.js';
 import { telnyx, telnyxPstnConnectionId } from '../_lib/telnyx.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { sessionCanAccessNumber } from '../_lib/tenancy.js';
@@ -39,7 +39,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }));
     return res.status(200).json({ numbers });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });
   }
 }

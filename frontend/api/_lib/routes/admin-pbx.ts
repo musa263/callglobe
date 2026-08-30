@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, readPbxConfig, savePbxConfig, type PbxConfig } from '../pbx-config-store.js';
 import { listExtensions } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
@@ -123,7 +123,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ config });
   } catch (error) {
     if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This phone-system capability is not enabled for your company.' });
     if (error instanceof Error && /call-handling|Ring group|Queue|Voice menu|phone number points|Office hours|office-hours|holiday|user|forwarding/i.test(error.message)) return res.status(400).json({ error: error.message });

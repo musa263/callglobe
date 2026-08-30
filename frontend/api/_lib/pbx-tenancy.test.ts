@@ -27,6 +27,21 @@ test('keeps company PBX routing and AI settings isolated', () => {
   assert.equal(tenant.callHandling.ringGroups[0]?.name, 'Support');
 });
 
+test('does not treat a hardcoded primary id as the shared workspace owner', () => {
+  const config = defaultPbxConfig();
+  config.ai.enabled = true;
+  config.ai.assistantId = 'asst_active';
+  config.activeOrganizationId = 'second-company';
+  config.organizations.push({
+    id: 'second-company', name: 'Second Company', slug: 'second-company', accountType: 'business',
+    ownerDisplayName: 'Second Company', ownerEmail: 'owner@example.com', extensionStart: 3000,
+    extensionEnd: 3019, internalCallingEnabled: true, status: 'active',
+  });
+  const isolatedPrimary = pbxForOrganization(config, 'primary');
+  assert.equal(isolatedPrimary.ai.assistantId, '');
+  assert.equal(isolatedPrimary.ai.enabled, false);
+});
+
 test('does not let a new tenant inherit the primary AI receptionist', () => {
   const config = defaultPbxConfig();
   config.ai.enabled = true;

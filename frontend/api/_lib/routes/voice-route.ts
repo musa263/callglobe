@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { assertCallerIdForSession } from '../phone-number-access.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { authorizeOutboundCall } from '../outbound-policy.js';
 import { getExtension, listExtensions } from '../pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
@@ -137,7 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (error) {
     if (error instanceof TelnyxCarrierUnavailableError) return res.status(503).json({ error: error.message });
     if (error instanceof Error && /wallet is frozen|Calling credit/i.test(error.message)) return res.status(402).json({ error: error.message });
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });
     if (error instanceof Error && /Caller ID|organization|owned|verified|Internal calling|destination|outbound rule|International calling/i.test(error.message)) return res.status(403).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });

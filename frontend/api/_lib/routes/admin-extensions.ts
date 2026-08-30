@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
@@ -97,7 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await removeTenantAdminForExtension(id, organizationId, config);
     return res.status(200).json({ success: true });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     if (error instanceof Error && /Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This company subscription is not active.' });
     if (error instanceof Error && /required|exists|not found|digits|extension|organization|range|slot/i.test(error.message)) return res.status(400).json({ error: error.message });

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../http.js';
 import { telnyx, telnyxPstnConnectionId } from '../telnyx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
@@ -9,6 +9,16 @@ import { requireFeature } from '../saas-access.js';
 import { invalidatePhoneNumberCache } from '../phone-number-access.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
+
+function successfulOrderNumbers(order: Record<string, any> | undefined) {
+  return (order?.phone_numbers || [])
+    .filter((item: { phone_number?: string; status?: string }) => item?.phone_number && /^(success|complete|purchased)$/i.test(String(item.status || '')))
+    .map((item: { phone_number: string }) => item.phone_number);
+}
+
+async function assignFulfilledNumbers(organizationId: string, phoneNumbers: string[]) {
+  await Promise.all([...new Set(phoneNumbers)].map((phoneNumber) => assignNumberToOrganization(phoneNumber, organizationId, { source: 'owned', destinationType: 'main' }).catch(() => undefined)));
+}
 
 type AvailableNumber = {
   phone_number: string;
@@ -67,12 +77,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const numbersPayload = await numbersResponse.json() as { data?: Array<Record<string, any>> };
       const ordersPayload = await ordersResponse.json() as { data?: Array<Record<string, any>> };
       const profilesPayload = await profilesResponse.json() as { data?: Array<Record<string, any>> };
-      const visibleNumbers = (numbersPayload.data ?? []).filter((item) => config.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
+      const orderPrefix = `Vocivo ${activeOrganizationId} `;
+      await assignFulfilledNumbers(activeOrganizationId, (ordersPayload.data ?? [])
+        .filter((item) => String(item.customer_reference || '').startsWith(orderPrefix))
+        .flatMap((item) => successfulOrderNumbers(item)));
+      const assignedConfig = await readPbxConfig();
+      const visibleNumbers = (numbersPayload.data ?? []).filter((item) => assignedConfig.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
       const visibleProfileIds = new Set(visibleNumbers.map((item) => String(item.messaging_profile_id || '')).filter(Boolean));
       const visibleProfiles = access.superadmin ? profilesPayload.data ?? [] : (profilesPayload.data ?? []).filter((item) => visibleProfileIds.has(String(item.id || '')));
-      const orderPrefix = `Vocivo ${activeOrganizationId} `;
       return res.status(200).json({
-        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: config.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
+        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: assignedConfig.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
         orders: (ordersPayload.data ?? []).filter((item) => String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
         messagingProfiles: visibleProfiles.map((item) => ({ id: item.id, name: item.name || item.id, ...(access.superadmin ? { webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' } : {}) })),
       });
@@ -93,8 +107,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           customer_reference: access.superadmin ? text(req.body?.customerReference, 100) || `Vocivo ${activeOrganizationId} ${new Date().toISOString()}` : `Vocivo ${activeOrganizationId} ${new Date().toISOString()}`,
         }),
       });
-      const payload = await response.json() as { data?: Record<string, unknown> };
-      await Promise.all(phoneNumbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, activeOrganizationId, { source: 'owned', destinationType: 'main' })));
+      const payload = await response.json() as { data?: Record<string, any> };
+      await assignFulfilledNumbers(activeOrganizationId, successfulOrderNumbers(payload.data));
       invalidatePhoneNumberCache('owned');
       return res.status(201).json({ order: payload.data });
     }
@@ -169,7 +183,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     invalidatePhoneNumberCache('owned');
     return res.status(200).json({ number: payload.data });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Phone-number management is not enabled for this company.' });
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     return res.status(500).json({ error: publicError(error) });

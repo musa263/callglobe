@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../_lib/auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../_lib/http.js';
 import { getExtension, getExtensionCredentials } from '../_lib/pbx.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { accessForSession } from '../_lib/saas-access.js';
@@ -62,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ice_servers: voiceIceServers(`${credential.extension.organizationId}:${credential.extension.id}`),
     });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && ['Organization inactive', 'Subscription inactive'].includes(error.message)) return res.status(403).json({ error: 'Calling is unavailable while this company account is inactive.' });
     return res.status(500).json({ error: publicError(error) });
   }

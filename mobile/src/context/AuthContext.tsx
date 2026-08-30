@@ -121,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [callerNumbers, setCallerNumbers] = useState<CallerNumber[]>([]);
   const [history, setHistory] = useState<CallLog[]>([]);
   const historyRef = useRef<CallLog[]>([]);
+  const directoryRef = useRef<DirectoryResponse['users']>([]);
   const activeUserIdRef = useRef<string | null>(null);
   const [isPreview, setIsPreview] = useState(false);
   const [nativeBridgeError, setNativeBridgeError] = useState<Error | null>(null);
@@ -158,9 +159,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (bootstrap.account.rates?.length) setRates(normalizeRates(bootstrap.account.rates));
       setCallerNumbers(bootstrap.numbers ?? []);
       const storedHistory = await readHistory(mergedProfile.id);
+      directoryRef.current = bootstrap.directory || [];
       const mergedHistory = mergeHistory(
-        storedHistory.map((call) => normalizeHistoryIdentity(call, bootstrap.directory || [])),
-        (bootstrap.calls ?? []).map((call) => normalizeHistoryIdentity(call, bootstrap.directory || [])),
+        storedHistory.map((call) => normalizeHistoryIdentity(call, directoryRef.current)),
+        (bootstrap.calls ?? []).map((call) => normalizeHistoryIdentity(call, directoryRef.current)),
       );
       historyRef.current = mergedHistory;
       setHistory(mergedHistory);
@@ -260,7 +262,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isPreview || !isAuthenticated) return;
     const session = await api.get<SessionResponse>('/api/auth/session');
     await loadAccount(session.profile);
-    await refreshServerHistory(session.profile.id, []).catch(() => undefined);
+    await refreshServerHistory(session.profile.id, directoryRef.current).catch(() => undefined);
   }, [isAuthenticated, isPreview, loadAccount, refreshServerHistory]);
 
   const addHistory = useCallback(async (call: CallLog) => {

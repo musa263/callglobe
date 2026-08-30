@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { requireAdmin } from '../_lib/auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../_lib/http.js';
 import { telnyx, TelnyxApiError } from '../_lib/telnyx.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment, sessionCanAccessNumber, sessionOrganizationId } from '../_lib/tenancy.js';
@@ -22,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const session = access.session;
     const config = await readPbxConfig();
-    const organizationId = access.organizationId || sessionOrganizationId(session, config);
+    const organizationId = access.organizationId || (access.superadmin ? config.activeOrganizationId : sessionOrganizationId(session, config));
 
     if (req.method === 'GET') {
       const response = await telnyx('/verified_numbers?page[size]=250');
@@ -77,7 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(400).json({ error: 'Unknown verification action.' });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Administrative access is required.' });
     if (error instanceof TelnyxApiError && [400, 404, 422].includes(error.status)) return res.status(error.status).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });

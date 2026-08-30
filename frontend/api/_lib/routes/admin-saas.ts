@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { listExtensions } from '../pbx.js';
 import { PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import {
@@ -146,7 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(await responseFor(true));
   } catch (error) {
     if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Administrator access is required.' });
     if (error instanceof Error && /required|valid|organization|company|subscription|plan|password|email|extension|range|account/i.test(error.message)) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });

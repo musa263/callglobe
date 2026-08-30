@@ -43,12 +43,17 @@ function decrypt(value: Buffer) {
   const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12)); decipher.setAuthTag(value.subarray(12, 28));
   return JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as OutboundCallPair;
 }
+export function liveOutboundDestinationId(pair: OutboundCallPair) {
+  return pair.selectedDestinationCallControlId || pair.destinationCallControlId || '';
+}
+
 async function readPath(pathname: string) {
+  const value = await readStoredObject(pathname);
+  if (!value) return null;
   try {
-    const value = await readStoredObject(pathname);
-    return value ? decrypt(value) : null;
+    return decrypt(value);
   } catch (error) {
-    console.error('[outbound-call-store] unable to read encrypted call pair', { pathname, error });
+    console.error('[outbound-call-store] stored call pair could not be decrypted', { pathname, error });
     return null;
   }
 }
@@ -86,6 +91,10 @@ export function mergeOutboundCallPair(current: OutboundCallPair | null, proposed
     ...proposed,
     phase,
     selectedDestinationCallControlId: current.selectedDestinationCallControlId || proposed.selectedDestinationCallControlId,
+    destinationCallControlId: current.selectedDestinationCallControlId
+      || proposed.selectedDestinationCallControlId
+      || proposed.destinationCallControlId
+      || current.destinationCallControlId,
     forkDestinationCallControlIds: [...new Set([
       ...(current.forkDestinationCallControlIds || []),
       ...(proposed.forkDestinationCallControlIds || []),
@@ -144,7 +153,12 @@ export async function claimOutboundCallWinner(pair: OutboundCallPair, destinatio
     const existing = current.selectedDestinationCallControlId;
     won = !existing || existing === destinationCallControlId;
     return won
-      ? { ...current, selectedDestinationCallControlId: destinationCallControlId, updatedAt: new Date().toISOString() }
+      ? {
+        ...current,
+        selectedDestinationCallControlId: destinationCallControlId,
+        destinationCallControlId,
+        updatedAt: new Date().toISOString(),
+      }
       : current;
   });
   return {

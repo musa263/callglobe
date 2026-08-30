@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../_lib/auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../_lib/http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../_lib/http.js';
 import { telnyx, TelnyxApiError } from '../_lib/telnyx.js';
 
 function clean(value: unknown, max: number) {
@@ -45,7 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!suggestions.length) throw new Error('AI did not return usable response options.');
     return res.status(200).json({ suggestions });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof TelnyxApiError && [400, 403, 404, 422].includes(error.status)) return res.status(error.status).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }

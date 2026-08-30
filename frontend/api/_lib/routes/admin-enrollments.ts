@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createEnrollmentToken, requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../http.js';
 import { getExtension } from '../pbx.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -22,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       expiresInSeconds: 600,
     });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     return res.status(500).json({ error: publicError(error) });
   }

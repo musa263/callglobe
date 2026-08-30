@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { authorizeOutboundCall } from '../outbound-policy.js';
 import { assertCallerIdForSession } from '../phone-number-access.js';
 import { getExtension, listExtensions } from '../pbx.js';
@@ -8,6 +8,9 @@ import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { sessionOrganizationId } from '../tenancy.js';
 import { dialCall, dialCallLegs } from '../voice-control.js';
 import { organizationExtensionSipUri } from '../internal-sip.js';
+import { requireFeature } from '../saas-access.js';
+import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
+import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 type ConferenceParticipant = { type: 'external'; number: string } | { type: 'extension'; extensionId: string };
@@ -62,6 +65,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const uniqueDestinations = new Set(resolved.map((participant) => participant.destination.toLowerCase()));
     if (uniqueDestinations.size !== resolved.length) return res.status(400).json({ error: 'Each conference participant can only be added once.' });
     const externalParticipants = resolved.filter((participant) => !participant.internal);
+    await requireFeature(session, externalParticipants.length ? 'outboundCalling' : 'internalCalling', config);
+    await assertTelnyxVoiceReady();
+    if (externalParticipants.length) {
+      const wallet = await readTenantWallet(organizationId);
+      const blocked = outboundWalletBlockReason(wallet);
+      if (blocked) return res.status(402).json({ error: blocked });
+    }
     let callerId: string | undefined;
     if (externalParticipants.length) {
       const tenant = pbxForOrganization(config, organizationId);
@@ -89,7 +99,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     return res.status(200).json({ room, host_call_id: dialCallLegs(result)[0]?.call_control_id, participants: resolved.length, internalParticipants: resolved.filter((participant) => participant.internal).length });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
+    if (error instanceof TelnyxCarrierUnavailableError) return res.status(503).json({ error: error.message });
+    if (error instanceof Error && /wallet is frozen|Calling credit/i.test(error.message)) return res.status(402).json({ error: error.message });
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your company.' });
     if (error instanceof Error && /Caller ID|organization|owned|verified|outbound rule|International calling|active colleague|active company extension/i.test(error.message)) return res.status(403).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { readUserProfile, saveProfilePhoto, saveUserProfile, type StoredUserProfile } from '../profile-store.js';
 import { VOCIVO_SUPERADMIN_NAME } from '../platform-identity.js';
 
@@ -52,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     return res.status(200).json({ profile: await saveUserProfile(profile) });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Session expired.' });
+    if (writeAuthError(res, error)) return;
     if (error instanceof Error && /photo|JPEG|PNG|WebP|2.5 MB/i.test(error.message)) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }
