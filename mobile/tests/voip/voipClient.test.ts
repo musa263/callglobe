@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Call } from '@telnyx/react-voice-commons-sdk';
-import { CallLifecycleRegistry } from '../../src/lib/callLifecycle';
-import { attachIceFailureListener, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
+import { CallLifecycleRegistry, transactCallWaiting } from '../../src/lib/callLifecycle';
+import { attachIceFailureListener, hasConfirmedBidirectionalMedia, isBidirectionalMediaReady, isTransportNetworkMigration, isVoiceSessionFresh, waitForBidirectionalMedia, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
 
 class MockPeerConnection {
+  connectionState = 'connected';
   iceConnectionState = 'connected';
   restartCount = 0;
+  offerCount = 0;
+  getStats?: () => Promise<unknown>;
   listeners = new Set<() => void>();
   restartIce() { this.restartCount += 1; }
+  async createOffer() { this.offerCount += 1; return { type: 'offer', sdp: 'fresh-ice' }; }
+  async setLocalDescription() { return undefined; }
+  getSenders() { return [{ track: { kind: 'audio', enabled: true, readyState: 'live' } }]; }
+  getReceivers() { return [{ track: { kind: 'audio', readyState: 'live' } }]; }
   addEventListener(_event: 'iceconnectionstatechange', listener: () => void) { this.listeners.add(listener); }
   removeEventListener(_event: 'iceconnectionstatechange', listener: () => void) { this.listeners.delete(listener); }
   transition(state: string) {
@@ -18,9 +25,14 @@ class MockPeerConnection {
 }
 
 function mockTelnyxCall(peer: MockPeerConnection) {
+  let restartCount = 0;
   return {
     callId: 'call-1',
-    telnyxCall: { peer: { getPeerConnection: () => peer } },
+    telnyxCall: {
+      peer: { getPeerConnection: () => peer },
+      restartMedia: async () => { restartCount += 1; peer.restartIce(); },
+    },
+    get restartCount() { return restartCount; },
   } as unknown as Call;
 }
 
@@ -36,6 +48,20 @@ test('CallKeep and SDK hangup races produce one signaling command', async () => 
   assert.equal(hangups, 1);
 });
 
+test('a rejected BYE releases the lifecycle lock and permits a verified retry', async () => {
+  const calls = new CallLifecycleRegistry();
+  calls.transition('call-retry', 'ACTIVE');
+  let attempts = 0;
+  await assert.rejects(calls.terminate('call-retry', async () => {
+    attempts += 1;
+    throw new Error('signaling timeout');
+  }), /signaling timeout/);
+  assert.equal(calls.isTerminating('call-retry'), false);
+  assert.equal(calls.state('call-retry'), 'ACTIVE');
+  await calls.terminate('call-retry', async () => { attempts += 1; });
+  assert.equal(attempts, 2);
+});
+
 test('remote CANCEL wins an exact answer race without resurrecting the call', async () => {
   const calls = new CallLifecycleRegistry();
   calls.transition('call-2', 'RINGING');
@@ -48,6 +74,19 @@ test('remote CANCEL wins an exact answer race without resurrecting the call', as
   assert.equal(calls.transition('call-2', 'ACTIVE'), false);
 });
 
+test('call waiting rolls back the answered leg when holding the current call fails', async () => {
+  const events: string[] = [];
+  await assert.rejects(transactCallWaiting({
+    answerIncoming: async () => { events.push('answer-b'); },
+    isIncomingAcknowledged: () => true,
+    holdCurrent: async () => { events.push('hold-a'); throw new Error('hold rejected'); },
+    activateIncoming: () => { events.push('activate-b'); },
+    rollbackIncoming: async () => { events.push('hangup-b'); },
+    restoreCurrent: () => { events.push('restore-a'); },
+  }), /hold rejected/);
+  assert.deepEqual(events, ['answer-b', 'hold-a', 'hangup-b', 'restore-a']);
+});
+
 test('Telnyx DROPPED state remains recoverable during a network handoff', () => {
   const calls = new CallLifecycleRegistry();
   calls.transition('call-3', 'ACTIVE');
@@ -57,11 +96,35 @@ test('Telnyx DROPPED state remains recoverable during a network handoff', () => 
 
 test('Wi-Fi to cellular recovery restarts ICE without replacing the live signaling session', async () => {
   const peer = new MockPeerConnection();
-  peer.iceConnectionState = 'failed';
   const coordinator = new VoiceMediaRecoveryCoordinator(() => undefined, 0);
   const call = mockTelnyxCall(peer);
   await Promise.all([coordinator.recover(call, 'network-wifi-to-cellular'), coordinator.recover(call, 'ice-failed')]);
+  // A stale connected flag must not suppress network-migration renegotiation.
   assert.equal(peer.restartCount, 1);
+});
+
+test('media readiness requires live inbound and outbound audio tracks', async () => {
+  const peer = new MockPeerConnection();
+  const call = mockTelnyxCall(peer);
+  assert.equal(isBidirectionalMediaReady(call), true);
+  const started = Date.now();
+  assert.equal(await waitForBidirectionalMedia(call, 250), true);
+  assert.ok(Date.now() - started < 100, 'ready media should not wait for an ICE timeout');
+  peer.getReceivers = () => [];
+  assert.equal(isBidirectionalMediaReady(call), false);
+});
+
+test('RTP confirmation waits for packets in both directions before starting the timer', async () => {
+  const peer = new MockPeerConnection();
+  let packets = false;
+  peer.getStats = async () => new Map([
+    ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: packets ? 2 : 0 }],
+    ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: packets ? 2 : 0 }],
+  ]);
+  const call = mockTelnyxCall(peer);
+  assert.equal(await hasConfirmedBidirectionalMedia(call), false);
+  setTimeout(() => { packets = true; }, 120);
+  assert.equal(await waitForBidirectionalMedia(call, 500), true);
 });
 
 test('network recovery ignores NetInfo initialization and only handles Wi-Fi/cellular migrations', () => {

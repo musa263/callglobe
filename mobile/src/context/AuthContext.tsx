@@ -1,5 +1,4 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Settings } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { api } from '../lib/api';
@@ -124,10 +123,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const historyRef = useRef<CallLog[]>([]);
   const activeUserIdRef = useRef<string | null>(null);
   const [isPreview, setIsPreview] = useState(false);
+  const [nativeBridgeError, setNativeBridgeError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (Platform.OS === 'ios') Settings.set({ vocivoSignedIn: isAuthenticated && !isPreview });
-    setVoiceSignedIn(isAuthenticated && !isPreview).catch(() => undefined);
+    setVoiceSignedIn(isAuthenticated && !isPreview)
+      .then(() => setNativeBridgeError(null))
+      .catch((failure) => {
+        const error = failure instanceof Error ? failure : new Error(String(failure));
+        console.error('[Vocivo Auth] native voice state synchronization failed', { message: error.message, stack: error.stack });
+        setNativeBridgeError(error);
+      });
   }, [isAuthenticated, isPreview]);
 
   const refreshServerHistory = useCallback(async (userId: string, directory: DirectoryResponse['users']) => {
@@ -231,8 +236,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccount]);
 
   const signOut = useCallback(async () => {
-    if (Platform.OS === 'ios') Settings.set({ vocivoSignedIn: false });
-    await setVoiceSignedIn(false).catch(() => undefined);
     await signOutVoiceDevice();
     setIsPreview(false);
     setAuthenticated(false);
@@ -278,6 +281,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [isPreview]);
 
   const value = useMemo(() => ({ loading, isAuthenticated, profile, rates, callerNumbers, history, isPreview, signIn, enrollWithQr, signOut, enterPreview, refresh, addHistory, updateProfile }), [addHistory, callerNumbers, enrollWithQr, enterPreview, history, isAuthenticated, isPreview, loading, profile, rates, refresh, signIn, signOut, updateProfile]);
+  if (nativeBridgeError) throw nativeBridgeError;
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

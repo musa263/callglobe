@@ -28,7 +28,18 @@ export class SingleFlightTermination {
     this.#phase = 'requested';
     this.#operation = Promise.resolve()
       .then(operation)
-      .finally(() => { this.#phase = 'finished'; });
+      .then(() => {
+        this.#phase = 'finished';
+      })
+      .catch((error) => {
+        // A failed CANCEL/BYE is not a completed termination. Release the
+        // single-flight lock so the user or retry worker can try again.
+        this.#phase = 'idle';
+        throw error;
+      })
+      .finally(() => {
+        this.#operation = undefined;
+      });
     return this.#operation;
   }
 
@@ -44,6 +55,40 @@ export class SerialTaskQueue {
     const result = this.#tail.then(operation, operation);
     this.#tail = result.then(() => undefined, () => undefined);
     return result;
+  }
+}
+
+type CallWaitingTransaction = {
+  answerIncoming: () => Promise<void>;
+  isIncomingAcknowledged: () => boolean;
+  holdCurrent: () => Promise<void>;
+  activateIncoming: () => Promise<void> | void;
+  rollbackIncoming: () => Promise<void>;
+  restoreCurrent: () => Promise<void> | void;
+};
+
+export async function transactCallWaiting(steps: CallWaitingTransaction) {
+  let incomingAcknowledged = false;
+  try {
+    await steps.answerIncoming();
+    incomingAcknowledged = steps.isIncomingAcknowledged();
+    if (!incomingAcknowledged) throw new Error('The waiting call did not acknowledge the answer.');
+    await steps.holdCurrent();
+    await steps.activateIncoming();
+  } catch (error) {
+    let rollbackError: unknown;
+    if (incomingAcknowledged) {
+      try {
+        await steps.rollbackIncoming();
+      } catch (failure) {
+        rollbackError = failure;
+      }
+    }
+    await steps.restoreCurrent();
+    if (rollbackError) {
+      throw new AggregateError([error, rollbackError], 'Call waiting failed and the incoming leg could not be rolled back.');
+    }
+    throw error;
   }
 }
 

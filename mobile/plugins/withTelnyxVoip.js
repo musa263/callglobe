@@ -4,30 +4,80 @@ const { IOSConfig, withAndroidManifest, withAppBuildGradle, withAppDelegate, wit
 
 const ringtoneNames = ['vocivo_classic', 'vocivo_chime', 'vocivo_pulse', 'vocivo_wave', 'vocivo_signal', 'vocivo_softbell'];
 
-function insertOnce(source, marker, insertion) {
-  return source.includes(insertion.trim()) ? source : source.replace(marker, `${marker}${insertion}`);
+function findSwiftTypeBody(source, typeName) {
+  const declaration = new RegExp(`(?:public\\s+)?class\\s+${typeName}\\b[^\\{]*\\{`, 'm').exec(source);
+  if (!declaration) throw new Error(`Unable to locate the Swift ${typeName} declaration.`);
+  const open = declaration.index + declaration[0].lastIndexOf('{');
+  let depth = 1;
+  let quote = null;
+  let escaped = false;
+  for (let index = open + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === '{') depth += 1;
+    if (character === '}') depth -= 1;
+    if (depth === 0) return { open, close: index };
+  }
+  throw new Error(`Unable to locate the closing brace for Swift ${typeName}.`);
+}
+
+function insertInSwiftType(source, typeName, marker, insertion) {
+  if (source.includes(marker)) return source;
+  const body = findSwiftTypeBody(source, typeName);
+  return `${source.slice(0, body.close)}${insertion}\n${source.slice(body.close)}`;
 }
 
 function withTelnyxAppDelegate(config) {
   return withAppDelegate(config, (appConfig) => {
     if (appConfig.modResults.language !== 'swift') throw new Error('Vocivo requires a Swift AppDelegate for Telnyx VoIP integration.');
     let source = appConfig.modResults.contents;
-    source = insertOnce(source, 'import Expo\n', 'import PushKit\nimport TelnyxVoiceCommons\n');
-    source = source.replace('public class AppDelegate: ExpoAppDelegate {', 'public class AppDelegate: ExpoAppDelegate, PKPushRegistryDelegate {');
-    if (!source.includes('private var vocivoVoipRegistry')) {
-      source = source.replace('  var window: UIWindow?\n', '  var window: UIWindow?\n  private var vocivoVoipRegistry: PKPushRegistry?\n');
+    if (!source.includes('// VOCIVO_VOIP_IMPORTS')) {
+      const importMatch = /^import Expo$/m.exec(source);
+      if (!importMatch) throw new Error('Unable to locate the Expo import in AppDelegate.');
+      const insertionPoint = importMatch.index + importMatch[0].length;
+      const imports = [
+        '// VOCIVO_VOIP_IMPORTS',
+        ...(!source.includes('import PushKit') ? ['import PushKit'] : []),
+        ...(!source.includes('import TelnyxVoiceCommons') ? ['import TelnyxVoiceCommons'] : []),
+      ].join('\n');
+      source = `${source.slice(0, insertionPoint)}\n${imports}${source.slice(insertionPoint)}`;
     }
-    const pushRegistration = `vocivoVoipRegistry = PKPushRegistry(queue: DispatchQueue.main)
+    source = source.replace(
+      /(public\s+class\s+AppDelegate\s*:\s*ExpoAppDelegate)([^\{]*)(\{)/,
+      (match, declaration, conformances, brace) => conformances.includes('PKPushRegistryDelegate')
+        ? match
+        : `${declaration}${conformances.trimEnd()}, PKPushRegistryDelegate ${brace}`,
+    );
+    if (!source.includes('// VOCIVO_VOIP_REGISTRY')) {
+      if (source.includes('private var vocivoVoipRegistry: PKPushRegistry?')) {
+        source = source.replace('  private var vocivoVoipRegistry: PKPushRegistry?', '  // VOCIVO_VOIP_REGISTRY\n  private var vocivoVoipRegistry: PKPushRegistry?');
+      } else {
+        const body = findSwiftTypeBody(source, 'AppDelegate');
+        source = `${source.slice(0, body.open + 1)}\n  // VOCIVO_VOIP_REGISTRY\n  private var vocivoVoipRegistry: PKPushRegistry?${source.slice(body.open + 1)}`;
+      }
+    }
+    const pushRegistration = `// VOCIVO_VOIP_BOOTSTRAP
+    vocivoVoipRegistry = PKPushRegistry(queue: DispatchQueue.main)
     vocivoVoipRegistry?.delegate = self
     vocivoVoipRegistry?.desiredPushTypes = [.voIP]`;
-    if (source.includes('TelnyxVoipPushHandler.initializeVoipRegistration()')) {
-      source = source.replace('TelnyxVoipPushHandler.initializeVoipRegistration()', pushRegistration);
-    } else if (!source.includes('vocivoVoipRegistry = PKPushRegistry')) {
-      source = source.replace(/return super\.application\(application, didFinishLaunchingWithOptions: launchOptions\)/, `${pushRegistration}\n\n    return super.application(application, didFinishLaunchingWithOptions: launchOptions)`);
+    if (!source.includes('// VOCIVO_VOIP_BOOTSTRAP')) {
+      if (source.includes('vocivoVoipRegistry = PKPushRegistry(queue: DispatchQueue.main)')) {
+        source = source.replace('    vocivoVoipRegistry = PKPushRegistry(queue: DispatchQueue.main)', '    // VOCIVO_VOIP_BOOTSTRAP\n    vocivoVoipRegistry = PKPushRegistry(queue: DispatchQueue.main)');
+      } else {
+        const returnPattern = /return\s+super\.application\(application,\s*didFinishLaunchingWithOptions:\s*launchOptions\)/;
+        if (!returnPattern.test(source)) throw new Error('Unable to locate the AppDelegate launch return statement.');
+        source = source.replace(returnPattern, `${pushRegistration}\n\n    return super.application(application, didFinishLaunchingWithOptions: launchOptions)`);
+      }
     }
-    if (!source.includes('didUpdate pushCredentials: PKPushCredentials')) {
-      const methods = `
+    const methods = `
 
+  // VOCIVO_VOIP_DELEGATE_METHODS
   // MARK: - Telnyx VoIP Push Notifications
   public func pushRegistry(
     _ registry: PKPushRegistry,
@@ -49,15 +99,6 @@ function withTelnyxAppDelegate(config) {
     }
     TelnyxVoipPushHandler.shared.handleVoipPush(payload, type: type, completion: completion)
   }
-
-`;
-      const nextClass = source.indexOf('\n}\n\nclass ReactNativeDelegate');
-      if (nextClass === -1) throw new Error('Unable to locate the iOS AppDelegate class ending.');
-      source = `${source.slice(0, nextClass)}${methods}${source.slice(nextClass)}`;
-    }
-    if (!source.includes('didInvalidatePushTokenFor type: PKPushType')) {
-      const invalidationMethod = `
-
   public func pushRegistry(
     _ registry: PKPushRegistry,
     didInvalidatePushTokenFor type: PKPushType
@@ -66,10 +107,10 @@ function withTelnyxAppDelegate(config) {
     UserDefaults.standard.removeObject(forKey: "telnyx_voip_push_token")
   }
 `;
-      const nextClass = source.indexOf('\n}\n\nclass ReactNativeDelegate');
-      if (nextClass === -1) throw new Error('Unable to locate the iOS AppDelegate class ending.');
-      source = `${source.slice(0, nextClass)}${invalidationMethod}${source.slice(nextClass)}`;
+    if (!source.includes('// VOCIVO_VOIP_DELEGATE_METHODS') && source.includes('didReceiveIncomingPushWith payload: PKPushPayload')) {
+      source = source.replace('  // MARK: - Telnyx VoIP Push Notifications', '  // VOCIVO_VOIP_DELEGATE_METHODS\n  // MARK: - Telnyx VoIP Push Notifications');
     }
+    source = insertInSwiftType(source, 'AppDelegate', '// VOCIVO_VOIP_DELEGATE_METHODS', methods);
     appConfig.modResults.contents = source;
     return appConfig;
   });
@@ -101,6 +142,28 @@ function withAndroidRingtones(config) {
     const destination = path.join(platformProjectRoot, 'app', 'src', 'main', 'res', 'raw');
     fs.mkdirSync(destination, { recursive: true });
     ringtoneNames.forEach((name) => fs.copyFileSync(path.join(projectRoot, 'assets', 'ringtones', `${name}.wav`), path.join(destination, `${name}.wav`)));
+    return appConfig;
+  }]);
+}
+
+function withProductionAndroidHardening(config) {
+  return withDangerousMod(config, ['android', async (appConfig) => {
+    const root = appConfig.modRequest.platformProjectRoot;
+    const propertiesPath = path.join(root, 'gradle.properties');
+    let properties = fs.readFileSync(propertiesPath, 'utf8');
+    if (/^android\.enableMinifyInReleaseBuilds=/m.test(properties)) {
+      properties = properties.replace(/^android\.enableMinifyInReleaseBuilds=.*$/m, 'android.enableMinifyInReleaseBuilds=true');
+    } else {
+      properties = `${properties.trimEnd()}\n\n# VOCIVO_RELEASE_HARDENING\nandroid.enableMinifyInReleaseBuilds=true\n`;
+    }
+    fs.writeFileSync(propertiesPath, properties);
+
+    const rulesPath = path.join(root, 'app', 'proguard-rules.pro');
+    let rules = fs.readFileSync(rulesPath, 'utf8');
+    if (!rules.includes('# VOCIVO_RELEASE_LOG_STRIPPING')) {
+      rules = `${rules.trimEnd()}\n\n# VOCIVO_RELEASE_LOG_STRIPPING\n-assumenosideeffects class android.util.Log {\n    public static *** v(...);\n    public static *** d(...);\n    public static *** i(...);\n    public static *** w(...);\n}\n`;
+      fs.writeFileSync(rulesPath, rules);
+    }
     return appConfig;
   }]);
 }
@@ -147,6 +210,10 @@ function withTelnyxAndroidComponents(config) {
     const manifest = appConfig.modResults.manifest;
     const application = manifest.application?.[0];
     if (!application) throw new Error('Unable to locate the Android application manifest.');
+    application.$ = application.$ || {};
+    application.$['android:allowBackup'] = 'false';
+    application.$['android:fullBackupContent'] = 'false';
+    application.$['android:usesCleartextTraffic'] = 'false';
     application.service = application.service || [];
     if (!application.service.some((entry) => entry.$?.['android:name'] === '.AppFirebaseMessagingService')) {
       application.service.push({
@@ -177,6 +244,7 @@ module.exports = function withTelnyxVoip(config) {
   config = withIosRingtones(config);
   config = withTelnyxMainActivity(config);
   config = withTelnyxAndroidComponents(config);
+  config = withProductionAndroidHardening(config);
   config = withAndroidRingtones(config);
   return config;
 };

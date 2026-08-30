@@ -40,15 +40,21 @@
         "FOREGROUND_SERVICE_PHONE_CALL",
         "FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.WAKE_LOCK",
-        "READ_PHONE_NUMBERS",
         "READ_CONTACTS",
-        "CAMERA",
-        "android.permission.READ_CONTACTS",
-        "android.permission.WRITE_CONTACTS"
+        "CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.READ_PHONE_NUMBERS"
       ]
     },
     "plugins": [
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false
+        }
+      ],
       [
         "expo-contacts",
         {

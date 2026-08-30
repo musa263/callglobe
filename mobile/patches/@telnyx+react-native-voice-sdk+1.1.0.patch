@@ -1,24 +1,54 @@
+diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts
+index 7776025..16506a9 100644
+--- a/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts
++++ b/node_modules/@telnyx/react-native-voice-sdk/lib/call.ts
+@@ -483 +483 @@ export class Call extends EventEmitter<CallEvents> {
+-  public hangup = (customHeaders?: { name: string; value: string }[]) => {
++  public hangup = async (customHeaders?: { name: string; value: string }[]) => {
+@@ -493 +493 @@ export class Call extends EventEmitter<CallEvents> {
+-    this.connection.send(
++    await this.connection.sendAndWait(
+@@ -508,0 +509,28 @@ export class Call extends EventEmitter<CallEvents> {
++  /**
++   * Restart ICE and renegotiate the active Telnyx media dialog after a network
++   * interface migration. The attach transaction is Telnyx's supported
++   * re-INVITE equivalent and carries the fresh SDP offer to the gateway.
++   */
++  public restartMedia = async () => {
++    if (!this.peer) throw new Error('[Call] Peer is not created');
++    const peerConnection = this.peer.getPeerConnection();
++    if (!peerConnection) throw new Error('[Call] Peer connection is unavailable');
++    peerConnection.restartIce();
++    await this.peer.createOffer({ iceRestart: true });
++    const response = await this.connection.sendAndWait(
++      createAttachMessage({
++        callId: this.callId,
++        sessionId: this.sessionId,
++        sdp: this.getLocalSdpForSignaling(),
++        customHeaders: this.inviteCustomHeaders || [],
++        destinationNumber: this.options.destinationNumber || '',
++        callerIdName: this.options.callerIdName || '',
++        callerIdNumber: this.options.callerIdNumber || '',
++        clientState: this.options.clientState || '',
++        userVariables: [],
++      })
++    );
++    if (!response || typeof response !== 'object') throw new Error('[Call] Invalid media restart acknowledgment');
++    if (this.isTrickleIceEnabled()) this.peer.flushPendingLocalCandidates();
++  };
++
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
 index edab35e..fe1fa99 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/client-options.ts
-@@ -29,6 +29,8 @@ export interface ClientOptions {
-    * @default false
-    */
-   useTrickleIce?: boolean;
+@@ -31,0 +32,2 @@ export interface ClientOptions {
 +  /** ICE servers used by inbound calls and as the default for outbound calls. */
 +  iceServers?: RTCIceServer[];
-   /**
-    * The push notification device token, used for receiving push notifications on a specific device.
-    * This is typically used for mobile applications to receive incoming call notifications.
 diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
 index 74f800d..6566451 100644
 --- a/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
 +++ b/node_modules/@telnyx/react-native-voice-sdk/lib/client.ts
-@@ -431,7 +431,13 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
-       telnyxSessionId: null,
-       telnyxLegId: null,
-       callId: null,
+@@ -434 +434,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
 -      options,
 +      options: {
 +        ...options,
@@ -27,22 +57,35 @@ index 74f800d..6566451 100644
 +          iceServers: options.peerConnectionOptions?.iceServers ?? this.options.iceServers,
 +        },
 +      },
-       debug: this.options.debug,
-       callReportConfig: this.getCallReportConfig(),
-       pushWhenActive: this.options.pushWhenActive,
-@@ -1125,6 +1131,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
-           destinationNumber: msg.params.caller_id_number,
-           peerConnectionOptions: {
-             useTrickleIce: this.options.useTrickleIce,
+@@ -1127,0 +1134 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
 +            iceServers: this.options.iceServers,
-           },
-         },
-         inviteCustomHeaders: msg.params.dialogParams?.custom_headers || null,
-@@ -1276,6 +1283,7 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
-         destinationNumber: msg.params.caller_id_number,
-         peerConnectionOptions: {
-           useTrickleIce: this.options.useTrickleIce,
+@@ -1278,0 +1286 @@ export class TelnyxRTC extends EventEmitter<TelnyxRTCEvents> {
 +          iceServers: this.options.iceServers,
-         },
-       },
-       inviteCustomHeaders: msg.params.dialogParams?.custom_headers || null,
+diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts
+index 50b0269..48afeec 100644
+--- a/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts
++++ b/node_modules/@telnyx/react-native-voice-sdk/lib/connection.ts
+@@ -175 +175,8 @@ export class Connection extends EventEmitter<ConnectionEvents> {
+-    return deferred.promise;
++    let timeout: ReturnType<typeof setTimeout>;
++    const deadline = new Promise<never>((_resolve, reject) => {
++      timeout = setTimeout(() => {
++        this.transactions.delete(msg.id);
++        reject(new Error(`Telnyx signaling transaction timed out: ${msg.id}`));
++      }, 12_000);
++    });
++    return Promise.race([deferred.promise, deadline]).finally(() => clearTimeout(timeout));
+diff --git a/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts b/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts
+index 547b9e8..3e3e18b 100644
+--- a/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts
++++ b/node_modules/@telnyx/react-native-voice-sdk/lib/peer.ts
+@@ -98 +98,3 @@ export class Peer {
+-      this.iceGatheringComplete.promise.catch(() => {});
++      this.iceGatheringComplete.promise.catch((error) => {
++        log.debug('[Peer] ICE gathering promise closed during teardown', error);
++      });
+@@ -178 +180 @@ export class Peer {
+-  public createOffer = async () => {
++  public createOffer = async (options?: { iceRestart?: boolean }) => {
+@@ -182,0 +185 @@ export class Peer {
++      ...(options?.iceRestart ? { iceRestart: true } : {}),

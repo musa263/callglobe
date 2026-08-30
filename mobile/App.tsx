@@ -24,9 +24,9 @@ import { colors } from './src/theme';
 
 function AppContent() {
   const { loading, isAuthenticated, isPreview } = useAuth();
-  if (loading) return <VoiceRoot><View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View></VoiceRoot>;
+  if (loading) return <View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View>;
   if (!isAuthenticated && !isPreview) return <AuthScreen />;
-  return <VoiceRoot><BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider></VoiceRoot>;
+  return <BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider>;
 }
 
 class LaunchBoundary extends Component<{ children: React.ReactNode }, { failed: boolean }> {
@@ -96,7 +96,7 @@ function AuthenticatedApp() {
       </View>
       {activeCall && callMinimized && <View style={styles.liveCallBar}>
         <Pressable accessibilityLabel="Return to active call" onPress={() => setCallMinimized(false)} style={styles.liveCallRestore}><View style={styles.liveCallIcon}><PhoneCall size={18} color={colors.ink} /></View><View style={styles.liveCallCopy}><Text numberOfLines={1} style={styles.liveCallName}>{activeCall.displayName || activeCall.number}</Text><Text style={styles.liveCallMeta}>{activeCall.onHold ? 'ON HOLD' : activeCall.phase === 'active' ? 'LIVE CALL' : activeCall.phase.toUpperCase()} · {Math.floor(duration / 60).toString().padStart(2, '0')}:{(duration % 60).toString().padStart(2, '0')}</Text></View><ChevronUp size={19} color={colors.textMuted} /></Pressable>
-        <Pressable accessibilityLabel="End active call" onPress={() => endCall().catch(() => undefined)} style={styles.liveCallEnd}><PhoneOff size={19} color={colors.white} /></Pressable>
+        <Pressable accessibilityLabel="End active call" onPress={() => endCall().catch((failure) => Alert.alert('Call still active', failure instanceof Error ? failure.message : 'Hangup was not acknowledged. Try again.'))} style={styles.liveCallEnd}><PhoneOff size={19} color={colors.white} /></Pressable>
       </View>}
       <BottomTabs active={tab} onChange={changeTab} />
     </View>
@@ -107,7 +107,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
-      <LaunchBoundary><AuthProvider><AppContent /></AuthProvider></LaunchBoundary>
+      <LaunchBoundary><AuthProvider><VoiceRoot><AppContent /></VoiceRoot></AuthProvider></LaunchBoundary>
     </SafeAreaProvider>
   );
 }

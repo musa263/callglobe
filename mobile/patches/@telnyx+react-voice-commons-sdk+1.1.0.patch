@@ -1,32 +1,78 @@
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxFirebaseMessagingService.kt b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxFirebaseMessagingService.kt
+index 16a1f28..7ee1906 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxFirebaseMessagingService.kt
++++ b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxFirebaseMessagingService.kt
+@@ -19 +18,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-        Log.d(tag, "FCM message data: ${remoteMessage.data}")
+@@ -49 +47,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-        Log.d(tag, "FCM token refreshed: $token")
+@@ -69 +66,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                    Log.d(tag, "Parsing missed call metadata JSON: $metadataJson")
+@@ -74 +70,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                    Log.d(tag, "Extracted from metadata - callId: $callId, callerName: $callerName, callerNumber: $callerNumber")
+@@ -85 +80,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                Log.d(tag, "Using top-level data for missed call - callId: $callId, callerName: $callerName, callerNumber: $callerNumber")
+@@ -127 +121,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                    Log.d(tag, "Parsing metadata JSON: $metadataJson")
+@@ -132 +125,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                    Log.d(tag, "Extracted from metadata - callId: $callId, callerName: $callerName, callerNumber: $callerNumber")
+@@ -144 +136,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                Log.d(tag, "Using top-level data - callId: $callId, callerName: $callerName, callerNumber: $callerNumber")
+@@ -156 +147,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                Log.d(tag, "Extracted FCM metadata string: $metadata")
+@@ -167 +157,0 @@ open class TelnyxFirebaseMessagingService : FirebaseMessagingService() {
+-                Log.d(tag, "Using fallback metadata: $metadata")
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxMainActivity.kt b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxMainActivity.kt
 index c96c06f..237689e 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxMainActivity.kt
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxMainActivity.kt
-@@ -27,7 +27,7 @@ abstract class TelnyxMainActivity : ReactActivity() {
-         handleIntent(intent)
-     }
-
+@@ -30 +30 @@ abstract class TelnyxMainActivity : ReactActivity() {
 -    override fun onNewIntent(intent: Intent?) {
 +    override fun onNewIntent(intent: Intent) {
-         super.onNewIntent(intent)
-         Log.d(TAG, "onNewIntent called")
-         intent?.let { handleIntent(it) }
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxNotificationActionReceiver.kt b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxNotificationActionReceiver.kt
+index fdf3370..6bb4b42 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxNotificationActionReceiver.kt
++++ b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/TelnyxNotificationActionReceiver.kt
+@@ -51,5 +51 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-            val (existingAction, existingMetadata) = VoicePnManager.getPendingPushAction(context)
+-            
+-            Log.d(tag, "Existing action: '$existingAction'")
+-            Log.d(tag, "Existing metadata: '$existingMetadata'")
+-            Log.d(tag, "Existing metadata length: ${existingMetadata?.length ?: 0}")
++            val (_, existingMetadata) = VoicePnManager.getPendingPushAction(context)
+@@ -73,2 +68,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                            Log.d(tag, "Extracted original JSON: $originalJson")
+-                            
+@@ -80 +73,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                            Log.d(tag, "Enhanced metadata with action: $finalMetadata")
+@@ -90 +82,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                        Log.d(tag, "Updated existing JSON metadata with action: $finalMetadata")
+@@ -99 +90,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                    Log.d(tag, "Created fallback metadata: $finalMetadata")
+@@ -108 +98,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                Log.d(tag, "Created simple metadata: $finalMetadata")
+@@ -144 +133,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                        Log.d(tag, "Preserved original FCM metadata with action: $finalMetadata")
+@@ -151 +139,0 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-                        Log.d(tag, "Updated existing JSON metadata with action: $finalMetadata")
+@@ -177 +165 @@ open class TelnyxNotificationActionReceiver : BroadcastReceiver() {
+-}
+\ No newline at end of file
++}
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnBridgeModule.kt b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnBridgeModule.kt
-index 888e7d0..7a16f9b 100644
+index 888e7d0..71e37fe 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnBridgeModule.kt
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnBridgeModule.kt
-@@ -13,6 +13,7 @@ import com.facebook.react.bridge.WritableMap
- import com.facebook.react.bridge.Arguments
- import com.facebook.react.module.annotations.ReactModule
- import com.facebook.react.modules.core.DeviceEventManagerModule
+@@ -15,0 +16 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 +import com.google.firebase.messaging.FirebaseMessaging
-
- @ReactModule(name = VoicePnBridgeModule.NAME)
- class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
-@@ -226,6 +227,42 @@ class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextB
-         }
-     }
-
+@@ -32,4 +32,0 @@ class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextB
+-            Log.d(TAG, "Retrieved pending action: '$action'")
+-            Log.d(TAG, "Retrieved metadata: '$metadata'")
+-            Log.d(TAG, "Metadata length: ${metadata?.length ?: 0}")
+-            
+@@ -50 +46,0 @@ class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextB
+-            Log.d(TAG, "Setting pending push action: '$action' with metadata length: ${metadata.length}")
+@@ -228,0 +225,36 @@ class VoicePnBridgeModule(reactContext: ReactApplicationContext) : ReactContextB
 +    @ReactMethod
 +    fun getFirebaseToken(promise: Promise) {
 +        val preferences = reactApplicationContext.getSharedPreferences("vocivo_push", Context.MODE_PRIVATE)
@@ -63,17 +109,25 @@ index 888e7d0..7a16f9b 100644
 +        }
 +    }
 +
-     @ReactMethod
-     fun setIncomingCallRingtone(resourceName: String?, promise: Promise) {
-         try {
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnManager.kt b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnManager.kt
+index 75b4164..4193129 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnManager.kt
++++ b/node_modules/@telnyx/react-voice-commons-sdk/android/src/main/java/com/telnyx/react_voice_commons/VoicePnManager.kt
+@@ -25 +24,0 @@ object VoicePnManager {
+-        Log.d(TAG, "setVoipToken called with: $token")
+@@ -41 +39,0 @@ object VoicePnManager {
+-        Log.d(TAG, "setPendingVoipPush called with: $push")
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift b/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift
-index 8fc2564..85a748a 100644
+index 8fc2564..ae86d5b 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/ios/CallKitBridge.swift
-@@ -9,6 +9,36 @@ import React
-     import UserNotifications
-     import WebRTC
-
+@@ -11,0 +12,36 @@ import React
++    private func telnyxDebugLog(_ format: String, _ arguments: CVarArg...) {
++        #if DEBUG
++            withVaList(arguments) { NSLogv(format, $0) }
++        #endif
++    }
++
 +    private enum VocivoCallKitIdentity {
 +        static func resolve(displayName: String, address: String) -> (handle: CXHandle, name: String, address: String) {
 +            let cleanName = cleanLabel(displayName)
@@ -104,53 +158,75 @@ index 8fc2564..85a748a 100644
 +        }
 +    }
 +
-     /// Small synchronized dictionary used because React Native module methods
-     /// and CXProvider delegate callbacks are not guaranteed to share a queue.
-     public final class LockedDictionary<Key: Hashable, Value> {
-@@ -147,13 +177,13 @@ import React
-                 return
-             }
-
+@@ -67 +103 @@ import React
+-            NSLog("TelnyxVoice: CallKitBridge initialized with TelnyxCallKitManager active")
++            telnyxDebugLog("TelnyxVoice: CallKitBridge initialized with TelnyxCallKitManager active")
+@@ -150,2 +186,2 @@ import React
 -            let callHandle = CXHandle(type: .phoneNumber, value: handle)
 -            let startCallAction = CXStartCallAction(call: uuid, handle: callHandle)
 +            let identity = VocivoCallKitIdentity.resolve(displayName: displayName, address: handle)
 +            let startCallAction = CXStartCallAction(call: uuid, handle: identity.handle)
-             let transaction = CXTransaction(action: startCallAction)
-
-             manager.activeCalls[uuid] = [
+@@ -155,2 +191,2 @@ import React
 -                "caller": displayName,
 -                "handle": handle,
 +                "caller": identity.name,
 +                "handle": identity.address,
-                 "uuid": uuid.uuidString,
-                 "direction": "outgoing",
-                 "source": "react_native",
-@@ -185,16 +215,16 @@ import React
-                 return
-             }
-
+@@ -188 +224 @@ import React
 -            let callHandle = CXHandle(type: .phoneNumber, value: handle)
 +            let identity = VocivoCallKitIdentity.resolve(displayName: displayName, address: handle)
-             let callUpdate = CXCallUpdate()
+@@ -190 +226 @@ import React
 -            callUpdate.remoteHandle = callHandle
 +            callUpdate.remoteHandle = identity.handle
-             callUpdate.hasVideo = false
+@@ -192 +228 @@ import React
 -            callUpdate.localizedCallerName = displayName
 +            callUpdate.localizedCallerName = identity.name
-             callUpdate.supportsHolding = true
-
-             manager.activeCalls[uuid] = [
+@@ -196,2 +232,2 @@ import React
 -                "caller": displayName,
 -                "handle": handle,
 +                "caller": identity.name,
 +                "handle": identity.address,
-                 "uuid": uuid.uuidString,
-                 "direction": "incoming",
-                 "source": "react_native",
-@@ -839,6 +869,24 @@ import React
-             _ = installCallKitProvider()
-         }
-
+@@ -440 +476 @@ import React
+-                NSLog("TelnyxVoice: reportCallConnected - fulfilling deferred CXAnswerCallAction")
++                telnyxDebugLog("TelnyxVoice: reportCallConnected - fulfilling deferred CXAnswerCallAction")
+@@ -451 +487 @@ import React
+-                    NSLog("TelnyxVoice: reportCallConnected - setConfiguration error: \(error)")
++                    telnyxDebugLog("TelnyxVoice: reportCallConnected - setConfiguration error: \(error)")
+@@ -456 +492 @@ import React
+-                    NSLog("TelnyxVoice: reportCallConnected - setActive error: \(error)")
++                    telnyxDebugLog("TelnyxVoice: reportCallConnected - setActive error: \(error)")
+@@ -773 +809 @@ import React
+-            NSLog("TelnyxVoice: TelnyxCallKitManager initialized (not yet active)")
++            telnyxDebugLog("TelnyxVoice: TelnyxCallKitManager initialized (not yet active)")
+@@ -779 +815 @@ import React
+-                NSLog("TelnyxVoice: CallKit already setup, skipping")
++                telnyxDebugLog("TelnyxVoice: CallKit already setup, skipping")
+@@ -792 +828 @@ import React
+-                NSLog("TelnyxVoice: CallKit already setup, skipping")
++                telnyxDebugLog("TelnyxVoice: CallKit already setup, skipping")
+@@ -798 +834 @@ import React
+-            NSLog("TelnyxVoice: Synchronous CallKit setup for terminated app scenario...")
++            telnyxDebugLog("TelnyxVoice: Synchronous CallKit setup for terminated app scenario...")
+@@ -801 +837 @@ import React
+-                NSLog("TelnyxVoice: ✅ CallKit provider ready for terminated app handling")
++                telnyxDebugLog("TelnyxVoice: ✅ CallKit provider ready for terminated app handling")
+@@ -805 +841 @@ import React
+-            NSLog("TelnyxVoice: CallKit setup did not create a provider; creating fallback provider")
++            telnyxDebugLog("TelnyxVoice: CallKit setup did not create a provider; creating fallback provider")
+@@ -807 +843 @@ import React
+-            NSLog("TelnyxVoice: ✅ CallKit provider ready for terminated app handling")
++            telnyxDebugLog("TelnyxVoice: ✅ CallKit provider ready for terminated app handling")
+@@ -812 +848 @@ import React
+-            NSLog("TelnyxVoice: Auto-initializing CallKit via TelnyxCallKitManager...")
++            telnyxDebugLog("TelnyxVoice: Auto-initializing CallKit via TelnyxCallKitManager...")
+@@ -817,2 +853,2 @@ import React
+-            NSLog("TelnyxVoice: ✅ TelnyxCallKitManager is now the ACTIVE CallKit provider")
+-            NSLog("TelnyxVoice: ⚠️  VoIP push handled by AppDelegate, not TelnyxCallKitManager")
++            telnyxDebugLog("TelnyxVoice: ✅ TelnyxCallKitManager is now the ACTIVE CallKit provider")
++            telnyxDebugLog("TelnyxVoice: ⚠️  VoIP push handled by AppDelegate, not TelnyxCallKitManager")
+@@ -835 +871 @@ import React
+-                NSLog("TelnyxVoice: setupCallKit() - provider already exists, skipping to prevent overwrite")
++                telnyxDebugLog("TelnyxVoice: setupCallKit() - provider already exists, skipping to prevent overwrite")
+@@ -841,0 +878,18 @@ import React
 +        public func updateIncomingRingtone(_ resourceName: String?) {
 +            let storedRingtone = UserDefaults.standard.string(forKey: "vocivo_incoming_ringtone")
 +            if storedRingtone == resourceName {
@@ -169,72 +245,256 @@ index 8fc2564..85a748a 100644
 +            _ = installCallKitProvider()
 +        }
 +
-         private func installCallKitProvider() -> CXProvider {
-             // Use the localizedName from the app's bundle display name or fallback
-             let appName =
-@@ -852,6 +900,9 @@ import React
-             configuration.maximumCallsPerCallGroup = 1
-             configuration.supportedHandleTypes = [.phoneNumber, .generic]
-             configuration.includesCallsInRecents = true
+@@ -854,0 +909,3 @@ import React
 +            if let ringtone = UserDefaults.standard.string(forKey: "vocivo_incoming_ringtone"), !ringtone.isEmpty {
 +                configuration.ringtoneSound = "\(ringtone).wav"
 +            }
-
-             let provider = CXProvider(configuration: configuration)
-             provider.setDelegate(self, queue: nil)
-@@ -1340,9 +1391,11 @@ import React
-                 }
-             }
-
+@@ -861 +918 @@ import React
+-            NSLog("TelnyxVoice: CallKit provider and controller created")
++            telnyxDebugLog("TelnyxVoice: CallKit provider and controller created")
+@@ -895 +952 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -899 +956 @@ import React
+-                    NSLog("TelnyxVoice: Watchdog CallKit call reported for \(source)")
++                    telnyxDebugLog("TelnyxVoice: Watchdog CallKit call reported for \(source)")
+@@ -938 +994,0 @@ import React
+-            NSLog("TelnyxVoice: Missed call VoIP push received: \(payload)")
+@@ -948 +1004 @@ import React
+-                NSLog("TelnyxVoice: Suppressing duplicate missed call notification: \(missedCallId)")
++                telnyxDebugLog("TelnyxVoice: Suppressing duplicate missed call notification: \(missedCallId)")
+@@ -968 +1024 @@ import React
+-                NSLog("TelnyxVoice: Ended stale CallKit call for missed call UUID: \(callUUID)")
++                telnyxDebugLog("TelnyxVoice: Ended stale CallKit call for missed call UUID: \(callUUID)")
+@@ -981 +1037 @@ import React
+-                    NSLog("TelnyxVoice: Suppressing missed call notification because UUID belongs to an active call: \(callUUID)")
++                    telnyxDebugLog("TelnyxVoice: Suppressing missed call notification because UUID belongs to an active call: \(callUUID)")
+@@ -1026 +1082 @@ import React
+-                    NSLog("TelnyxVoice: Missed call CallKit report failed: \(error.localizedDescription)")
++                    telnyxDebugLog("TelnyxVoice: Missed call CallKit report failed: \(error.localizedDescription)")
+@@ -1042 +1098 @@ import React
+-                NSLog("TelnyxVoice: Skipping pending push cleanup for missed call; pending data belongs to a different call")
++                telnyxDebugLog("TelnyxVoice: Skipping pending push cleanup for missed call; pending data belongs to a different call")
+@@ -1123 +1179 @@ import React
+-                NSLog("TelnyxVoice: Missed call local notification disabled")
++                telnyxDebugLog("TelnyxVoice: Missed call local notification disabled")
+@@ -1150 +1206 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1158 +1214 @@ import React
+-                        NSLog("TelnyxVoice: Failed to show missed call notification: \(error)")
++                        telnyxDebugLog("TelnyxVoice: Failed to show missed call notification: \(error)")
+@@ -1160 +1216 @@ import React
+-                        NSLog("TelnyxVoice: Missed call notification scheduled")
++                        telnyxDebugLog("TelnyxVoice: Missed call notification scheduled")
+@@ -1174 +1230 @@ import React
+-            NSLog("TelnyxVoice: VoIP push token updated")
++            telnyxDebugLog("TelnyxVoice: VoIP push token updated")
+@@ -1176 +1231,0 @@ import React
+-            NSLog("TelnyxVoice: VoIP Push Token: \(deviceToken)")
+@@ -1195 +1250 @@ import React
+-                    NSLog("TelnyxVoice: Forwarded token to RNVoipPushNotificationManager")
++                    telnyxDebugLog("TelnyxVoice: Forwarded token to RNVoipPushNotificationManager")
+@@ -1197 +1252 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1202 +1257 @@ import React
+-                NSLog("TelnyxVoice: RNVoipPushNotificationManager class not found")
++                telnyxDebugLog("TelnyxVoice: RNVoipPushNotificationManager class not found")
+@@ -1209 +1264 @@ import React
+-            NSLog("TelnyxVoice: VoIP push token invalidated")
++            telnyxDebugLog("TelnyxVoice: VoIP push token invalidated")
+@@ -1217 +1271,0 @@ import React
+-            NSLog("TelnyxVoice: Received VoIP push notification: \(payload.dictionaryPayload)")
+@@ -1231 +1285 @@ import React
+-                NSLog("TelnyxVoice: Stored VoIP push data for VoicePnBridge")
++                telnyxDebugLog("TelnyxVoice: Stored VoIP push data for VoicePnBridge")
+@@ -1233 +1287 @@ import React
+-                NSLog("TelnyxVoice: Error converting VoIP payload to JSON: \(error)")
++                telnyxDebugLog("TelnyxVoice: Error converting VoIP payload to JSON: \(error)")
+@@ -1277 +1331 @@ import React
+-                    NSLog("TelnyxVoice: CallKit error: \(error.localizedDescription)")
++                    telnyxDebugLog("TelnyxVoice: CallKit error: \(error.localizedDescription)")
+@@ -1281 +1335 @@ import React
+-                    NSLog("TelnyxVoice: CallKit incoming call reported successfully")
++                    telnyxDebugLog("TelnyxVoice: CallKit incoming call reported successfully")
+@@ -1292,2 +1346,2 @@ import React
+-            NSLog("📞 TelnyxVoice: CALLKIT PROVIDER RESET - Provider: \(provider)")
+-            NSLog("TelnyxVoice: CallKit provider reset - ending all active calls")
++            telnyxDebugLog("📞 TelnyxVoice: CALLKIT PROVIDER RESET - Provider: \(provider)")
++            telnyxDebugLog("TelnyxVoice: CallKit provider reset - ending all active calls")
+@@ -1302,2 +1356,2 @@ import React
+-            NSLog("📞 TelnyxVoice: CALLKIT ANSWER ACTION - Provider: \(provider), Action: \(action)")
+-            NSLog("TelnyxVoice: User answered call with UUID: \(action.callUUID)")
++            telnyxDebugLog("📞 TelnyxVoice: CALLKIT ANSWER ACTION - Provider: \(provider), Action: \(action)")
++            telnyxDebugLog("TelnyxVoice: User answered call with UUID: \(action.callUUID)")
+@@ -1306 +1360 @@ import React
+-                NSLog("TelnyxVoice: Failing answer for watchdog placeholder call: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Failing answer for watchdog placeholder call: \(action.callUUID)")
+@@ -1313 +1367 @@ import React
+-                NSLog("TelnyxVoice: Failing answer for unknown UUID: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Failing answer for unknown UUID: \(action.callUUID)")
+@@ -1319 +1373 @@ import React
+-                NSLog("TelnyxVoice: Failing duplicate answer for UUID: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Failing duplicate answer for UUID: \(action.callUUID)")
+@@ -1330 +1384 @@ import React
+-                NSLog("TelnyxVoice: Call already answered in WebRTC, skipping emission")
++                telnyxDebugLog("TelnyxVoice: Call already answered in WebRTC, skipping emission")
+@@ -1339 +1393 @@ import React
+-                    NSLog("TelnyxVoice: Stored pending CallKit answer for UUID: \(action.callUUID)")
++                    telnyxDebugLog("TelnyxVoice: Stored pending CallKit answer for UUID: \(action.callUUID)")
+@@ -1343,3 +1397,5 @@ import React
 -            // Defer action.fulfill() until reportCallConnected when peer connection is ready
 -            NSLog("TelnyxVoice: Deferring CXAnswerCallAction.fulfill() until peer connection is ready")
 -            self.pendingAnswerActions[action.callUUID] = action
 +            // CallKit must be acknowledged immediately. Holding this action until
 +            // WebRTC becomes active delays AVAudioSession activation and can form
 +            // a signaling/audio deadlock on a cold-started app.
-+            NSLog("TelnyxVoice: Fulfilling CXAnswerCallAction before WebRTC negotiation")
++            telnyxDebugLog("TelnyxVoice: Fulfilling CXAnswerCallAction before WebRTC negotiation")
 +            action.fulfill()
-         }
-
-         public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
-@@ -1657,9 +1710,10 @@ import React
-
-             // Store call data manually and report to CallKit
-             let isAppRunning = CallKitBridge.shared != nil
+@@ -1349 +1405 @@ import React
+-            NSLog(
++            telnyxDebugLog(
+@@ -1354 +1410 @@ import React
+-                NSLog("TelnyxVoice: Failing held action for unknown UUID: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Failing held action for unknown UUID: \(action.callUUID)")
+@@ -1360 +1416 @@ import React
+-                NSLog("TelnyxVoice: Failing duplicate held action for UUID: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Failing duplicate held action for UUID: \(action.callUUID)")
+@@ -1383 +1439 @@ import React
+-                NSLog("TelnyxVoice: Held action timed out for UUID: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Held action timed out for UUID: \(action.callUUID)")
+@@ -1390 +1446 @@ import React
+-            NSLog("TelnyxVoice: User ended call with UUID: \(action.callUUID)")
++            telnyxDebugLog("TelnyxVoice: User ended call with UUID: \(action.callUUID)")
+@@ -1393 +1449 @@ import React
+-                NSLog("TelnyxVoice: Failing end action for unknown UUID: \(action.callUUID)")
++                telnyxDebugLog("TelnyxVoice: Failing end action for unknown UUID: \(action.callUUID)")
+@@ -1410 +1466 @@ import React
+-            NSLog("📞 TelnyxVoice: Fulfilling CXEndCallAction for call UUID: \(action.callUUID)")
++            telnyxDebugLog("📞 TelnyxVoice: Fulfilling CXEndCallAction for call UUID: \(action.callUUID)")
+@@ -1412 +1468 @@ import React
+-            NSLog("📞 TelnyxVoice: ✅ CXEndCallAction fulfilled successfully")
++            telnyxDebugLog("📞 TelnyxVoice: ✅ CXEndCallAction fulfilled successfully")
+@@ -1416 +1472 @@ import React
+-            NSLog("TelnyxVoice: Starting outgoing call with UUID: \(action.callUUID)")
++            telnyxDebugLog("TelnyxVoice: Starting outgoing call with UUID: \(action.callUUID)")
+@@ -1429 +1485 @@ import React
+-            NSLog("📞 TelnyxVoice: Fulfilling CXStartCallAction for call UUID: \(action.callUUID)")
++            telnyxDebugLog("📞 TelnyxVoice: Fulfilling CXStartCallAction for call UUID: \(action.callUUID)")
+@@ -1431 +1487 @@ import React
+-            NSLog("📞 TelnyxVoice: ✅ CXStartCallAction fulfilled successfully")
++            telnyxDebugLog("📞 TelnyxVoice: ✅ CXStartCallAction fulfilled successfully")
+@@ -1444 +1500 @@ import React
+-            NSLog("TelnyxVoice: Audio session activated by CallKit")
++            telnyxDebugLog("TelnyxVoice: Audio session activated by CallKit")
+@@ -1455 +1511 @@ import React
+-                NSLog("TelnyxVoice: didActivateAudioSession - setConfiguration error: \(error)")
++                telnyxDebugLog("TelnyxVoice: didActivateAudioSession - setConfiguration error: \(error)")
+@@ -1464 +1520 @@ import React
+-                NSLog("TelnyxVoice: didActivateAudioSession - setActive error: \(error)")
++                telnyxDebugLog("TelnyxVoice: didActivateAudioSession - setActive error: \(error)")
+@@ -1482 +1538 @@ import React
+-            NSLog("TelnyxVoice: Audio session deactivated by CallKit")
++            telnyxDebugLog("TelnyxVoice: Audio session deactivated by CallKit")
+@@ -1491 +1547 @@ import React
+-                NSLog("TelnyxVoice: didDeactivateAudioSession - setCategory error: \(error)")
++                telnyxDebugLog("TelnyxVoice: didDeactivateAudioSession - setCategory error: \(error)")
+@@ -1499 +1555 @@ import React
+-                NSLog("TelnyxVoice: didDeactivateAudioSession - setActive(false) error: \(error)")
++                telnyxDebugLog("TelnyxVoice: didDeactivateAudioSession - setActive(false) error: \(error)")
+@@ -1544 +1600 @@ import React
+-                NSLog(
++                telnyxDebugLog(
+@@ -1548 +1604 @@ import React
+-                NSLog("[TelnyxVoipPushHandler] Error converting VoIP payload to JSON: \(error)")
++                telnyxDebugLog("[TelnyxVoipPushHandler] Error converting VoIP payload to JSON: \(error)")
+@@ -1566 +1622 @@ import React
+-                    NSLog("[TelnyxVoipPushHandler] VoIP registration initialized")
++                    telnyxDebugLog("[TelnyxVoipPushHandler] VoIP registration initialized")
+@@ -1568 +1624 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1573 +1629 @@ import React
+-                NSLog("[TelnyxVoipPushHandler] RNVoipPushNotificationManager class not found")
++                telnyxDebugLog("[TelnyxVoipPushHandler] RNVoipPushNotificationManager class not found")
+@@ -1586,2 +1642 @@ import React
+-            NSLog("[TelnyxVoipPushHandler] VoIP push received for type: \(type.rawValue)")
+-            NSLog("[TelnyxVoipPushHandler] VoIP payload: \(payload.dictionaryPayload)")
++            telnyxDebugLog("[TelnyxVoipPushHandler] VoIP push received for type: \(type.rawValue)")
+@@ -1600 +1655 @@ import React
+-                NSLog("Succeeded to activate audio session")
++                telnyxDebugLog("Succeeded to activate audio session")
+@@ -1602 +1657 @@ import React
+-                NSLog("Failed to activate audio session: \(error)")
++                telnyxDebugLog("Failed to activate audio session: \(error)")
+@@ -1626 +1681 @@ import React
+-                NSLog(
++                telnyxDebugLog(
+@@ -1641 +1696 @@ import React
+-            NSLog(
++            telnyxDebugLog(
+@@ -1646 +1701 @@ import React
+-            NSLog("[TelnyxVoipPushHandler] Using unified CallKit handling path")
++            telnyxDebugLog("[TelnyxVoipPushHandler] Using unified CallKit handling path")
+@@ -1655 +1710 @@ import React
+-            NSLog("[TelnyxVoipPushHandler] ✅ CallKit provider ready, reporting incoming call")
++            telnyxDebugLog("[TelnyxVoipPushHandler] ✅ CallKit provider ready, reporting incoming call")
+@@ -1659,0 +1715 @@ import React
 +            let identity = VocivoCallKitIdentity.resolve(displayName: callerName, address: callerNumber)
-             callKitManager.activeCalls[callUUID] = [
+@@ -1661,2 +1717,2 @@ import React
 -                "caller": callerName,
 -                "handle": callerNumber,
 +                "caller": identity.name,
 +                "handle": identity.address,
-                 "payload": payload.dictionaryPayload,
-                 "uuid": callUUID.uuidString,
-                 "direction": "incoming",
-@@ -1667,12 +1721,12 @@ import React
-                 "isCallKitRegistered": false,
-             ]
-
+@@ -1670,2 +1726,2 @@ import React
 -            // Report to CallKit immediately
 -            let handle = CXHandle(type: .phoneNumber, value: callerNumber)
 +            // Report to CallKit immediately with a human identity. Never expose a
 +            // SIP URI or generated credential as the native call handle.
-             let callUpdate = CXCallUpdate()
+@@ -1673 +1729 @@ import React
 -            callUpdate.remoteHandle = handle
 +            callUpdate.remoteHandle = identity.handle
-             callUpdate.hasVideo = false
+@@ -1675 +1731 @@ import React
 -            callUpdate.localizedCallerName = callerName
 +            callUpdate.localizedCallerName = identity.name
-             callUpdate.supportsHolding = true
-
-             callKitProvider.reportNewIncomingCall(with: callUUID, update: callUpdate) { error in
+@@ -1684 +1740 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1690 +1746 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1701 +1757 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1718 +1774 @@ import React
+-                        NSLog(
++                        telnyxDebugLog(
+@@ -1722 +1778 @@ import React
+-                        NSLog(
++                        telnyxDebugLog(
+@@ -1740 +1796 @@ import React
+-            NSLog(
++            telnyxDebugLog(
+@@ -1744 +1799,0 @@ import React
+-            NSLog("[TelnyxVoipPushHandler] VoIP token: \(tokenString)")
+@@ -1749 +1804 @@ import React
+-            NSLog("[TelnyxVoipPushHandler] VoIP Push Token stored in UserDefaults")
++            telnyxDebugLog("[TelnyxVoipPushHandler] VoIP Push Token stored in UserDefaults")
+@@ -1763 +1818 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1766 +1821 @@ import React
+-                    NSLog(
++                    telnyxDebugLog(
+@@ -1771 +1826 @@ import React
+-                NSLog("[TelnyxVoipPushHandler] RNVoipPushNotificationManager class not found")
++                telnyxDebugLog("[TelnyxVoipPushHandler] RNVoipPushNotificationManager class not found")
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m b/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m
 index 7e311a1..55293ff 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.m
-@@ -34,6 +34,14 @@ @interface RCT_EXTERN_MODULE(VoicePnBridge, NSObject)
- RCT_EXTERN_METHOD(clearPendingVoipAction:(RCTPromiseResolveBlock)resolve
-                   rejecter:(RCTPromiseRejectBlock)reject)
-
+@@ -36,0 +37,8 @@ @interface RCT_EXTERN_MODULE(VoicePnBridge, NSObject)
 +RCT_EXTERN_METHOD(setVocivoVoiceSignedIn:(BOOL)signedIn
 +                  resolver:(RCTPromiseResolveBlock)resolve
 +                  rejecter:(RCTPromiseRejectBlock)reject)
@@ -243,17 +503,42 @@ index 7e311a1..55293ff 100644
 +                  resolver:(RCTPromiseResolveBlock)resolve
 +                  rejecter:(RCTPromiseRejectBlock)reject)
 +
- RCT_EXTERN_METHOD(setMissedCallNotificationsEnabled:(BOOL)enabled
-                   resolver:(RCTPromiseResolveBlock)resolve
-                   rejecter:(RCTPromiseRejectBlock)reject)
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.swift b/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.swift
-index f15ea17..ceb3c71 100644
+index f15ea17..4dbcfd2 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.swift
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/ios/VoicePnBridge.swift
-@@ -101,6 +101,25 @@ class VoicePnBridge: NSObject {
-         resolve(true)
-     }
-
+@@ -4,0 +5,6 @@ import AVFoundation
++private func telnyxDebugLog(_ format: String, _ arguments: CVarArg...) {
++    #if DEBUG
++        withVaList(arguments) { NSLogv(format, $0) }
++    #endif
++}
++
+@@ -20 +25,0 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] getPendingPushAction - action: \(action ?? "nil"), metadata: \(metadata ?? "nil")")
+@@ -36 +40,0 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] setPendingPushAction - action: \(action), metadata: \(metadata)")
+@@ -46 +50 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] clearPendingPushAction - cleared pending push data")
++        telnyxDebugLog("[VoicePnBridge] clearPendingPushAction - cleared pending push data")
+@@ -55 +58,0 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] getVoipToken called. token=\(token ?? "(nil)")")
+@@ -62 +64,0 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] getPendingVoipPush called. pending=\(pending ?? "(nil)")")
+@@ -70 +72 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] clearPendingVoipPush called. Cleared key pending_voip_push")
++        telnyxDebugLog("[VoicePnBridge] clearPendingVoipPush called. Cleared key pending_voip_push")
+@@ -77 +78,0 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] getPendingCallKitAnswer - answer: \(answer ?? "nil")")
+@@ -85 +86 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] clearPendingCallKitAnswer - cleared")
++        telnyxDebugLog("[VoicePnBridge] clearPendingCallKitAnswer - cleared")
+@@ -92 +92,0 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] getPendingVoipAction called. pending=\(pending ?? "(nil)")")
+@@ -100 +100 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] clearPendingVoipAction called. Cleared key pending_voip_action")
++        telnyxDebugLog("[VoicePnBridge] clearPendingVoipAction called. Cleared key pending_voip_action")
+@@ -103,0 +104,19 @@ class VoicePnBridge: NSObject {
 +    @objc
 +    func setVocivoVoiceSignedIn(_ signedIn: Bool, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
 +        UserDefaults.standard.set(signedIn, forKey: "vocivo_voice_signed_in")
@@ -273,304 +558,813 @@ index f15ea17..ceb3c71 100644
 +        }
 +    }
 +
-     @objc
-     func setMissedCallNotificationsEnabled(_ enabled: Bool, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-         UserDefaults.standard.set(enabled, forKey: TelnyxVoiceUserDefaultsKey.missedCallNotificationsEnabled)
+@@ -108 +127 @@ class VoicePnBridge: NSObject {
+-        NSLog("[VoicePnBridge] setMissedCallNotificationsEnabled called. enabled=\(enabled)")
++        telnyxDebugLog("[VoicePnBridge] setMissedCallNotificationsEnabled called. enabled=\(enabled)")
+@@ -133 +152 @@ class VoicePnBridge: NSObject {
+-            NSLog("[VoicePnBridge] setSpeakerEnabled called. requested=\(enabled), actual=\(actualEnabled)")
++            telnyxDebugLog("[VoicePnBridge] setSpeakerEnabled called. requested=\(enabled), actual=\(actualEnabled)")
+@@ -136 +155 @@ class VoicePnBridge: NSObject {
+-            NSLog("[VoicePnBridge] setSpeakerEnabled failed. enabled=\(enabled), error=\(error)")
++            telnyxDebugLog("[VoicePnBridge] setSpeakerEnabled failed. enabled=\(enabled), error=\(error)")
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/callkit/callkit-coordinator.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/callkit/callkit-coordinator.js
+index 9c3a841..25eaf73 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/lib/callkit/callkit-coordinator.js
++++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/callkit/callkit-coordinator.js
+@@ -344 +344 @@ class CallKitCoordinator {
+-   * End a call from the app UI (CallKit-first approach)
++   * End a call from the app UI after the signaling transaction succeeds.
+@@ -350,4 +350,2 @@ class CallKitCoordinator {
+-      console.warn('CallKitCoordinator: Cannot end call - no CallKit UUID found');
+-      // Fallback to direct WebRTC hangup
+-      call.hangup();
+-      return false;
++      await call.hangup();
++      return true;
+@@ -355 +352,0 @@ class CallKitCoordinator {
+-    console.log('CallKitCoordinator: Requesting CallKit end action from app UI', callKitUUID);
+@@ -357,6 +353,0 @@ class CallKitCoordinator {
+-      // Let the resulting CXEndCallAction drive signaling, cleanup and survivor
+-      // restoration. Marking the call ended here would suppress that event.
+-      const endCallSuccess = await callkit_1.default.endCall(callKitUUID);
+-      if (endCallSuccess) {
+-        return true;
+-      }
+@@ -363,0 +355,4 @@ class CallKitCoordinator {
++      // The low-level call waits for the Telnyx BYE/CANCEL acknowledgement. Do
++      // not dismiss CallKit before signaling succeeds or the remote leg may
++      // continue ringing after the local screen disappears.
++      await call.hangup();
+@@ -368 +362,0 @@ class CallKitCoordinator {
+-      call.hangup();
+@@ -373 +367 @@ class CallKitCoordinator {
+-      return false;
++      return true;
+@@ -376,6 +370,2 @@ class CallKitCoordinator {
+-      this.pendingPushCallUUIDs.delete(callKitUUID);
+-      this.isCallFromPush = this.pendingPushCallUUIDs.size > 0;
+-      call.hangup();
+-      this.cleanupCall(callKitUUID);
+-      await this.restoreRemainingHeldCall();
+-      return false;
++      // Preserve the native and application call state so the user can retry.
++      throw error;
+@@ -463 +453,3 @@ class CallKitCoordinator {
+-      } catch (_) {}
++      } catch (clearError) {
++        console.error('CallKitCoordinator: Failed to clear push after answer failure', clearError);
++      }
+@@ -589,0 +582 @@ class CallKitCoordinator {
++    var _a, _b, _c;
+@@ -601 +594,3 @@ class CallKitCoordinator {
+-      this.getSDKClient()?.queueEndFromCallKit(callKitUUID);
++      (_a = this.getSDKClient()) === null || _a === void 0
++        ? void 0
++        : _a.queueEndFromCallKit(callKitUUID);
+@@ -607 +602,5 @@ class CallKitCoordinator {
+-      source: event?.callData?.source,
++      source:
++        (_b = event === null || event === void 0 ? void 0 : event.callData) === null ||
++        _b === void 0
++          ? void 0
++          : _b.source,
+@@ -613 +612,5 @@ class CallKitCoordinator {
+-      source: event?.callData?.source,
++      source:
++        (_c = event === null || event === void 0 ? void 0 : event.callData) === null ||
++        _c === void 0
++          ? void 0
++          : _c.source,
+@@ -628,2 +631,3 @@ class CallKitCoordinator {
+-      const realPushData = pendingPush?.payload;
+-      if (!realPushData?.metadata) {
++      const realPushData =
++        pendingPush === null || pendingPush === void 0 ? void 0 : pendingPush.payload;
++      if (!(realPushData === null || realPushData === void 0 ? void 0 : realPushData.metadata)) {
+@@ -728,0 +733 @@ class CallKitCoordinator {
++    var _a;
+@@ -736 +741,3 @@ class CallKitCoordinator {
+-        this.getSDKClient()?.queueEndFromCallKit(callKitUUID);
++        (_a = this.getSDKClient()) === null || _a === void 0
++          ? void 0
++          : _a.queueEndFromCallKit(callKitUUID);
+@@ -743 +750,3 @@ class CallKitCoordinator {
+-        } catch (_) {}
++        } catch (clearError) {
++          console.error('CallKitCoordinator: Failed to clear push after rejection', clearError);
++        }
+@@ -820,0 +830 @@ class CallKitCoordinator {
++    var _a, _b;
+@@ -823,2 +833,4 @@ class CallKitCoordinator {
+-      this.pendingSwap?.activeCallKitUUID === callKitUUID ||
+-      this.pendingSwap?.heldCallKitUUID === callKitUUID
++      ((_a = this.pendingSwap) === null || _a === void 0 ? void 0 : _a.activeCallKitUUID) ===
++        callKitUUID ||
++      ((_b = this.pendingSwap) === null || _b === void 0 ? void 0 : _b.heldCallKitUUID) ===
++        callKitUUID
+@@ -936,0 +949 @@ class CallKitCoordinator {
++    var _a, _b, _c, _d, _e, _f, _g;
+@@ -944,4 +957,29 @@ class CallKitCoordinator {
+-        pendingPush?.payload?.metadata?.call_id ??
+-        pendingPush?.payload?.call_id ??
+-        pendingPush?.metadata?.call_id ??
+-        pendingPush?.call_id;
++        (_g =
++          (_e =
++            (_c =
++              (_b =
++                (_a =
++                  pendingPush === null || pendingPush === void 0 ? void 0 : pendingPush.payload) ===
++                  null || _a === void 0
++                  ? void 0
++                  : _a.metadata) === null || _b === void 0
++                ? void 0
++                : _b.call_id) !== null && _c !== void 0
++              ? _c
++              : (_d =
++                    pendingPush === null || pendingPush === void 0
++                      ? void 0
++                      : pendingPush.payload) === null || _d === void 0
++                ? void 0
++                : _d.call_id) !== null && _e !== void 0
++            ? _e
++            : (_f =
++                  pendingPush === null || pendingPush === void 0
++                    ? void 0
++                    : pendingPush.metadata) === null || _f === void 0
++              ? void 0
++              : _f.call_id) !== null && _g !== void 0
++          ? _g
++          : pendingPush === null || pendingPush === void 0
++            ? void 0
++            : pendingPush.call_id;
+@@ -970,0 +1009 @@ class CallKitCoordinator {
++    var _a;
+@@ -972 +1011,2 @@ class CallKitCoordinator {
+-    const wrapperCall = this.voipClient?.findCallByTelnyxCall(call);
++    const wrapperCall =
++      (_a = this.voipClient) === null || _a === void 0 ? void 0 : _a.findCallByTelnyxCall(call);
+@@ -1077 +1117,4 @@ class CallKitCoordinator {
+-      if (originalHeld?.state === 'active') {
++      if (
++        (originalHeld === null || originalHeld === void 0 ? void 0 : originalHeld.state) ===
++        'active'
++      ) {
+@@ -1080 +1123,4 @@ class CallKitCoordinator {
+-      if (originalActive?.state === 'held') {
++      if (
++        (originalActive === null || originalActive === void 0 ? void 0 : originalActive.state) ===
++        'held'
++      ) {
+@@ -1083 +1129,4 @@ class CallKitCoordinator {
+-      if (originalActive?.state === 'active') {
++      if (
++        (originalActive === null || originalActive === void 0 ? void 0 : originalActive.state) ===
++        'active'
++      ) {
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
-index 993ecf6..a96df57 100644
+index 993ecf6..30990b5 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/calls/call-state-controller.js
-@@ -6,6 +6,18 @@ const operators_1 = require('rxjs/operators');
- const call_1 = require('../../models/call');
- const call_state_1 = require('../../models/call-state');
- const callkit_coordinator_1 = require('../../callkit/callkit-coordinator');
-+
+@@ -8,0 +9,33 @@ const callkit_coordinator_1 = require('../../callkit/callkit-coordinator');
++function customHeader(headers, name) {
++  var _a, _b;
++  return (
++    ((_b =
++      (_a =
++        headers === null || headers === void 0
++          ? void 0
++          : headers.find((header) => header.name.toLowerCase() === name.toLowerCase())) === null ||
++      _a === void 0
++        ? void 0
++        : _a.value) === null || _b === void 0
++      ? void 0
++      : _b.trim()) || ''
++  );
++}
 +function inviteHeader(telnyxCall, name) {
-+  const headers = telnyxCall?.inviteCustomHeaders;
++  const headers =
++    telnyxCall === null || telnyxCall === void 0 ? void 0 : telnyxCall.inviteCustomHeaders;
 +  if (!Array.isArray(headers)) return '';
 +  const match = headers.find(
-+    (header) => String(header?.name || header?.header_name || '').toLowerCase() === name.toLowerCase()
++    (header) =>
++      String(
++        (header === null || header === void 0 ? void 0 : header.name) ||
++          (header === null || header === void 0 ? void 0 : header.header_name) ||
++          ''
++      ).toLowerCase() === name.toLowerCase()
 +  );
-+  return String(match?.value || match?.header_value || '').trim();
++  return String(
++    (match === null || match === void 0 ? void 0 : match.value) ||
++      (match === null || match === void 0 ? void 0 : match.header_value) ||
++      ''
++  ).trim();
 +}
-+function customHeader(headers, name) {
-+  return headers?.find((header) => String(header?.name || '').toLowerCase() === name.toLowerCase())?.value?.trim() || '';
-+}
- /**
-  * Central state machine for call management.
-  *
-@@ -202,11 +214,15 @@ class CallStateController {
-     }
-     try {
-       // Create the call using the Telnyx SDK
+@@ -68,0 +102 @@ class CallStateController {
++        var _a, _b;
+@@ -72,2 +106,9 @@ class CallStateController {
+-          callId: call?.callId ?? null,
+-          state: call?.currentState ?? null,
++          callId:
++            (_a = call === null || call === void 0 ? void 0 : call.callId) !== null && _a !== void 0
++              ? _a
++              : null,
++          state:
++            (_b = call === null || call === void 0 ? void 0 : call.currentState) !== null &&
++            _b !== void 0
++              ? _b
++              : null,
+@@ -204,0 +246,5 @@ class CallStateController {
 +      const normalizedHeaders = this._normalizeCustomHeaders(customHeaders);
-+      const remoteName = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Name') || destination;
++      const remoteName =
++        customHeader(normalizedHeaders, 'X-Vocivo-Destination-Name') || destination;
 +      const remoteExtension = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Extension');
 +      const remoteNumber = remoteExtension ? `Extension ${remoteExtension}` : destination;
-       const callOptions = {
-         destinationNumber: destination,
-         callerIdName: callerName,
-         callerIdNumber: callerNumber,
+@@ -209 +255 @@ class CallStateController {
 -        customHeaders: this._normalizeCustomHeaders(customHeaders),
 +        customHeaders: normalizedHeaders,
-         peerConnectionOptions: {
-           useTrickleIce: this._sessionManager.useTrickleIce,
-         },
-@@ -219,8 +235,8 @@ class CallStateController {
-         destination,
-         false, // outgoing call
-         false, // not reattached
+@@ -222,2 +268,2 @@ class CallStateController {
 -        callerName || destination, // use destination as fallback for caller name
 -        callerNumber // original caller number
 +        remoteName,
 +        remoteNumber
-       );
-       // Add to our call tracking
-       this._addCall(call);
-@@ -385,6 +401,10 @@ class CallStateController {
-         callerName
-       );
-     }
+@@ -387,0 +434,4 @@ class CallStateController {
 +    const internalCallerName = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Name');
 +    const internalCallerExtension = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Extension');
 +    if (internalCallerName) callerName = internalCallerName;
 +    if (internalCallerExtension) callerNumber = `Extension ${internalCallerExtension}`;
-     // Use smart fallbacks - prefer caller number over "Unknown"
-     const finalCallerNumber = callerNumber || 'Unknown Number';
-     const finalCallerName = callerName || callerNumber || 'Unknown Caller';
-@@ -442,8 +462,8 @@ class CallStateController {
-         console.log('CallStateController: Starting outgoing call with CallKitCoordinator');
-         callkit_coordinator_1.callKitCoordinator.startOutgoingCall(
-           telnyxCall,
+@@ -445,2 +495,2 @@ class CallStateController {
 -          call.destination,
 -          call.destination
 +          call.callerNumber || call.destination,
 +          call.callerName || call.destination
-         );
-       }
-     }
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js
-index 30f162f..1ec33d7 100644
+index 30f162f..5195c91 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/session/session-manager.js
-@@ -57,9 +57,12 @@ const rxjs_1 = require('rxjs');
- const operators_1 = require('rxjs/operators');
- const TelnyxSDK = __importStar(require('@telnyx/react-native-voice-sdk'));
- const pkg = __importStar(require('../../../package.json'));
+@@ -59,0 +60 @@ const pkg = __importStar(require('../../../package.json'));
 +const react_native_1 = require('react-native');
- const connection_state_1 = require('../../models/connection-state');
- const config_1 = require('../../models/config');
+@@ -60,0 +62 @@ const connection_state_1 = require('../../models/connection-state');
 +const voice_pn_bridge_1 = require('../voice-pn-bridge');
- const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
-+const ICE_SERVERS_STORAGE_KEY = '@ice_servers';
- const PUSH_WHEN_ACTIVE_STORAGE_KEY = '@push_when_active';
- const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications';
- /**
-@@ -250,13 +253,22 @@ class SessionManager {
-         const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
-         const storedPushToken = await AsyncStorage.getItem('@push_token');
-         const storedUseTrickleIce = await AsyncStorage.getItem(USE_TRICKLE_ICE_STORAGE_KEY);
-+        const storedIceServers = await AsyncStorage.getItem(ICE_SERVERS_STORAGE_KEY);
-         const storedPushWhenActive = await AsyncStorage.getItem(PUSH_WHEN_ACTIVE_STORAGE_KEY);
-         const storedMissedCallNotifications = await AsyncStorage.getItem(
-           MISSED_CALL_NOTIFICATIONS_STORAGE_KEY
-         );
-         const useTrickleIce = storedUseTrickleIce === 'true';
-+        const iceServers = storedIceServers ? JSON.parse(storedIceServers) : undefined;
-         const pushWhenActive = storedPushWhenActive === 'true';
-         const enableMissedCallNotifications = storedMissedCallNotifications === 'true';
-+        const nativePushToken = react_native_1.Platform.OS === 'ios'
-+          ? (await voice_pn_bridge_1.VoicePnBridge.getVoipToken())?.trim()
-+          : (await voice_pn_bridge_1.VoicePnBridge.getFirebaseToken())?.trim();
+@@ -64,0 +67 @@ const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications
++const SECURE_VOICE_SESSION_KEY = 'vocivo.secure.voice-session.v1';
+@@ -119 +122,4 @@ class SessionManager {
+-    return Boolean(this._currentConfig?.useTrickleIce);
++    var _a;
++    return Boolean(
++      (_a = this._currentConfig) === null || _a === void 0 ? void 0 : _a.useTrickleIce
++    );
+@@ -199,0 +206 @@ class SessionManager {
++    var _a, _b;
+@@ -246 +253 @@ class SessionManager {
+-        // Try to retrieve stored credentials and token from AsyncStorage
++        // Read cryptographic voice material from Keychain/Keystore.
+@@ -248,3 +255,13 @@ class SessionManager {
+-        const storedUsername = await AsyncStorage.getItem('@telnyx_username');
+-        const storedPassword = await AsyncStorage.getItem('@telnyx_password');
+-        const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
++        const SecureStore = require('expo-secure-store');
++        const secureRaw = await SecureStore.getItemAsync(SECURE_VOICE_SESSION_KEY);
++        const secureSession = secureRaw ? JSON.parse(secureRaw) : null;
++        const storedUsername =
++          secureSession === null || secureSession === void 0 ? void 0 : secureSession.sipUser;
++        const storedPassword =
++          secureSession === null || secureSession === void 0 ? void 0 : secureSession.sipPassword;
++        const storedCredentialToken =
++          secureSession === null || secureSession === void 0 ? void 0 : secureSession.token;
++        const storedExpiresAt = Number(
++          (secureSession === null || secureSession === void 0 ? void 0 : secureSession.expiresAt) ||
++            0
++        );
+@@ -252,0 +270,2 @@ class SessionManager {
++        const storedIceServers =
++          secureSession === null || secureSession === void 0 ? void 0 : secureSession.iceServers;
+@@ -257,0 +277 @@ class SessionManager {
++        const iceServers = Array.isArray(storedIceServers) ? storedIceServers : undefined;
+@@ -259,0 +280,13 @@ class SessionManager {
++        const nativePushToken =
++          react_native_1.Platform.OS === 'ios'
++            ? (_a = await voice_pn_bridge_1.VoicePnBridge.getVoipToken()) === null || _a === void 0
++              ? void 0
++              : _a.trim()
++            : (_b = await voice_pn_bridge_1.VoicePnBridge.getFirebaseToken()) === null ||
++                _b === void 0
++              ? void 0
++              : _b.trim();
 +        const pushNotificationDeviceToken = nativePushToken || storedPushToken;
 +        if (nativePushToken && nativePushToken !== storedPushToken) {
 +          await AsyncStorage.setItem('@push_token', nativePushToken);
 +        }
-         if (this._isTeardownActive()) {
-           return;
-         }
-@@ -265,8 +277,9 @@ class SessionManager {
-           console.log('SessionManager: RELEASE DEBUG - Found stored credentials, creating config');
-           const { createCredentialConfig } = require('../../models/config');
-           this._currentConfig = createCredentialConfig(storedUsername, storedPassword, {
+@@ -268 +301 @@ class SessionManager {
 -            pushNotificationDeviceToken: storedPushToken,
 +            pushNotificationDeviceToken,
-             useTrickleIce,
+@@ -269,0 +303 @@ class SessionManager {
 +            iceServers,
-             pushWhenActive,
-             enableMissedCallNotifications,
-           });
-@@ -276,8 +289,9 @@ class SessionManager {
-           console.log('SessionManager: RELEASE DEBUG - Found stored token, creating config');
-           const { createTokenConfig } = require('../../models/config');
-           this._currentConfig = createTokenConfig(storedCredentialToken, {
+@@ -275 +309 @@ class SessionManager {
+-        else if (storedCredentialToken) {
++        else if (storedCredentialToken && storedExpiresAt > Date.now() + 30000) {
+@@ -279 +313 @@ class SessionManager {
 -            pushNotificationDeviceToken: storedPushToken,
 +            pushNotificationDeviceToken,
-             useTrickleIce,
+@@ -280,0 +315 @@ class SessionManager {
 +            iceServers,
-             pushWhenActive,
-             enableMissedCallNotifications,
-           });
-@@ -463,6 +477,7 @@ class SessionManager {
-           pushWhenActive: config.pushWhenActive,
-           enableMissedCallNotifications: config.enableMissedCallNotifications ?? false,
-           useTrickleIce: config.useTrickleIce,
+@@ -372,0 +408 @@ class SessionManager {
++    var _a, _b;
+@@ -376,2 +412,11 @@ class SessionManager {
+-        : Array.from(client.calls?.values?.() || []);
+-    return calls.some((call) => call?.state === 'active' || call?.state === 'held');
++        : Array.from(
++            ((_b = (_a = client.calls) === null || _a === void 0 ? void 0 : _a.values) === null ||
++            _b === void 0
++              ? void 0
++              : _b.call(_a)) || []
++          );
++    return calls.some(
++      (call) =>
++        (call === null || call === void 0 ? void 0 : call.state) === 'active' ||
++        (call === null || call === void 0 ? void 0 : call.state) === 'held'
++    );
+@@ -443,0 +489 @@ class SessionManager {
++    var _a, _b, _c, _d;
+@@ -461 +507 @@ class SessionManager {
+-          debug: config.debug ?? false,
++          debug: (_a = config.debug) !== null && _a !== void 0 ? _a : false,
+@@ -464 +510,2 @@ class SessionManager {
+-          enableMissedCallNotifications: config.enableMissedCallNotifications ?? false,
++          enableMissedCallNotifications:
++            (_b = config.enableMissedCallNotifications) !== null && _b !== void 0 ? _b : false,
+@@ -465,0 +513 @@ class SessionManager {
 +          iceServers: config.iceServers,
-           enableCallReports: config.enableCallReports,
-           callReportInterval: config.callReportInterval,
-           callReportLogLevel: config.callReportLogLevel,
-@@ -484,6 +499,7 @@ class SessionManager {
-           pushWhenActive: config.pushWhenActive,
-           enableMissedCallNotifications: config.enableMissedCallNotifications ?? false,
-           useTrickleIce: config.useTrickleIce,
+@@ -482 +530 @@ class SessionManager {
+-          debug: config.debug ?? false,
++          debug: (_c = config.debug) !== null && _c !== void 0 ? _c : false,
+@@ -485 +533,2 @@ class SessionManager {
+-          enableMissedCallNotifications: config.enableMissedCallNotifications ?? false,
++          enableMissedCallNotifications:
++            (_d = config.enableMissedCallNotifications) !== null && _d !== void 0 ? _d : false,
+@@ -486,0 +536 @@ class SessionManager {
 +          iceServers: config.iceServers,
-           enableCallReports: config.enableCallReports,
-           callReportInterval: config.callReportInterval,
-           callReportLogLevel: config.callReportLogLevel,
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.d.ts b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.d.ts
 index 3e2b685..fb094b6 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.d.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.d.ts
-@@ -29,6 +29,7 @@ export interface VoicePnBridgeInterface {
-   getPendingCallKitAnswer(): Promise<string | null>;
-   clearPendingCallKitAnswer(): Promise<boolean>;
-   getVoipToken(): Promise<string | null>;
+@@ -31,0 +32 @@ export interface VoicePnBridgeInterface {
 +  getFirebaseToken(): Promise<string | null>;
-   getPendingVoipPush(): Promise<string | null>;
-   clearPendingVoipPush(): Promise<boolean>;
-   getPendingVoipAction(): Promise<string | null>;
-@@ -43,6 +44,7 @@ declare const NativeBridge: VoicePnBridgeInterface;
-  * Enhanced VoicePnBridge with call control and event handling capabilities
-  */
- export declare class VoicePnBridge {
+@@ -45,0 +47 @@ export declare class VoicePnBridge {
 +  static getFirebaseToken(): Promise<string | null>;
-   /**
-    * Get any pending push notification action from native side
-    */
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.js
-index 04515b7..b09ef0e 100644
+index 04515b7..6abd58d 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.js
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/internal/voice-pn-bridge.js
-@@ -8,6 +8,15 @@ exports.VoicePnBridgeNative = NativeBridge;
-  * Enhanced VoicePnBridge with call control and event handling capabilities
-  */
- class VoicePnBridge {
+@@ -10,0 +11,14 @@ class VoicePnBridge {
 +  static async getFirebaseToken() {
++    var _a;
 +    if (react_native_1.Platform.OS !== 'android') return null;
 +    try {
-+      return (await NativeBridge.getFirebaseToken())?.trim() || null;
++      return (
++        ((_a = await NativeBridge.getFirebaseToken()) === null || _a === void 0
++          ? void 0
++          : _a.trim()) || null
++      );
 +    } catch (error) {
 +      console.error('VoicePnBridge: Error getting Firebase token:', error);
 +      return null;
 +    }
 +  }
-   /**
-    * Get any pending push notification action from native side
-    */
+@@ -18,2 +32,2 @@ class VoicePnBridge {
+-        action: result?.action || undefined,
+-        metadata: result?.metadata || undefined,
++        action: (result === null || result === void 0 ? void 0 : result.action) || undefined,
++        metadata: (result === null || result === void 0 ? void 0 : result.metadata) || undefined,
+@@ -44,3 +58,3 @@ class VoicePnBridge {
+-        action: result?.action || undefined,
+-        callId: result?.callId || undefined,
+-        timestamp: result?.timestamp || undefined,
++        action: (result === null || result === void 0 ? void 0 : result.action) || undefined,
++        callId: (result === null || result === void 0 ? void 0 : result.callId) || undefined,
++        timestamp: (result === null || result === void 0 ? void 0 : result.timestamp) || undefined,
+@@ -134 +148,3 @@ class VoicePnBridge {
+-      return await NativeBridge.setIncomingCallRingtone(resourceName?.trim() || null);
++      return await NativeBridge.setIncomingCallRingtone(
++        (resourceName === null || resourceName === void 0 ? void 0 : resourceName.trim()) || null
++      );
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/models/call.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/models/call.js
+index 209399f..3ed953f 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/lib/models/call.js
++++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/models/call.js
+@@ -86,0 +87,91 @@ class Call {
++    /**
++     * Set up listeners for the underlying Telnyx call
++     */
++    this._handleTelnyxCallState = (_call, state) => {
++      const telnyxState = this._mapToTelnyxCallState(state);
++      this._callState.next(telnyxState);
++      // Keep the dedicated held observable derived from call state. Updating
++      // this only after the low-level SDK emits its successful transition
++      // preserves the previous value when hold/unhold signaling fails.
++      if (telnyxState === call_state_1.TelnyxCallState.HELD) {
++        this._isHeld.next(true);
++      } else if (
++        telnyxState === call_state_1.TelnyxCallState.ACTIVE ||
++        call_state_1.CallStateHelpers.isTerminated(telnyxState)
++      ) {
++        this._isHeld.next(false);
++      }
++      // Start duration timer when call becomes active
++      if (telnyxState === call_state_1.TelnyxCallState.ACTIVE && !this._startTime) {
++        this._startDurationTimer();
++        // Show ongoing call notification on Android when call becomes active
++        // This covers both locally answered calls and calls that become active from remote side
++        if (react_native_1.Platform.OS === 'android') {
++          (async () => {
++            try {
++              const { VoicePnBridge } = await Promise.resolve().then(() =>
++                __importStar(require('../internal/voice-pn-bridge'))
++              );
++              // Extract caller information based on call direction
++              let callerNumber;
++              let callerName;
++              if (this._isIncoming) {
++                // For incoming calls, use the remote caller ID (who's calling us)
++                callerNumber = this._telnyxCall.remoteCallerIdNumber;
++                callerName = this._telnyxCall.remoteCallerIdName;
++              } else {
++                // For outgoing calls, use our own caller ID (what we're showing to them)
++                // These are the values we set when making the call
++                callerNumber = this._telnyxCall.localCallerIdNumber || this._originalCallerNumber;
++                callerName = this._telnyxCall.localCallerIdName || this._originalCallerName;
++              }
++              // Fallback logic for better notification display - avoid "Unknown" when possible
++              let displayName;
++              let displayNumber;
++              if (this._isIncoming) {
++                // For incoming calls: use caller name or fall back to caller number, then destination
++                displayName = callerName || callerNumber || this._destination;
++                displayNumber = callerNumber || this._destination;
++              } else {
++                // For outgoing calls: use our caller ID or descriptive text
++                displayName = callerName || `${this._destination}`;
++                displayNumber = callerNumber || this._destination;
++              }
++              await VoicePnBridge.showOngoingCallNotification(
++                displayName,
++                displayNumber,
++                this._callId
++              );
++              console.log('Call: Showed ongoing call notification on Android (call active)', {
++                isIncoming: this._isIncoming,
++                callerName: displayName,
++                callerNumber: displayNumber,
++              });
++            } catch (error) {
++              console.error('Call: Failed to show ongoing call notification on active:', error);
++            }
++          })();
++        }
++      }
++      // Stop duration timer when call ends
++      if (call_state_1.CallStateHelpers.isTerminated(telnyxState)) {
++        this._stopDurationTimer();
++        // Clean up ongoing call notification on Android when call ends
++        if (react_native_1.Platform.OS === 'android') {
++          (async () => {
++            try {
++              const { VoicePnBridge } = await Promise.resolve().then(() =>
++                __importStar(require('../internal/voice-pn-bridge'))
++              );
++              await VoicePnBridge.endCall(this._callId);
++              console.log('Call: Cleaned up ongoing call notification (call terminated)');
++            } catch (error) {
++              console.error(
++                'Call: Failed to clean up ongoing call notification on termination:',
++                error
++              );
++            }
++          })();
++        }
++      }
++    };
+@@ -435,0 +527 @@ class Call {
++    this._telnyxCall.off('telnyx.call.state', this._handleTelnyxCallState);
+@@ -441,3 +532,0 @@ class Call {
+-  /**
+-   * Set up listeners for the underlying Telnyx call
+-   */
+@@ -445,89 +534 @@ class Call {
+-    // Map Telnyx call states to our simplified states
+-    this._telnyxCall.on('telnyx.call.state', (call, state) => {
+-      const telnyxState = this._mapToTelnyxCallState(state);
+-      this._callState.next(telnyxState);
+-      // Keep the dedicated held observable derived from call state. Updating
+-      // this only after the low-level SDK emits its successful transition
+-      // preserves the previous value when hold/unhold signaling fails.
+-      if (telnyxState === call_state_1.TelnyxCallState.HELD) {
+-        this._isHeld.next(true);
+-      } else if (
+-        telnyxState === call_state_1.TelnyxCallState.ACTIVE ||
+-        call_state_1.CallStateHelpers.isTerminated(telnyxState)
+-      ) {
+-        this._isHeld.next(false);
+-      }
+-      // Start duration timer when call becomes active
+-      if (telnyxState === call_state_1.TelnyxCallState.ACTIVE && !this._startTime) {
+-        this._startDurationTimer();
+-        // Show ongoing call notification on Android when call becomes active
+-        // This covers both locally answered calls and calls that become active from remote side
+-        if (react_native_1.Platform.OS === 'android') {
+-          (async () => {
+-            try {
+-              const { VoicePnBridge } = await Promise.resolve().then(() =>
+-                __importStar(require('../internal/voice-pn-bridge'))
+-              );
+-              // Extract caller information based on call direction
+-              let callerNumber;
+-              let callerName;
+-              if (this._isIncoming) {
+-                // For incoming calls, use the remote caller ID (who's calling us)
+-                callerNumber = this._telnyxCall.remoteCallerIdNumber;
+-                callerName = this._telnyxCall.remoteCallerIdName;
+-              } else {
+-                // For outgoing calls, use our own caller ID (what we're showing to them)
+-                // These are the values we set when making the call
+-                callerNumber = this._telnyxCall.localCallerIdNumber || this._originalCallerNumber;
+-                callerName = this._telnyxCall.localCallerIdName || this._originalCallerName;
+-              }
+-              // Fallback logic for better notification display - avoid "Unknown" when possible
+-              let displayName;
+-              let displayNumber;
+-              if (this._isIncoming) {
+-                // For incoming calls: use caller name or fall back to caller number, then destination
+-                displayName = callerName || callerNumber || this._destination;
+-                displayNumber = callerNumber || this._destination;
+-              } else {
+-                // For outgoing calls: use our caller ID or descriptive text
+-                displayName = callerName || `${this._destination}`;
+-                displayNumber = callerNumber || this._destination;
+-              }
+-              await VoicePnBridge.showOngoingCallNotification(
+-                displayName,
+-                displayNumber,
+-                this._callId
+-              );
+-              console.log('Call: Showed ongoing call notification on Android (call active)', {
+-                isIncoming: this._isIncoming,
+-                callerName: displayName,
+-                callerNumber: displayNumber,
+-              });
+-            } catch (error) {
+-              console.error('Call: Failed to show ongoing call notification on active:', error);
+-            }
+-          })();
+-        }
+-      }
+-      // Stop duration timer when call ends
+-      if (call_state_1.CallStateHelpers.isTerminated(telnyxState)) {
+-        this._stopDurationTimer();
+-        // Clean up ongoing call notification on Android when call ends
+-        if (react_native_1.Platform.OS === 'android') {
+-          (async () => {
+-            try {
+-              const { VoicePnBridge } = await Promise.resolve().then(() =>
+-                __importStar(require('../internal/voice-pn-bridge'))
+-              );
+-              await VoicePnBridge.endCall(this._callId);
+-              console.log('Call: Cleaned up ongoing call notification (call terminated)');
+-            } catch (error) {
+-              console.error(
+-                'Call: Failed to clean up ongoing call notification on termination:',
+-                error
+-              );
+-            }
+-          })();
+-        }
+-      }
+-    });
++    this._telnyxCall.on('telnyx.call.state', this._handleTelnyxCallState);
+@@ -562 +563 @@ class Call {
+-        return call_state_1.TelnyxCallState.RINGING;
++        return call_state_1.TelnyxCallState.FAILED;
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/models/config.d.ts b/node_modules/@telnyx/react-voice-commons-sdk/lib/models/config.d.ts
 index 5240828..93ebaa5 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/models/config.d.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/models/config.d.ts
-@@ -15,6 +15,8 @@ export interface CredentialConfig {
-   incomingCallRingtone?: string;
-   /** Enable Trickle ICE. Default: false */
-   useTrickleIce?: boolean;
+@@ -17,0 +18,2 @@ export interface CredentialConfig {
 +  /** ICE servers supplied by the authenticated Telnyx control plane. */
 +  iceServers?: RTCIceServer[];
-   /** Enable automatic call quality reporting. Default: true */
-   enableCallReports?: boolean;
-   /** Stats collection interval in seconds. Default: 5 */
-@@ -40,6 +42,8 @@ export interface TokenConfig {
-   incomingCallRingtone?: string;
-   /** Enable Trickle ICE. Default: false */
-   useTrickleIce?: boolean;
+@@ -42,0 +45,2 @@ export interface TokenConfig {
 +  /** ICE servers supplied by the authenticated Telnyx control plane. */
 +  iceServers?: RTCIceServer[];
-   /** Enable automatic call quality reporting. Default: true */
-   enableCallReports?: boolean;
-   /** Stats collection interval in seconds. Default: 5 */
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/lib/telnyx-voip-client.js b/node_modules/@telnyx/react-voice-commons-sdk/lib/telnyx-voip-client.js
-index 975ef71..ca83384 100644
+index 975ef71..e80d636 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/lib/telnyx-voip-client.js
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/lib/telnyx-voip-client.js
-@@ -64,6 +64,7 @@ const session_manager_1 = require('./internal/session/session-manager');
- const call_state_controller_1 = require('./internal/calls/call-state-controller');
- const voice_pn_bridge_1 = require('./internal/voice-pn-bridge');
- const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
+@@ -66,0 +67 @@ const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
 +const ICE_SERVERS_STORAGE_KEY = '@ice_servers';
- const PUSH_WHEN_ACTIVE_STORAGE_KEY = '@push_when_active';
- const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications';
- const LEGACY_CALLKIT_ANSWER_KEY = '__legacy_callkit_answer__';
-@@ -377,18 +378,20 @@ class TelnyxVoipClient {
-       const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
-       const storedPushToken = await AsyncStorage.getItem('@push_token');
-       const storedUseTrickleIce = await AsyncStorage.getItem(USE_TRICKLE_ICE_STORAGE_KEY);
-+      const storedIceServers = await AsyncStorage.getItem(ICE_SERVERS_STORAGE_KEY);
-       const storedPushWhenActive = await AsyncStorage.getItem(PUSH_WHEN_ACTIVE_STORAGE_KEY);
-       const storedMissedCallNotifications = await AsyncStorage.getItem(
-         MISSED_CALL_NOTIFICATIONS_STORAGE_KEY
-       );
-       const useTrickleIce =
-         storedUseTrickleIce === null ? this._options.useTrickleIce : storedUseTrickleIce === 'true';
-+      const iceServers = storedIceServers ? JSON.parse(storedIceServers) : undefined;
-       const pushWhenActive = storedPushWhenActive === 'true';
-       const enableMissedCallNotifications = storedMissedCallNotifications === 'true';
-       const nativePushToken =
-         react_native_1.Platform.OS === 'ios'
-           ? (await voice_pn_bridge_1.VoicePnBridge.getVoipToken())?.trim()
+@@ -68,0 +70 @@ const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications
++const SECURE_VOICE_SESSION_KEY = 'vocivo.secure.voice-session.v1';
+@@ -94 +96,2 @@ class TelnyxVoipClient {
+-      if (pendingAction?.action) return true;
++      if (pendingAction === null || pendingAction === void 0 ? void 0 : pendingAction.action)
++        return true;
+@@ -299,0 +303 @@ class TelnyxVoipClient {
++    var _a;
+@@ -310 +314,2 @@ class TelnyxVoipClient {
+-      useTrickleIce: config.useTrickleIce ?? this._options.useTrickleIce,
++      useTrickleIce:
++        (_a = config.useTrickleIce) !== null && _a !== void 0 ? _a : this._options.useTrickleIce,
+@@ -326,0 +332 @@ class TelnyxVoipClient {
++    var _a;
+@@ -337 +343,2 @@ class TelnyxVoipClient {
+-      useTrickleIce: config.useTrickleIce ?? this._options.useTrickleIce,
++      useTrickleIce:
++        (_a = config.useTrickleIce) !== null && _a !== void 0 ? _a : this._options.useTrickleIce,
+@@ -367,0 +375 @@ class TelnyxVoipClient {
++    var _a, _b;
+@@ -373 +381,2 @@ class TelnyxVoipClient {
+-      // Try to retrieve stored credentials and token from AsyncStorage
++      // Authentication and TURN material is held in Keychain/Keystore. Only
++      // non-secret runtime preferences remain in AsyncStorage.
+@@ -375,3 +384,12 @@ class TelnyxVoipClient {
+-      const storedUsername = await AsyncStorage.getItem('@telnyx_username');
+-      const storedPassword = await AsyncStorage.getItem('@telnyx_password');
+-      const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
++      const SecureStore = require('expo-secure-store');
++      const secureRaw = await SecureStore.getItemAsync(SECURE_VOICE_SESSION_KEY);
++      const secureSession = secureRaw ? JSON.parse(secureRaw) : null;
++      const storedUsername =
++        secureSession === null || secureSession === void 0 ? void 0 : secureSession.sipUser;
++      const storedPassword =
++        secureSession === null || secureSession === void 0 ? void 0 : secureSession.sipPassword;
++      const storedCredentialToken =
++        secureSession === null || secureSession === void 0 ? void 0 : secureSession.token;
++      const storedExpiresAt = Number(
++        (secureSession === null || secureSession === void 0 ? void 0 : secureSession.expiresAt) || 0
++      );
+@@ -379,0 +398,2 @@ class TelnyxVoipClient {
++      const storedIceServers =
++        secureSession === null || secureSession === void 0 ? void 0 : secureSession.iceServers;
+@@ -385,0 +406 @@ class TelnyxVoipClient {
++      const iceServers = Array.isArray(storedIceServers) ? storedIceServers : undefined;
+@@ -390,2 +411,7 @@ class TelnyxVoipClient {
+-          ? (await voice_pn_bridge_1.VoicePnBridge.getVoipToken())?.trim()
 -          : null;
-+          : (await voice_pn_bridge_1.VoicePnBridge.getFirebaseToken())?.trim();
-       const pushNotificationDeviceToken = nativePushToken || storedPushToken;
-       if (nativePushToken && nativePushToken !== storedPushToken) {
-         await AsyncStorage.setItem('@push_token', nativePushToken);
-@@ -400,6 +403,7 @@ class TelnyxVoipClient {
-         const config = createCredentialConfig(storedUsername, storedPassword, {
-           pushNotificationDeviceToken,
-           useTrickleIce,
++          ? (_a = await voice_pn_bridge_1.VoicePnBridge.getVoipToken()) === null || _a === void 0
++            ? void 0
++            : _a.trim()
++          : (_b = await voice_pn_bridge_1.VoicePnBridge.getFirebaseToken()) === null ||
++              _b === void 0
++            ? void 0
++            : _b.trim();
+@@ -402,0 +429 @@ class TelnyxVoipClient {
 +          iceServers,
-           pushWhenActive,
-           enableMissedCallNotifications,
-         });
-@@ -419,6 +423,7 @@ class TelnyxVoipClient {
-         const config = createTokenConfig(storedCredentialToken, {
-           pushNotificationDeviceToken,
-           useTrickleIce,
+@@ -416 +443 @@ class TelnyxVoipClient {
+-      if (storedCredentialToken) {
++      if (storedCredentialToken && storedExpiresAt > Date.now() + 30000) {
+@@ -421,0 +449 @@ class TelnyxVoipClient {
 +          iceServers,
-           pushWhenActive,
-           enableMissedCallNotifications,
-         });
-@@ -674,6 +679,11 @@ class TelnyxVoipClient {
-         USE_TRICKLE_ICE_STORAGE_KEY,
-         String(config.useTrickleIce ?? false)
-       );
-+      if (config.iceServers?.length) {
-+        await AsyncStorage.setItem(ICE_SERVERS_STORAGE_KEY, JSON.stringify(config.iceServers));
-+      } else {
-+        await AsyncStorage.removeItem(ICE_SERVERS_STORAGE_KEY);
+@@ -551 +579,4 @@ class TelnyxVoipClient {
+-      const actionKey = normalizedUUID ?? LEGACY_CALLKIT_ANSWER_KEY;
++      const actionKey =
++        normalizedUUID !== null && normalizedUUID !== void 0
++          ? normalizedUUID
++          : LEGACY_CALLKIT_ANSWER_KEY;
+@@ -650 +681,5 @@ class TelnyxVoipClient {
+-    if (react_native_1.Platform.OS !== 'ios' || config.pushNotificationDeviceToken?.trim()) {
++    var _a, _b;
++    if (
++      react_native_1.Platform.OS !== 'ios' ||
++      ((_a = config.pushNotificationDeviceToken) === null || _a === void 0 ? void 0 : _a.trim())
++    ) {
+@@ -653 +688,4 @@ class TelnyxVoipClient {
+-    const nativePushToken = (await voice_pn_bridge_1.VoicePnBridge.getVoipToken())?.trim();
++    const nativePushToken =
++      (_b = await voice_pn_bridge_1.VoicePnBridge.getVoipToken()) === null || _b === void 0
++        ? void 0
++        : _b.trim();
+@@ -668,0 +707 @@ class TelnyxVoipClient {
++    var _a, _b, _c;
+@@ -671,2 +710,9 @@ class TelnyxVoipClient {
+-      await AsyncStorage.setItem('@telnyx_username', config.sipUser);
+-      await AsyncStorage.setItem('@telnyx_password', config.sipPassword);
++      const SecureStore = require('expo-secure-store');
++      await SecureStore.setItemAsync(
++        SECURE_VOICE_SESSION_KEY,
++        JSON.stringify({
++          sipUser: config.sipUser,
++          sipPassword: config.sipPassword,
++          iceServers: config.iceServers || [],
++        })
++      );
+@@ -675 +721 @@ class TelnyxVoipClient {
+-        String(config.useTrickleIce ?? false)
++        String((_a = config.useTrickleIce) !== null && _a !== void 0 ? _a : false)
+@@ -679 +725 @@ class TelnyxVoipClient {
+-        String(config.pushWhenActive ?? false)
++        String((_b = config.pushWhenActive) !== null && _b !== void 0 ? _b : false)
+@@ -683 +729 @@ class TelnyxVoipClient {
+-        String(config.enableMissedCallNotifications ?? false)
++        String((_c = config.enableMissedCallNotifications) !== null && _c !== void 0 ? _c : false)
+@@ -689 +735,6 @@ class TelnyxVoipClient {
+-      await AsyncStorage.removeItem('@credential_token');
++      await AsyncStorage.multiRemove([
++        '@telnyx_username',
++        '@telnyx_password',
++        '@credential_token',
++        ICE_SERVERS_STORAGE_KEY,
++      ]);
+@@ -703,0 +755 @@ class TelnyxVoipClient {
++    var _a, _b, _c;
+@@ -706 +758,11 @@ class TelnyxVoipClient {
+-      await AsyncStorage.setItem('@credential_token', config.token);
++      const SecureStore = require('expo-secure-store');
++      const existingRaw = await SecureStore.getItemAsync(SECURE_VOICE_SESSION_KEY);
++      const existing = existingRaw ? JSON.parse(existingRaw) : {};
++      await SecureStore.setItemAsync(
++        SECURE_VOICE_SESSION_KEY,
++        JSON.stringify({
++          token: config.token,
++          expiresAt: Number(existing.expiresAt || 0),
++          iceServers: config.iceServers || existing.iceServers || [],
++        })
++      );
+@@ -709 +771 @@ class TelnyxVoipClient {
+-        String(config.useTrickleIce ?? false)
++        String((_a = config.useTrickleIce) !== null && _a !== void 0 ? _a : false)
+@@ -713 +775 @@ class TelnyxVoipClient {
+-        String(config.pushWhenActive ?? false)
++        String((_b = config.pushWhenActive) !== null && _b !== void 0 ? _b : false)
+@@ -717 +779 @@ class TelnyxVoipClient {
+-        String(config.enableMissedCallNotifications ?? false)
++        String((_c = config.enableMissedCallNotifications) !== null && _c !== void 0 ? _c : false)
+@@ -723,2 +785,6 @@ class TelnyxVoipClient {
+-      await AsyncStorage.removeItem('@telnyx_username');
+-      await AsyncStorage.removeItem('@telnyx_password');
++      await AsyncStorage.multiRemove([
++        '@telnyx_username',
++        '@telnyx_password',
++        '@credential_token',
++        ICE_SERVERS_STORAGE_KEY,
++      ]);
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/callkit/callkit-coordinator.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/callkit/callkit-coordinator.ts
+index 50a1330..956c695 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/src/callkit/callkit-coordinator.ts
++++ b/node_modules/@telnyx/react-voice-commons-sdk/src/callkit/callkit-coordinator.ts
+@@ -365 +365 @@ class CallKitCoordinator {
+-   * End a call from the app UI (CallKit-first approach)
++   * End a call from the app UI after the signaling transaction succeeds.
+@@ -371,4 +371,2 @@ class CallKitCoordinator {
+-      console.warn('CallKitCoordinator: Cannot end call - no CallKit UUID found');
+-      // Fallback to direct WebRTC hangup
+-      call.hangup();
+-      return false;
++      await call.hangup();
++      return true;
+@@ -377,2 +374,0 @@ class CallKitCoordinator {
+-    console.log('CallKitCoordinator: Requesting CallKit end action from app UI', callKitUUID);
+-
+@@ -380,8 +375,0 @@ class CallKitCoordinator {
+-      // Let the resulting CXEndCallAction drive signaling, cleanup and survivor
+-      // restoration. Marking the call ended here would suppress that event.
+-      const endCallSuccess = await CallKit.endCall(callKitUUID);
+-
+-      if (endCallSuccess) {
+-        return true;
+-      }
+-
+@@ -388,0 +377,4 @@ class CallKitCoordinator {
++      // The low-level call waits for the Telnyx BYE/CANCEL acknowledgement. Do
++      // not dismiss CallKit before signaling succeeds or the remote leg may
++      // continue ringing after the local screen disappears.
++      await call.hangup();
+@@ -393 +384,0 @@ class CallKitCoordinator {
+-      call.hangup();
+@@ -398 +389 @@ class CallKitCoordinator {
+-      return false;
++      return true;
+@@ -401,6 +392,2 @@ class CallKitCoordinator {
+-      this.pendingPushCallUUIDs.delete(callKitUUID);
+-      this.isCallFromPush = this.pendingPushCallUUIDs.size > 0;
+-      call.hangup();
+-      this.cleanupCall(callKitUUID);
+-      await this.restoreRemainingHeldCall();
+-      return false;
++      // Preserve the native and application call state so the user can retry.
++      throw error;
+@@ -497 +484,3 @@ class CallKitCoordinator {
+-      } catch (_) {}
++      } catch (clearError) {
++        console.error('CallKitCoordinator: Failed to clear push after answer failure', clearError);
 +      }
-       await AsyncStorage.setItem(
-         PUSH_WHEN_ACTIVE_STORAGE_KEY,
-         String(config.pushWhenActive ?? false)
-@@ -708,6 +718,11 @@ class TelnyxVoipClient {
-         USE_TRICKLE_ICE_STORAGE_KEY,
-         String(config.useTrickleIce ?? false)
-       );
-+      if (config.iceServers?.length) {
-+        await AsyncStorage.setItem(ICE_SERVERS_STORAGE_KEY, JSON.stringify(config.iceServers));
-+      } else {
-+        await AsyncStorage.removeItem(ICE_SERVERS_STORAGE_KEY);
-+      }
-       await AsyncStorage.setItem(
-         PUSH_WHEN_ACTIVE_STORAGE_KEY,
-         String(config.pushWhenActive ?? false)
+@@ -824 +813,3 @@ class CallKitCoordinator {
+-        } catch (_) {}
++        } catch (clearError) {
++          console.error('CallKitCoordinator: Failed to clear push after rejection', clearError);
++        }
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts
 index 803daa9..7c56a33 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/calls/call-state-controller.ts
-@@ -9,6 +9,19 @@ import { callKitCoordinator } from '../../callkit/callkit-coordinator';
- export type CustomHeader = { name: string; value: string };
- export type CustomHeaders = Record<string, string> | CustomHeader[];
-
+@@ -11,0 +12,13 @@ export type CustomHeaders = Record<string, string> | CustomHeader[];
 +function customHeader(headers: CustomHeader[] | undefined, name: string): string {
 +  return headers?.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value?.trim() || '';
 +}
@@ -584,97 +1378,63 @@ index 803daa9..7c56a33 100644
 +  return String(match?.value || match?.header_value || '').trim();
 +}
 +
- /**
-  * Central state machine for call management.
-  *
-@@ -205,11 +218,15 @@ export class CallStateController {
-
-     try {
-       // Create the call using the Telnyx SDK
+@@ -207,0 +221,4 @@ export class CallStateController {
 +      const normalizedHeaders = this._normalizeCustomHeaders(customHeaders);
 +      const remoteName = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Name') || destination;
 +      const remoteExtension = customHeader(normalizedHeaders, 'X-Vocivo-Destination-Extension');
 +      const remoteNumber = remoteExtension ? `Extension ${remoteExtension}` : destination;
-       const callOptions: CallOptions = {
-         destinationNumber: destination,
-         callerIdName: callerName,
-         callerIdNumber: callerNumber,
+@@ -212 +229 @@ export class CallStateController {
 -        customHeaders: this._normalizeCustomHeaders(customHeaders),
 +        customHeaders: normalizedHeaders,
-         peerConnectionOptions: {
-           useTrickleIce: this._sessionManager.useTrickleIce,
-         },
-@@ -223,8 +240,8 @@ export class CallStateController {
-         destination,
-         false, // outgoing call
-         false, // not reattached
+@@ -226,2 +243,2 @@ export class CallStateController {
 -        callerName || destination, // use destination as fallback for caller name
 -        callerNumber // original caller number
 +        remoteName,
 +        remoteNumber
-       );
-
-       // Add to our call tracking
-@@ -461,6 +478,11 @@ export class CallStateController {
-       );
-     }
-
+@@ -463,0 +481,5 @@ export class CallStateController {
 +    const internalCallerName = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Name');
 +    const internalCallerExtension = inviteHeader(telnyxCall, 'X-Vocivo-Caller-Extension');
 +    if (internalCallerName) callerName = internalCallerName;
 +    if (internalCallerExtension) callerNumber = `Extension ${internalCallerExtension}`;
 +
-     // Use smart fallbacks - prefer caller number over "Unknown"
-     const finalCallerNumber = callerNumber || 'Unknown Number';
-     const finalCallerName = callerName || callerNumber || 'Unknown Caller';
-@@ -516,7 +538,11 @@ export class CallStateController {
-       } else {
-         // Handle outgoing call with CallKit
-         console.log('CallStateController: Starting outgoing call with CallKitCoordinator');
+@@ -519 +541,5 @@ export class CallStateController {
 -        callKitCoordinator.startOutgoingCall(telnyxCall, call.destination, call.destination);
 +        callKitCoordinator.startOutgoingCall(
 +          telnyxCall,
 +          call.callerNumber || call.destination,
 +          call.callerName || call.destination
 +        );
-       }
-     }
-
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts
-index e5cde0c..44e1e48 100644
+index e5cde0c..a65379e 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/session/session-manager.ts
-@@ -2,7 +2,9 @@ import { BehaviorSubject, Observable } from 'rxjs';
- import { distinctUntilChanged } from 'rxjs/operators';
- import * as TelnyxSDK from '@telnyx/react-native-voice-sdk';
- import * as pkg from '../../../package.json';
+@@ -4,0 +5 @@ import * as pkg from '../../../package.json';
 +import { Platform } from 'react-native';
- import { TelnyxConnectionState } from '../../models/connection-state';
+@@ -5,0 +7 @@ import { TelnyxConnectionState } from '../../models/connection-state';
 +import { VoicePnBridge } from '../voice-pn-bridge';
- import {
-   Config,
-   CredentialConfig,
-@@ -12,6 +14,7 @@ import {
- } from '../../models/config';
-
- const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
-+const ICE_SERVERS_STORAGE_KEY = '@ice_servers';
- const PUSH_WHEN_ACTIVE_STORAGE_KEY = '@push_when_active';
- const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications';
-
-@@ -239,13 +242,23 @@ export class SessionManager {
-         const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
-         const storedPushToken = await AsyncStorage.getItem('@push_token');
-         const storedUseTrickleIce = await AsyncStorage.getItem(USE_TRICKLE_ICE_STORAGE_KEY);
-+        const storedIceServers = await AsyncStorage.getItem(ICE_SERVERS_STORAGE_KEY);
-         const storedPushWhenActive = await AsyncStorage.getItem(PUSH_WHEN_ACTIVE_STORAGE_KEY);
-         const storedMissedCallNotifications = await AsyncStorage.getItem(
-           MISSED_CALL_NOTIFICATIONS_STORAGE_KEY
-         );
-         const useTrickleIce = storedUseTrickleIce === 'true';
-+        const iceServers = storedIceServers ? JSON.parse(storedIceServers) : undefined;
-         const pushWhenActive = storedPushWhenActive === 'true';
-         const enableMissedCallNotifications = storedMissedCallNotifications === 'true';
+@@ -16,0 +19 @@ const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications
++const SECURE_VOICE_SESSION_KEY = 'vocivo.secure.voice-session.v1';
+@@ -234 +237 @@ export class SessionManager {
+-        // Try to retrieve stored credentials and token from AsyncStorage
++        // Read cryptographic voice material from Keychain/Keystore.
+@@ -236,4 +239,8 @@ export class SessionManager {
+-
+-        const storedUsername = await AsyncStorage.getItem('@telnyx_username');
+-        const storedPassword = await AsyncStorage.getItem('@telnyx_password');
+-        const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
++        const SecureStore = require('expo-secure-store');
++        const secureRaw = await SecureStore.getItemAsync(SECURE_VOICE_SESSION_KEY);
++        const secureSession = secureRaw ? JSON.parse(secureRaw) : null;
++
++        const storedUsername = secureSession?.sipUser;
++        const storedPassword = secureSession?.sipPassword;
++        const storedCredentialToken = secureSession?.token;
++        const storedExpiresAt = Number(secureSession?.expiresAt || 0);
+@@ -241,0 +249 @@ export class SessionManager {
++        const storedIceServers = secureSession?.iceServers;
+@@ -246,0 +255 @@ export class SessionManager {
++        const iceServers = Array.isArray(storedIceServers) ? storedIceServers : undefined;
+@@ -248,0 +258,8 @@ export class SessionManager {
 +        const nativePushToken = Platform.OS === 'ios'
 +          ? (await VoicePnBridge.getVoipToken())?.trim()
 +          : (await VoicePnBridge.getFirebaseToken())?.trim();
@@ -683,63 +1443,30 @@ index e5cde0c..44e1e48 100644
 +        if (nativePushToken && nativePushToken !== storedPushToken) {
 +          await AsyncStorage.setItem('@push_token', nativePushToken);
 +        }
-
-         if (this._isTeardownActive()) {
-           return;
-@@ -256,8 +269,9 @@ export class SessionManager {
-           console.log('SessionManager: RELEASE DEBUG - Found stored credentials, creating config');
-           const { createCredentialConfig } = require('../../models/config');
-           this._currentConfig = createCredentialConfig(storedUsername, storedPassword, {
+@@ -259 +276 @@ export class SessionManager {
 -            pushNotificationDeviceToken: storedPushToken,
 +            pushNotificationDeviceToken,
-             useTrickleIce,
+@@ -260,0 +278 @@ export class SessionManager {
 +            iceServers,
-             pushWhenActive,
-             enableMissedCallNotifications,
-           });
-@@ -267,8 +281,9 @@ export class SessionManager {
-           console.log('SessionManager: RELEASE DEBUG - Found stored token, creating config');
-           const { createTokenConfig } = require('../../models/config');
-           this._currentConfig = createTokenConfig(storedCredentialToken, {
+@@ -266 +284 @@ export class SessionManager {
+-        else if (storedCredentialToken) {
++        else if (storedCredentialToken && storedExpiresAt > Date.now() + 30_000) {
+@@ -270 +288 @@ export class SessionManager {
 -            pushNotificationDeviceToken: storedPushToken,
 +            pushNotificationDeviceToken,
-             useTrickleIce,
+@@ -271,0 +290 @@ export class SessionManager {
 +            iceServers,
-             pushWhenActive,
-             enableMissedCallNotifications,
-           });
-@@ -485,6 +500,7 @@ export class SessionManager {
-           pushWhenActive: config.pushWhenActive,
-           enableMissedCallNotifications: config.enableMissedCallNotifications ?? false,
-           useTrickleIce: config.useTrickleIce,
+@@ -487,0 +507 @@ export class SessionManager {
 +          iceServers: config.iceServers,
-           enableCallReports: config.enableCallReports,
-           callReportInterval: config.callReportInterval,
-           callReportLogLevel: config.callReportLogLevel,
-@@ -506,6 +522,7 @@ export class SessionManager {
-           pushWhenActive: config.pushWhenActive,
-           enableMissedCallNotifications: config.enableMissedCallNotifications ?? false,
-           useTrickleIce: config.useTrickleIce,
+@@ -508,0 +529 @@ export class SessionManager {
 +          iceServers: config.iceServers,
-           enableCallReports: config.enableCallReports,
-           callReportInterval: config.callReportInterval,
-           callReportLogLevel: config.callReportLogLevel,
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/voice-pn-bridge.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/voice-pn-bridge.ts
 index e5d2fe0..1a458c8 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/internal/voice-pn-bridge.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/internal/voice-pn-bridge.ts
-@@ -39,6 +39,7 @@ export interface VoicePnBridgeInterface {
-
-   // Additional UserDefaults methods
-   getVoipToken(): Promise<string | null>;
+@@ -41,0 +42 @@ export interface VoicePnBridgeInterface {
 +  getFirebaseToken(): Promise<string | null>;
-   getPendingVoipPush(): Promise<string | null>;
-   clearPendingVoipPush(): Promise<boolean>;
-   getPendingVoipAction(): Promise<string | null>;
-@@ -55,6 +56,16 @@ const NativeBridge: VoicePnBridgeInterface = NativeModules.VoicePnBridge;
-  * Enhanced VoicePnBridge with call control and event handling capabilities
-  */
- export class VoicePnBridge {
+@@ -57,0 +59,10 @@ export class VoicePnBridge {
 +  static async getFirebaseToken(): Promise<string | null> {
 +    if (Platform.OS !== 'android') return null;
 +    try {
@@ -750,114 +1477,109 @@ index e5d2fe0..1a458c8 100644
 +    }
 +  }
 +
-   /**
-    * Get any pending push notification action from native side
-    */
+diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/models/call.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/models/call.ts
+index 143c9bc..455abcf 100644
+--- a/node_modules/@telnyx/react-voice-commons-sdk/src/models/call.ts
++++ b/node_modules/@telnyx/react-voice-commons-sdk/src/models/call.ts
+@@ -415,0 +416 @@ export class Call {
++    this._telnyxCall.off('telnyx.call.state', this._handleTelnyxCallState);
+@@ -425,3 +426 @@ export class Call {
+-  private _setupCallListeners(): void {
+-    // Map Telnyx call states to our simplified states
+-    this._telnyxCall.on('telnyx.call.state', (call: any, state: any) => {
++  private readonly _handleTelnyxCallState = (_call: any, state: any): void => {
+@@ -520 +519,4 @@ export class Call {
+-    });
++  };
++
++  private _setupCallListeners(): void {
++    this._telnyxCall.on('telnyx.call.state', this._handleTelnyxCallState);
+@@ -550 +552 @@ export class Call {
+-        return TelnyxCallState.RINGING;
++        return TelnyxCallState.FAILED;
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/models/config.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/models/config.ts
 index 77026da..cb6e245 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/models/config.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/models/config.ts
-@@ -15,6 +15,8 @@ export interface CredentialConfig {
-   incomingCallRingtone?: string;
-   /** Enable Trickle ICE. Default: false */
-   useTrickleIce?: boolean;
+@@ -17,0 +18,2 @@ export interface CredentialConfig {
 +  /** ICE servers supplied by the authenticated Telnyx control plane. */
 +  iceServers?: RTCIceServer[];
-   /** Enable automatic call quality reporting. Default: true */
-   enableCallReports?: boolean;
-   /** Stats collection interval in seconds. Default: 5 */
-@@ -41,6 +43,8 @@ export interface TokenConfig {
-   incomingCallRingtone?: string;
-   /** Enable Trickle ICE. Default: false */
-   useTrickleIce?: boolean;
+@@ -43,0 +46,2 @@ export interface TokenConfig {
 +  /** ICE servers supplied by the authenticated Telnyx control plane. */
 +  iceServers?: RTCIceServer[];
-   /** Enable automatic call quality reporting. Default: true */
-   enableCallReports?: boolean;
-   /** Stats collection interval in seconds. Default: 5 */
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/telnyx-voip-client.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/telnyx-voip-client.ts
-index 5a26cc7..4e08e9d 100644
+index 5a26cc7..71c6625 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/telnyx-voip-client.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/telnyx-voip-client.ts
-@@ -9,6 +9,7 @@ import { CallStateController, type CustomHeaders } from './internal/calls/call-s
- import { VoicePnBridge } from './internal/voice-pn-bridge';
-
- const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
+@@ -11,0 +12 @@ const USE_TRICKLE_ICE_STORAGE_KEY = '@use_trickle_ice';
 +const ICE_SERVERS_STORAGE_KEY = '@ice_servers';
- const PUSH_WHEN_ACTIVE_STORAGE_KEY = '@push_when_active';
- const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications';
- const LEGACY_CALLKIT_ANSWER_KEY = '__legacy_callkit_answer__';
-@@ -390,16 +391,20 @@ export class TelnyxVoipClient {
-       const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
-       const storedPushToken = await AsyncStorage.getItem('@push_token');
-       const storedUseTrickleIce = await AsyncStorage.getItem(USE_TRICKLE_ICE_STORAGE_KEY);
-+      const storedIceServers = await AsyncStorage.getItem(ICE_SERVERS_STORAGE_KEY);
-       const storedPushWhenActive = await AsyncStorage.getItem(PUSH_WHEN_ACTIVE_STORAGE_KEY);
-       const storedMissedCallNotifications = await AsyncStorage.getItem(
-         MISSED_CALL_NOTIFICATIONS_STORAGE_KEY
-       );
-       const useTrickleIce =
-         storedUseTrickleIce === null ? this._options.useTrickleIce : storedUseTrickleIce === 'true';
-+      const iceServers = storedIceServers ? JSON.parse(storedIceServers) : undefined;
-       const pushWhenActive = storedPushWhenActive === 'true';
-       const enableMissedCallNotifications = storedMissedCallNotifications === 'true';
-       const nativePushToken =
+@@ -13,0 +15 @@ const MISSED_CALL_NOTIFICATIONS_STORAGE_KEY = '@enable_missed_call_notifications
++const SECURE_VOICE_SESSION_KEY = 'vocivo.secure.voice-session.v1';
+@@ -385 +387,2 @@ export class TelnyxVoipClient {
+-      // Try to retrieve stored credentials and token from AsyncStorage
++      // Authentication and TURN material is held in Keychain/Keystore. Only
++      // non-secret runtime preferences remain in AsyncStorage.
+@@ -387,4 +390,8 @@ export class TelnyxVoipClient {
+-
+-      const storedUsername = await AsyncStorage.getItem('@telnyx_username');
+-      const storedPassword = await AsyncStorage.getItem('@telnyx_password');
+-      const storedCredentialToken = await AsyncStorage.getItem('@credential_token');
++      const SecureStore = require('expo-secure-store');
++      const secureRaw = await SecureStore.getItemAsync(SECURE_VOICE_SESSION_KEY);
++      const secureSession = secureRaw ? JSON.parse(secureRaw) : null;
++
++      const storedUsername = secureSession?.sipUser;
++      const storedPassword = secureSession?.sipPassword;
++      const storedCredentialToken = secureSession?.token;
++      const storedExpiresAt = Number(secureSession?.expiresAt || 0);
+@@ -392,0 +400 @@ export class TelnyxVoipClient {
++      const storedIceServers = secureSession?.iceServers;
+@@ -398,0 +407 @@ export class TelnyxVoipClient {
++      const iceServers = Array.isArray(storedIceServers) ? storedIceServers : undefined;
+@@ -402 +411,3 @@ export class TelnyxVoipClient {
 -        Platform.OS === 'ios' ? (await VoicePnBridge.getVoipToken())?.trim() : null;
 +        Platform.OS === 'ios'
 +          ? (await VoicePnBridge.getVoipToken())?.trim()
 +          : (await VoicePnBridge.getFirebaseToken())?.trim();
-       const pushNotificationDeviceToken = nativePushToken || storedPushToken;
-
-       if (nativePushToken && nativePushToken !== storedPushToken) {
-@@ -413,6 +418,7 @@ export class TelnyxVoipClient {
-         const config = createCredentialConfig(storedUsername, storedPassword, {
-           pushNotificationDeviceToken,
-           useTrickleIce,
+@@ -415,0 +427 @@ export class TelnyxVoipClient {
 +          iceServers,
-           pushWhenActive,
-           enableMissedCallNotifications,
-         });
-@@ -435,6 +441,7 @@ export class TelnyxVoipClient {
-         const config = createTokenConfig(storedCredentialToken, {
-           pushNotificationDeviceToken,
-           useTrickleIce,
+@@ -432 +444 @@ export class TelnyxVoipClient {
+-      if (storedCredentialToken) {
++      if (storedCredentialToken && storedExpiresAt > Date.now() + 30_000) {
+@@ -437,0 +450 @@ export class TelnyxVoipClient {
 +          iceServers,
-           pushWhenActive,
-           enableMissedCallNotifications,
-         });
-@@ -742,6 +749,11 @@ export class TelnyxVoipClient {
-         USE_TRICKLE_ICE_STORAGE_KEY,
-         String(config.useTrickleIce ?? false)
-       );
-+      if (config.iceServers?.length) {
-+        await AsyncStorage.setItem(ICE_SERVERS_STORAGE_KEY, JSON.stringify(config.iceServers));
-+      } else {
-+        await AsyncStorage.removeItem(ICE_SERVERS_STORAGE_KEY);
-+      }
-       await AsyncStorage.setItem(
-         PUSH_WHEN_ACTIVE_STORAGE_KEY,
-         String(config.pushWhenActive ?? false)
-@@ -781,6 +793,11 @@ export class TelnyxVoipClient {
-         USE_TRICKLE_ICE_STORAGE_KEY,
-         String(config.useTrickleIce ?? false)
-       );
-+      if (config.iceServers?.length) {
-+        await AsyncStorage.setItem(ICE_SERVERS_STORAGE_KEY, JSON.stringify(config.iceServers));
-+      } else {
-+        await AsyncStorage.removeItem(ICE_SERVERS_STORAGE_KEY);
-+      }
-       await AsyncStorage.setItem(
-         PUSH_WHEN_ACTIVE_STORAGE_KEY,
-         String(config.pushWhenActive ?? false)
+@@ -737,0 +751 @@ export class TelnyxVoipClient {
++      const SecureStore = require('expo-secure-store');
+@@ -739,2 +753,5 @@ export class TelnyxVoipClient {
+-      await AsyncStorage.setItem('@telnyx_username', config.sipUser);
+-      await AsyncStorage.setItem('@telnyx_password', config.sipPassword);
++      await SecureStore.setItemAsync(SECURE_VOICE_SESSION_KEY, JSON.stringify({
++        sipUser: config.sipUser,
++        sipPassword: config.sipPassword,
++        iceServers: config.iceServers || [],
++      }));
+@@ -759 +776 @@ export class TelnyxVoipClient {
+-      await AsyncStorage.removeItem('@credential_token');
++      await AsyncStorage.multiRemove(['@telnyx_username', '@telnyx_password', '@credential_token', ICE_SERVERS_STORAGE_KEY]);
+@@ -778,2 +795,9 @@ export class TelnyxVoipClient {
+-
+-      await AsyncStorage.setItem('@credential_token', config.token);
++      const SecureStore = require('expo-secure-store');
++      const existingRaw = await SecureStore.getItemAsync(SECURE_VOICE_SESSION_KEY);
++      const existing = existingRaw ? JSON.parse(existingRaw) : {};
++
++      await SecureStore.setItemAsync(SECURE_VOICE_SESSION_KEY, JSON.stringify({
++        token: config.token,
++        expiresAt: Number(existing.expiresAt || 0),
++        iceServers: config.iceServers || existing.iceServers || [],
++      }));
+@@ -798,2 +822 @@ export class TelnyxVoipClient {
+-      await AsyncStorage.removeItem('@telnyx_username');
+-      await AsyncStorage.removeItem('@telnyx_password');
++      await AsyncStorage.multiRemove(['@telnyx_username', '@telnyx_password', '@credential_token', ICE_SERVERS_STORAGE_KEY]);
 diff --git a/node_modules/@telnyx/react-voice-commons-sdk/src/types/telnyx-sdk.d.ts b/node_modules/@telnyx/react-voice-commons-sdk/src/types/telnyx-sdk.d.ts
 index c236d48..8ebd86a 100644
 --- a/node_modules/@telnyx/react-voice-commons-sdk/src/types/telnyx-sdk.d.ts
 +++ b/node_modules/@telnyx/react-voice-commons-sdk/src/types/telnyx-sdk.d.ts
-@@ -37,6 +37,7 @@ declare module '@telnyx/react-native-voice-sdk' {
-     pushWhenActive?: boolean;
-     enableMissedCallNotifications?: boolean;
-     useTrickleIce?: boolean;
+@@ -39,0 +40 @@ declare module '@telnyx/react-native-voice-sdk' {
 +    iceServers?: RTCIceServer[];
-     enableCallReports?: boolean;
-     callReportInterval?: number;
-     callReportLogLevel?: string;

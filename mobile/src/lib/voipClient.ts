@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { createTelnyxVoipClient, VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
 import { NativeModules, Platform } from 'react-native';
 
@@ -10,6 +11,8 @@ export const voipClient = createTelnyxVoipClient({
   useTrickleIce: true,
 });
 
+const secureVoiceSessionKey = 'vocivo.secure.voice-session.v1';
+
 export async function getVoicePushToken() {
   if (Platform.OS === 'ios') return (await VoicePnBridge.getVoipToken())?.trim() || undefined;
   return (await VoicePnBridge.getFirebaseToken())?.trim() || undefined;
@@ -20,25 +23,26 @@ export async function persistVoiceSession(session: {
   expiresAt?: number;
   iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
 }) {
-  await AsyncStorage.multiSet([
-    ['@credential_token', session.token],
-    ['@credential_token_expires_at', String(session.expiresAt || 0)],
-    ['@ice_servers', JSON.stringify(session.iceServers || [])],
-  ]);
+  await SecureStore.setItemAsync(secureVoiceSessionKey, JSON.stringify({
+    token: session.token,
+    expiresAt: session.expiresAt || 0,
+    iceServers: session.iceServers || [],
+  }), {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+  // Remove legacy plaintext copies immediately after successful migration.
+  await AsyncStorage.multiRemove(['@credential_token', '@credential_token_expires_at', '@ice_servers']);
 }
 
 export async function loadVoiceSession() {
-  const entries = await AsyncStorage.multiGet([
-    '@credential_token',
-    '@credential_token_expires_at',
-    '@ice_servers',
-  ]);
-  const values = new Map(entries);
-  const token = values.get('@credential_token')?.trim();
-  const expiresAt = Number(values.get('@credential_token_expires_at') || 0);
-  if (!token || !Number.isFinite(expiresAt)) return null;
   try {
-    const parsed = JSON.parse(values.get('@ice_servers') || '[]');
+    const raw = await SecureStore.getItemAsync(secureVoiceSessionKey);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as { token?: string; expiresAt?: number; iceServers?: unknown };
+    const token = stored.token?.trim();
+    const expiresAt = Number(stored.expiresAt || 0);
+    if (!token || !Number.isFinite(expiresAt)) return null;
+    const parsed = stored.iceServers;
     return {
       token,
       expiresAt,
@@ -47,7 +51,7 @@ export async function loadVoiceSession() {
   } catch (failure) {
     const normalized = failure instanceof Error ? failure : new Error(String(failure));
     console.error('[Vocivo Voice] stored ICE configuration is invalid', { message: normalized.message, stack: normalized.stack });
-    return { token, expiresAt };
+    return null;
   }
 }
 
@@ -69,15 +73,19 @@ export async function signOutVoiceDevice() {
     voipClient.disablePushNotifications();
     // Let the SDK send the unregister command before closing its socket.
     await new Promise((resolve) => setTimeout(resolve, 250));
-  } catch {
-    // Local credentials are still removed below so auto-reconnect cannot revive the session.
+  } catch (failure) {
+    const normalized = failure instanceof Error ? failure : new Error(String(failure));
+    console.error('[Vocivo Voice] failed to unregister push notifications', { message: normalized.message, stack: normalized.stack });
   }
   await AsyncStorage.multiRemove(telnyxStorageKeys);
-  await voipClient.logout().catch(() => undefined);
+  await SecureStore.deleteItemAsync(secureVoiceSessionKey);
+  await voipClient.logout();
 }
 
 export async function setVoiceSignedIn(signedIn: boolean) {
   await AsyncStorage.setItem('@vocivo_voice_signed_in', signedIn ? '1' : '0');
   const bridge = NativeModules.VoicePnBridge as { setVocivoVoiceSignedIn?: (value: boolean) => Promise<boolean> } | undefined;
-  if (bridge?.setVocivoVoiceSignedIn) await bridge.setVocivoVoiceSignedIn(signedIn);
+  if (!bridge?.setVocivoVoiceSignedIn) throw new Error('The native voice authentication bridge is unavailable.');
+  const updated = await bridge.setVocivoVoiceSignedIn(signedIn);
+  if (updated !== true) throw new Error('The native voice authentication bridge rejected the state change.');
 }
