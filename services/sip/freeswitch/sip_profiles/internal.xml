@@ -1,0 +1,11 @@
+<profile name="internal">
+  <settings>
+    <param name="sip-ip" value="127.0.0.1"/>
+    <param name="sip-port" value="5090"/>
+    <param name="rtp-ip" value="127.0.0.1"/>
+    <param name="dialplan" value="XML"/>
+    <param name="context" value="public"/>
+    <param name="manage-presence" value="false"/>
+    <param name="enabled" value="false"/>
+  </settings>
+</profile>

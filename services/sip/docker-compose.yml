@@ -5,8 +5,8 @@ services:
     network_mode: host
     environment:
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+    entrypoint: ["rtpengine"]
     command:
-      - rtpengine
       - --interface=${PUBLIC_IP:-127.0.0.1}
       - --listen-ng=127.0.0.1:2223
       - --port-min=${RTP_START:-16384}
@@ -15,15 +15,15 @@ services:
       - --log-level=5
 
   kamailio:
-    image: kamailio/kamailio:5.8.4-alpine
+    image: ghcr.io/kamailio/kamailio-ci:5.8.4-alpine
     restart: unless-stopped
     network_mode: host
     depends_on:
       - rtpengine
       - freeswitch
     environment:
-      VOCIVO_SIP_REALM: ${VOCIVO_SIP_REALM:-sip.vocivo.local}
-      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.vercel.app}
+      VOCIVO_SIP_REALM: ${VOCIVO_SIP_REALM:-sip.vocivo.app}
+      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
       SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
     volumes:
@@ -31,11 +31,11 @@ services:
       - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro
 
   freeswitch:
-    image: stilliard/freeswitch:latest
+    image: safarov/freeswitch:latest
     restart: unless-stopped
     network_mode: host
     environment:
-      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.vercel.app}
+      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
       SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
       TELNYX_SIP_HOST: ${TELNYX_SIP_HOST:-sip.telnyx.com}
       TELNYX_SIP_USERNAME: ${TELNYX_SIP_USERNAME:-}
@@ -43,8 +43,9 @@ services:
       TELNYX_SIP_REALM: ${TELNYX_SIP_REALM:-sip.telnyx.com}
       VOCIVO_SIP_INBOUND: ${VOCIVO_SIP_INBOUND:-0}
     volumes:
-      - ./freeswitch/autoload_configs/switch.conf.xml:/etc/freeswitch/autoload_configs/switch.conf.xml:ro
-      - ./freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml:ro
-      - ./freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml:ro
-      - ./freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml:ro
-      - ./freeswitch/directory/default.xml:/etc/freeswitch/directory/default.xml:ro
+      - freeswitch-etc:/etc/freeswitch
+      - ./freeswitch:/opt/vocivo-fs:ro
+    entrypoint: ["/bin/sh", "/opt/vocivo-fs/docker-entrypoint.sh"]
+
+volumes:
+  freeswitch-etc:

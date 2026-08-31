@@ -6,7 +6,7 @@ Production web and iOS stay on the Telnyx SDK until `VOCIVO_VOICE_EDGE=sip` is s
 
 ## Host
 
-Always-on VM with a public IPv4, UDP/TCP 5060, TLS 5061, WSS 7443, and RTP `${RTP_START}`–`${RTP_END}`. Put a TLS certificate in front of 7443 (nginx or Caddy) as `sip.<domain>`.
+Always-on VM with a public IPv4, UDP/TCP 5060, TLS 5061, HTTPS 443 (WSS `/ws` to Kamailio on loopback 8080), and RTP `${RTP_START}`–`${RTP_END}`. Terminate TLS on nginx/Caddy as `sip.<domain>`.
 
 ## Run
 
