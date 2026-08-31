@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
 import { reportWebVoiceError } from '../voice/telemetry';
-import { sipTargetUri } from '../voice/sipDial';
+import { sipTargetUri, sipUserFromUri } from '../voice/sipDial';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../voice/sipSession';
 
 export function useSipVoice(token, enabled, identity = {}) {
@@ -145,10 +145,20 @@ export function useSipVoice(token, enabled, identity = {}) {
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     routeIdRef.current = routeId;
     try {
-      const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination: `sip:${sipUsername}@sip.telnyx.com`, targetExtension: extension, flow: 'internal' } });
-      await place(sipUsername, {
+      const reservation = await api('/api/voice/route', {
+        method: 'POST',
+        body: {
+          routeId,
+          destination: sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '',
+          targetExtension: extension,
+          flow: 'internal',
+        },
+      });
+      const targetUser = sipUserFromUri(reservation.destination) || String(sipUsername || '').trim();
+      if (!targetUser) throw new Error('The extension route did not return a SIP destination.');
+      await place(targetUser, {
         dialedNumber: extension,
-        identity: { name: displayName || `Extension ${extension}`, number: `Extension ${extension}`, internal: true, photoUrl: '' },
+        identity: { name: reservation.destinationName || displayName || `Extension ${extension}`, number: `Extension ${extension}`, internal: true, photoUrl: '' },
         headers: [
           `X-Vocivo-Flow: internal`,
           `X-Vocivo-Route-ID: ${routeId}`,
