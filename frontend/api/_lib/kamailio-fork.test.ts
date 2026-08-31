@@ -18,6 +18,10 @@ test('Kamailio wakes the phone then forks live contacts without blocking WebSock
   assert.match(cfg, /WAKEUP_NOW/);
   assert.match(cfg, /if \(lookup\("location"\)\)/);
   assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1200"\)/);
+  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1000"\)/);
+  assert.match(cfg, /async_route\("WAIT_REGISTER", "1"\)/);
+  assert.match(cfg, /autodrop", 0/);
+  assert.match(cfg, /websocket REGISTER failed sanity/);
   assert.match(cfg, /route\(REFER\)/);
   assert.match(cfg, /\$rU =~ "\^conf-"/);
 });

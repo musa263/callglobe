@@ -223,7 +223,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     guard let config else { return }
     var extra: [(String, String)] = [("Expires", "600")]
     if let authorization { extra.append(("Authorization", authorization)) }
-    send(method: "REGISTER", extra: extra, cseq: registerCSeq, callId: registerCallId)
+    send(method: "REGISTER", requestUri: "sip:\(config.domain)", extra: extra, cseq: registerCSeq, callId: registerCallId)
   }
 
   private func sendInvite(target: String, sdp: String, headers: [[String: String]]) {
@@ -249,19 +249,25 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
 
   private func send(method: String, requestUri: String? = nil, extra: [(String, String)], body: String = "", cseq: Int? = nil, callId: String? = nil) {
     guard let config else { return }
-    let uri = requestUri ?? "sip:\(config.username)@\(config.domain)"
+    let uri = requestUri ?? (method == "REGISTER" ? "sip:\(config.domain)" : "sip:\(config.username)@\(config.domain)")
     let seq = cseq ?? registerCSeq
+    let display = config.displayName
+      .replacingOccurrences(of: "\"", with: "")
+      .replacingOccurrences(of: "\r", with: "")
+      .replacingOccurrences(of: "\n", with: " ")
+    let contactUser = config.username.replacingOccurrences(of: "\"", with: "")
     var message = VocivoSipMessage(
       startLine: "\(method) \(uri) SIP/2.0",
       headers: [
-        ("Via", "SIP/2.0/WSS \(config.domain);branch=\(VocivoSipIds.branch())"),
+        ("Via", "SIP/2.0/WSS invalid;branch=\(VocivoSipIds.branch());rport"),
         ("Max-Forwards", "70"),
-        ("From", "\"\(config.displayName)\" <sip:\(config.username)@\(config.domain)>;tag=\(fromTag)"),
-        ("To", method == "REGISTER" ? "<sip:\(config.username)@\(config.domain)>" : "<\(uri)>"),
+        ("From", "\"\(display.isEmpty ? contactUser : display)\" <sip:\(contactUser)@\(config.domain)>;tag=\(fromTag)"),
+        ("To", method == "REGISTER" ? "<sip:\(contactUser)@\(config.domain)>" : "<\(uri)>"),
         ("Call-ID", callId ?? registerCallId),
         ("CSeq", "\(seq) \(method)"),
-        ("Contact", "<sip:\(config.username)@\(config.domain);transport=ws>"),
+        ("Contact", "<sip:\(contactUser)@invalid;transport=ws>;expires=600"),
         ("Allow", "INVITE, ACK, CANCEL, BYE, OPTIONS, NOTIFY, REFER, INFO, UPDATE"),
+        ("Supported", "outbound, path"),
         ("User-Agent", "VocivoSip/1.0"),
         ("Content-Length", "\(body.utf8.count)"),
       ],
@@ -323,7 +329,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     if cseq.contains("REGISTER") {
       if code == 401 || code == 407 {
         registerCSeq += 1
-        sendRegister(authorization: digest(for: message, method: "REGISTER", uri: "sip:\(config?.username ?? "")@\(config?.domain ?? "")"))
+        sendRegister(authorization: digest(for: message, method: "REGISTER", uri: "sip:\(config?.domain ?? "")"))
       } else if (200..<300).contains(code) {
         pendingRegister?(.success(()))
         pendingRegister = nil

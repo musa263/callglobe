@@ -14,6 +14,11 @@ test('VocivoSipEngine keeps hangup after VoIP push handling', () => {
   assert.match(source, /func swapHeld\(\)/);
   assert.match(source, /func merge\(to target: String/);
   assert.match(source, /replacingActive/);
+  assert.match(source, /REGISTER", requestUri: "sip:\\(\(config\.domain\)"/);
+  assert.match(source, /Via", "SIP\/2\.0\/WSS invalid;branch=/);
+  assert.match(source, /@invalid;transport=ws>/);
+  assert.match(source, /\("Content-Length", "\\\(body\.utf8\.count\)"\)/);
+  assert.match(source, /uri: "sip:\\(\(config\?\.domain \?\? ""\)"/);
   const credentials = fs.readFileSync(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../modules/vocivo-sip/ios/VocivoSipCredentials.swift'),
     'utf8',
