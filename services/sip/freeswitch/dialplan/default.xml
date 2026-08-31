@@ -1,0 +1,17 @@
+<include>
+  <context name="default">
+    <extension name="vocivo-internal-aor">
+      <condition field="destination_number" expression="^([A-Za-z0-9_.-]{2,64})$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="bridge" data="sofia/external/${destination_number}@127.0.0.1:5060"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-pstn-telnyx">
+      <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
+        <action application="set" data="effective_caller_id_number=${outbound_caller_id_number}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="bridge" data="sofia/gateway/telnyx/+$1"/>
+      </condition>
+    </extension>
+  </context>
+</include>

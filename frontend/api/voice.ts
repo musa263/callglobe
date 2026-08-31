@@ -15,6 +15,10 @@ import voicemails from './_lib/routes/voice-voicemails.js';
 import webhook from './_lib/routes/voice-webhook.js';
 import webPush from './_lib/routes/voice-web-push.js';
 import aiTransfer from './_lib/routes/voice-ai-transfer.js';
+import sipAuth from './_lib/routes/voice-sip-auth.js';
+import sipCredentials from './_lib/routes/voice-sip-credentials.js';
+import sipInbound from './_lib/routes/voice-sip-inbound.js';
+import sipWakeup from './_lib/routes/voice-sip-wakeup.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -35,6 +39,10 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   webhook,
   'ai-transfer': aiTransfer,
   'web-push': webPush,
+  'sip-auth': sipAuth,
+  'sip-credentials': sipCredentials,
+  'sip-inbound': sipInbound,
+  'sip-wakeup': sipWakeup,
 });
 
 export default function handler(req: VercelRequest, res: VercelResponse) {

@@ -1,10 +1,12 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
-import { AppState } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons-sdk';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
+import { registerVocivoSip } from '../lib/sipNative';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
+import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../lib/voiceEdge';
 import type { ActiveCall } from '../types';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 import { voiceLoginConfig } from './session';
@@ -61,6 +63,30 @@ export function useVoiceRegistration({
         loginConfigRef.current = initialSession;
         await persistVoiceSession(initialSession);
         const pushNotificationDeviceToken = await getVoicePushToken();
+        if (pushNotificationDeviceToken) {
+          await api.post('/api/voice/devices', {
+            platform: Platform.OS === 'ios' ? 'ios' : 'android',
+            token: pushNotificationDeviceToken,
+            environment: __DEV__ ? 'sandbox' : 'production',
+            bundleId: 'app.vocivo.mobile',
+          }).catch((failure) => reportVoiceError('register Vocivo wakeup token', failure));
+        }
+        const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
+        if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
+          const sip = await api.post<{
+            username: string;
+            password: string;
+            domain: string;
+            wsUri?: string;
+          }>('/api/voice/sip-credentials', {});
+          await registerVocivoSip({
+            username: sip.username,
+            password: sip.password,
+            domain: sip.domain,
+            wsUri: sip.wsUri,
+            displayName: sip.username,
+          }).catch((failure) => reportVoiceError('register Vocivo SIP', failure));
+        }
         let registeredToken = pushNotificationDeviceToken;
         let registrationBusy = false;
         let sessionRefreshBusy = false;

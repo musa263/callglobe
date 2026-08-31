@@ -1,0 +1,10 @@
+<include>
+  <user id="kamailio">
+    <params>
+      <param name="password" value="internal-media-path"/>
+    </params>
+    <variables>
+      <variable name="user_context" value="default"/>
+    </variables>
+  </user>
+</include>
