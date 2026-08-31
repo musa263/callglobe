@@ -62,8 +62,8 @@ services:
       - --listening-port=3478
       - --external-ip=${PUBLIC_IP:-127.0.0.1}
       - --realm=${VOCIVO_SIP_REALM:-sip.vocivo.app}
-      - --lt-cred-mech
-      - --user=${TURN_USERNAME:-vocivo}:${TURN_PASSWORD:-changeme}
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SECRET:-changeme}
       - --fingerprint
       - --no-cli
       - --no-tls

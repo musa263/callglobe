@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { PbxConfig } from './pbx-config-store.js';
 
 export type VoiceEdge = 'telnyx' | 'sip';
@@ -28,16 +29,34 @@ export function internalCallsUseTelnyxPark(edge: VoiceEdge = voiceEdge()) {
 
 const PUBLIC_SIP_STUN: VoiceIceServer = { urls: 'stun:stun.l.google.com:19302' };
 
-/** SIP clients use RTPEngine. Optional self-hosted TURN is allowed; Telnyx TURN is not. */
-export function sipIceServers(): VoiceIceServer[] {
-  const servers: VoiceIceServer[] = [PUBLIC_SIP_STUN];
-  const turn = trimmedEnv('VOCIVO_TURN_URI');
-  const username = trimmedEnv('VOCIVO_TURN_USERNAME');
-  const credential = trimmedEnv('VOCIVO_TURN_CREDENTIAL');
-  if (turn && username && credential && validIceUrl(turn)) {
-    servers.push({ urls: turn, username, credential });
+/** SIP clients use RTPEngine plus optional self-hosted TURN (never Telnyx TURN). */
+export function sipIceServers(subject = 'voice-session'): VoiceIceServer[] {
+  const servers: VoiceIceServer[] = [];
+  const stun = iceUrlList(trimmedEnv('VOCIVO_STUN_URLS'));
+  if (stun.length) servers.push(...stun.map((urls) => ({ urls })));
+  else servers.push(PUBLIC_SIP_STUN);
+
+  const staticTurn = trimmedEnv('VOCIVO_TURN_URI');
+  const staticUser = trimmedEnv('VOCIVO_TURN_USERNAME');
+  const staticCredential = trimmedEnv('VOCIVO_TURN_CREDENTIAL');
+  if (staticTurn && staticUser && staticCredential && validIceUrl(staticTurn)) {
+    servers.push({ urls: staticTurn, username: staticUser, credential: staticCredential });
+  }
+
+  const secret = trimmedEnv('VOCIVO_TURN_SECRET');
+  const turnUrls = iceUrlList(trimmedEnv('VOCIVO_TURN_URLS'));
+  if (secret && turnUrls.length) {
+    const ttl = Number.parseInt(trimmedEnv('VOCIVO_TURN_TTL_SECONDS') || '3600', 10);
+    const expires = Math.floor(Date.now() / 1000) + (Number.isSafeInteger(ttl) && ttl > 0 ? ttl : 3600);
+    const username = `${expires}:${subject.slice(0, 80)}`;
+    const credential = createHmac('sha1', secret).update(username).digest('base64');
+    turnUrls.forEach((urls) => servers.push({ urls, username, credential }));
   }
   return servers;
+}
+
+function iceUrlList(value: string) {
+  return value.split(/[\s,]+/).map((item) => item.trim()).filter(validIceUrl);
 }
 
 export function clientIceServers(edge: VoiceEdge = voiceEdge(), subject = 'voice-session'): VoiceIceServer[] {

@@ -66,6 +66,21 @@ test('enables the self-hosted SIP edge only when explicitly requested', () => {
   });
 });
 
+test('SIP ICE issues time-limited TURN credentials from VOCIVO_TURN_SECRET', () => {
+  withEnvironment({
+    VOCIVO_TURN_SECRET: 'turn-shared-secret',
+    VOCIVO_TURN_URLS: 'turn:sip.vocivo.app:3478',
+    VOCIVO_TURN_TTL_SECONDS: '60',
+    VOCIVO_STUN_URLS: 'stun:sip.vocivo.app:3478',
+  }, () => {
+    const servers = sipIceServers('org:ext');
+    assert.equal(servers[0].urls, 'stun:sip.vocivo.app:3478');
+    assert.equal(servers[1].urls, 'turn:sip.vocivo.app:3478');
+    assert.match(String(servers[1].username), /:org:ext$/);
+    assert.ok(servers[1].credential);
+  });
+});
+
 test('Telnyx park still checks carrier credit for internal calls', () => {
   withEnvironment({}, () => {
     assert.equal(voiceRouteNeedsTelnyxCredit('internal'), true);
