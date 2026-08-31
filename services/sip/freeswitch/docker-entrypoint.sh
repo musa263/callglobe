@@ -19,5 +19,5 @@ sed -i \
   -e 's#$${TELNYX_SIP_PASSWORD}#'"${TELNYX_SIP_PASSWORD:-}"'#g' \
   -e 's#$${PUBLIC_IP}#'"${PUBLIC_IP:-127.0.0.1}"'#g' \
   /etc/freeswitch/sip_profiles/external.xml
-sed -i -e "s#PUBLIC_IP_REGEX#${PUBLIC_IP_REGEX}#g" /etc/freeswitch/dialplan/public.xml
+sed -i -e 's#PUBLIC_IP_REGEX#'"${PUBLIC_IP_REGEX}"'#g' /etc/freeswitch/dialplan/public.xml
 exec /usr/bin/freeswitch -nc -nf -nonat
