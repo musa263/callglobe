@@ -41,6 +41,7 @@ services:
       TELNYX_SIP_USERNAME: ${TELNYX_SIP_USERNAME:-}
       TELNYX_SIP_PASSWORD: ${TELNYX_SIP_PASSWORD:-}
       TELNYX_SIP_REALM: ${TELNYX_SIP_REALM:-sip.telnyx.com}
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       VOCIVO_SIP_INBOUND: ${VOCIVO_SIP_INBOUND:-0}
     volumes:
       - freeswitch-etc:/etc/freeswitch

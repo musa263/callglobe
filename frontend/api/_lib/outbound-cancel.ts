@@ -173,6 +173,10 @@ export async function hangupConferenceParticipant(pair: OutboundCallPair, hangin
   }
 }
 
+export async function hangupCallControlIds(ids: string[], commandPrefix: string) {
+  await Promise.all([...new Set(ids.filter(Boolean))].map((id) => hangupLeg(id, `${commandPrefix}-${id.slice(-8)}`)));
+}
+
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {
   const ids = outboundCallControlIds(pair);
   // Hanging up a Call Control leg stops its playback. Sending playback_stop as

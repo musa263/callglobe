@@ -12,10 +12,8 @@ import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
 import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
-import { voiceEdge, voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
+import { voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
 import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
-import { dialCall, primaryVoiceCallerId } from '../voice-control.js';
-import { background } from '../voice-webhook/support.js';
 import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
@@ -127,27 +125,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destinationExtensionId: route.destinationExtensionId,
       flow: route.flow,
     });
-    if (requestedFlow === 'internal' && voiceEdge() === 'sip' && destination) {
-      background('SIP-edge Telnyx CallKit wakeup', (async () => {
-        const from = await primaryVoiceCallerId();
-        await dialCall({
-          to: destination,
-          from,
-          fromDisplayName: callerName || 'Vocivo',
-          state: {
-            flow: 'extension',
-            callerName,
-            organizationId,
-            routeId,
-            sourceExtensionId,
-            destinationExtensionId,
-            targetExtensionIds: destinationExtensionId ? [destinationExtensionId] : undefined,
-          },
-          commandId: `sip-route-${routeId}`.slice(0, 80),
-          timeoutSeconds: 45,
-        });
-      })());
-    }
     return res.status(201).json({
       routeId: route.routeId,
       routeToken,

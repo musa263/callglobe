@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
-import { hangupConferenceParticipant, terminateOutboundPair } from '../outbound-cancel.js';
+import { hangupCallControlIds, hangupConferenceParticipant, terminateOutboundPair } from '../outbound-cancel.js';
 import { liveOutboundDestinationId, readOutboundCallPairByRoute } from '../outbound-call-store.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
@@ -23,6 +23,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else {
         await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`);
       }
+    }
+    if (route.wakeupCallControlIds?.length) {
+      await hangupCallControlIds(route.wakeupCallControlIds, `sip-cancel-${routeId.slice(-10)}`);
     }
     await updateVoiceRoute(routeId, { phase: 'ended', failureCause: 'caller_hangup' });
 

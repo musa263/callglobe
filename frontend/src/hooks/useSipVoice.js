@@ -25,12 +25,32 @@ export function useSipVoice(token, enabled, identity = {}) {
   const [mediaReady, setMediaReady] = useState(false);
   const [endedCall, setEndedCall] = useState(null);
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+  const ringbackRef = useRef(null);
+
+  const stopRingback = useCallback(() => {
+    const tone = ringbackRef.current;
+    ringbackRef.current = null;
+    if (tone) {
+      tone.pause();
+      tone.currentTime = 0;
+    }
+  }, []);
+
+  const startRingback = useCallback(() => {
+    if (ringbackRef.current) return;
+    const tone = new Audio('/audio/ringback.wav');
+    tone.loop = true;
+    tone.volume = 0.55;
+    ringbackRef.current = tone;
+    tone.play().catch((failure) => reportWebVoiceError('play outbound ringback', failure));
+  }, []);
 
   const hangupSession = useCallback((session) => {
-    try { session?.bye?.(); } catch (failure) { reportWebVoiceError('SIP bye', failure); }
-    try { session?.reject?.(); } catch (failure) { reportWebVoiceError('SIP reject', failure); }
+    stopRingback();
     try { session?.cancel?.(); } catch (failure) { reportWebVoiceError('SIP cancel', failure); }
-  }, []);
+    try { session?.reject?.(); } catch (failure) { reportWebVoiceError('SIP reject', failure); }
+    try { session?.bye?.(); } catch (failure) { reportWebVoiceError('SIP bye', failure); }
+  }, [stopRingback]);
 
   const disconnect = useCallback(async () => {
     hangupSession(sessionRef.current);
@@ -107,7 +127,8 @@ export function useSipVoice(token, enabled, identity = {}) {
     setMediaReady(false);
     setCallStarting(false);
     setCall({ id: `pending-${Date.now()}`, pending: true });
-  }, []);
+    startRingback();
+  }, [startRingback]);
 
   const place = useCallback(async (destination, options) => {
     const userAgent = credentialsRef.current?.userAgent;
@@ -118,18 +139,28 @@ export function useSipVoice(token, enabled, identity = {}) {
     attachSipMedia(session);
     sessionRef.current = session;
     session.stateChange.addListener((next) => {
+      if (next === SessionState.Establishing || next === 'Establishing' || next === SessionState.Early || next === 'Early') {
+        setState('requesting');
+        setRoutePhase('ringing');
+        startRingback();
+      }
       if (next === SessionState.Established || next === 'Established') {
+        stopRingback();
         setState('active');
         setRoutePhase('connected');
         setMediaReady(true);
       }
       if (next === SessionState.Terminated || next === 'Terminated') {
         if (sessionRef.current !== session) return;
+        stopRingback();
+        const routeId = routeIdRef.current;
+        if (routeId) api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch(() => undefined);
         setCall(null);
         setState(null);
         setRoutePhase('ended');
         setMediaReady(false);
         sessionRef.current = null;
+        routeIdRef.current = null;
       }
     });
     setCall(session);
@@ -140,7 +171,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     setMediaReady(false);
     setCallStarting(false);
     return session;
-  }, []);
+  }, [startRingback, stopRingback]);
 
   const startCall = useCallback(async (destinationNumber, callerNumber) => {
     const identity = { name: 'Outbound call', number: destinationNumber, internal: false, photoUrl: '' };
@@ -160,13 +191,15 @@ export function useSipVoice(token, enabled, identity = {}) {
         ],
       });
     } catch (callError) {
+      stopRingback();
       setCallStarting(false);
       setCall(null);
       setRoutePhase(null);
       setError(callError.message || 'The call could not be started.');
+      if (routeIdRef.current) api('/api/voice/cancel', { method: 'POST', body: { routeId: routeIdRef.current } }).catch(() => undefined);
       throw callError;
     }
-  }, [beginOutgoing, place]);
+  }, [beginOutgoing, place, stopRingback]);
 
   const startInternalCall = useCallback(async (sipUsername, extension, displayName) => {
     const identity = { name: displayName || `Extension ${extension}`, number: `Extension ${extension}`, internal: true, photoUrl: '' };
@@ -195,13 +228,15 @@ export function useSipVoice(token, enabled, identity = {}) {
         ],
       });
     } catch (callError) {
+      stopRingback();
       setCallStarting(false);
       setCall(null);
       setRoutePhase(null);
       setError(callError.message || 'The extension call could not be started.');
+      if (routeIdRef.current) api('/api/voice/cancel', { method: 'POST', body: { routeId: routeIdRef.current } }).catch(() => undefined);
       throw callError;
     }
-  }, [beginOutgoing, place]);
+  }, [beginOutgoing, place, stopRingback]);
 
   const answer = useCallback(async () => {
     const incoming = incomingRef.current;
@@ -223,6 +258,7 @@ export function useSipVoice(token, enabled, identity = {}) {
   }, [hangupSession]);
 
   const hangup = useCallback(() => {
+    stopRingback();
     if (routeIdRef.current) api('/api/voice/cancel', { method: 'POST', body: { routeId: routeIdRef.current } }).catch(() => undefined);
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
@@ -236,7 +272,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     setRoutePhase('ended');
     setMediaReady(false);
     setCallStarting(false);
-  }, [hangupSession, remoteIdentity]);
+  }, [hangupSession, remoteIdentity, stopRingback]);
 
   const toggleMute = useCallback(() => {
     const pc = sessionRef.current?.sessionDescriptionHandler?.peerConnection;

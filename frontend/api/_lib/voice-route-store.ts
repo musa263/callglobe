@@ -20,6 +20,7 @@ export type ReservedVoiceRoute = {
   flow: 'outbound' | 'internal';
   phase: 'dialing' | 'ringing' | 'connected' | 'ended' | 'failed';
   failureCause?: string;
+  wakeupCallControlIds?: string[];
   connectedAt?: string;
   createdAt: string;
   expiresAt: string;

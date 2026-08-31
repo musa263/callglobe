@@ -16,5 +16,6 @@ sed -i \
   -e 's#$${TELNYX_SIP_REALM}#'"${TELNYX_SIP_REALM:-sip.telnyx.com}"'#g' \
   -e 's#$${TELNYX_SIP_USERNAME}#'"${TELNYX_SIP_USERNAME:-}"'#g' \
   -e 's#$${TELNYX_SIP_PASSWORD}#'"${TELNYX_SIP_PASSWORD:-}"'#g' \
+  -e 's#$${PUBLIC_IP}#'"${PUBLIC_IP:-127.0.0.1}"'#g' \
   /etc/freeswitch/sip_profiles/external.xml
 exec /usr/bin/freeswitch -nc -nf -nonat
