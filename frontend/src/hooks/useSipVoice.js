@@ -58,6 +58,10 @@ export function useSipVoice(token, enabled, identity = {}) {
     try { session?.bye?.(); } catch (failure) { reportWebVoiceError('SIP bye', failure); }
   }, [stopRingback]);
 
+  const identityName = identity.name;
+  const identityRef = useRef(identityName);
+  identityRef.current = identityName;
+
   const disconnect = useCallback(async () => {
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
@@ -78,46 +82,59 @@ export function useSipVoice(token, enabled, identity = {}) {
     if (!enabled || !token) return undefined;
     let cancelled = false;
     setStatusLabel('Connecting SIP…');
-    api('/api/voice/sip-credentials', { method: 'POST', body: {} }).then(async (credentials) => {
-      if (cancelled) return;
-      if (!credentials.wsUri) throw new Error('VOCIVO_SIP_WSS_URI is not configured.');
-      const connection = await connectSipUserAgent({
-        username: credentials.username,
-        password: credentials.password,
-        domain: credentials.domain,
-        wsUri: credentials.wsUri,
-        displayName: identity.name,
-        iceServers: credentials.ice_servers,
-        onInvite: (invitation) => {
-          incomingRef.current = invitation;
-          setIncomingCall(invitation);
-          setRemoteIdentity({
-            name: invitation.remoteIdentity?.displayName || 'Incoming call',
-            number: String(invitation.remoteIdentity?.uri || ''),
-            internal: true,
-            photoUrl: '',
+    setError('');
+    const connect = async () => {
+      let lastError;
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+        try {
+          const credentials = await api('/api/voice/sip-credentials', { method: 'POST', body: {} });
+          if (cancelled) return;
+          if (!credentials.wsUri) throw new Error('VOCIVO_SIP_WSS_URI is not configured.');
+          const connection = await connectSipUserAgent({
+            username: credentials.username,
+            password: credentials.password,
+            domain: credentials.domain,
+            wsUri: credentials.wsUri,
+            displayName: identityRef.current,
+            iceServers: credentials.ice_servers,
+            onInvite: (invitation) => {
+              incomingRef.current = invitation;
+              setIncomingCall(invitation);
+              setRemoteIdentity({
+                name: invitation.remoteIdentity?.displayName || 'Incoming call',
+                number: String(invitation.remoteIdentity?.uri || ''),
+                internal: true,
+                photoUrl: '',
+              });
+              attachSipMedia(invitation);
+            },
           });
-          attachSipMedia(invitation);
-        },
-      });
-      if (cancelled) {
-        await connection.userAgent.stop();
-        return;
+          if (cancelled) {
+            await connection.userAgent.stop();
+            return;
+          }
+          credentialsRef.current = connection;
+          setReady(true);
+          setError('');
+          setStatusLabel('Ready for calls');
+          return;
+        } catch (failure) {
+          lastError = failure;
+          reportWebVoiceError('SIP register', failure);
+          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        }
       }
-      credentialsRef.current = connection;
-      setReady(true);
-      setError('');
-      setStatusLabel('Ready for calls');
-    }).catch((failure) => {
       if (cancelled) return;
-      setError(failure instanceof Error ? failure.message : 'The SIP phone could not register.');
+      const message = lastError instanceof Error ? lastError.message : 'The SIP phone could not register.';
+      setError(message.includes('WebSocket') ? 'The Vocivo phone lost its SIP connection. Retrying…' : message);
       setStatusLabel('SIP unavailable');
-    });
+    };
+    connect();
     return () => {
       cancelled = true;
       disconnect();
     };
-  }, [disconnect, enabled, identity.name, token]);
+  }, [disconnect, enabled, token]);
 
   useEffect(() => {
     if (!enabled || !token || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;

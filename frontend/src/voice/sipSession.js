@@ -8,8 +8,12 @@ export async function connectSipUserAgent(input) {
     authorizationUsername: input.username,
     authorizationPassword: input.password,
     displayName: input.displayName || input.username,
+    reconnectionAttempts: 12,
+    reconnectionDelay: 2,
     transportOptions: {
       server: input.wsUri,
+      connectionTimeout: 12,
+      keepAliveInterval: 30,
     },
     sessionDescriptionHandlerFactoryOptions: {
       iceCheckingTimeout: 5000,

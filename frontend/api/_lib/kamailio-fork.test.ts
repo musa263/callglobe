@@ -9,11 +9,15 @@ const cfg = fs.readFileSync(
   'utf8',
 );
 
-test('Kamailio forks equal-q contacts and wakes the phone even when web is registered', () => {
+test('Kamailio wakes the phone then forks live contacts without blocking WebSocket REGISTER', () => {
   assert.match(cfg, /append_branches", 1/);
-  assert.match(cfg, /;q=0\.5/);
-  assert.match(cfg, /Always VoIP-push the iPhone/);
-  assert.match(cfg, /async_route\("WAIT_REGISTER", "1200"\)/);
+  assert.match(cfg, /async", "workers", 16/);
+  assert.match(cfg, /cors_mode", 2/);
+  assert.match(cfg, /\$Rp != 8080 && \$fU =~ "\^\[0-9\]\{1,8\}\$"/);
+  assert.match(cfg, /\$rU =~ "\^\[0-9\]\{1,8\}\$"/);
+  assert.match(cfg, /WAKEUP_NOW/);
+  assert.match(cfg, /if \(lookup\("location"\)\)/);
+  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1200"\)/);
   assert.match(cfg, /route\(REFER\)/);
   assert.match(cfg, /\$rU =~ "\^conf-"/);
 });

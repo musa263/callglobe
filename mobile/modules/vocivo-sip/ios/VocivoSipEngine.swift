@@ -260,7 +260,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
         ("To", method == "REGISTER" ? "<sip:\(config.username)@\(config.domain)>" : "<\(uri)>"),
         ("Call-ID", callId ?? registerCallId),
         ("CSeq", "\(seq) \(method)"),
-        ("Contact", "<sip:\(config.username)@\(config.domain);transport=ws>;q=0.5"),
+        ("Contact", "<sip:\(config.username)@\(config.domain);transport=ws>"),
         ("Allow", "INVITE, ACK, CANCEL, BYE, OPTIONS, NOTIFY, REFER, INFO, UPDATE"),
         ("User-Agent", "VocivoSip/1.0"),
         ("Content-Length", "\(body.utf8.count)"),
