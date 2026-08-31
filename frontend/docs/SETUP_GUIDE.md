@@ -60,11 +60,14 @@ npx vercel --prod
 
 ## Custom domain (`vocivo.app`)
 
-Keep DNS at Namecheap. Add the domain on the Vercel project **vocivo**, then create these records in Namecheap:
+Keep DNS at Namecheap (`dns1.registrar-servers.com` / `dns2.registrar-servers.com`). Add `vocivo.app` and `www.vocivo.app` on the Vercel project **vocivo**, then create these records in Namecheap:
 
 | Type | Host | Value |
 | --- | --- | --- |
-| A | `@` | `10.0.1.2` |
+| A | `@` | `216.198.79.1` |
+| A | `@` | `64.29.17.1` |
 | CNAME | `www` | `cname.vercel-dns.com` |
+
+Do not leave only `76.76.21.21` on the apex. Vercel’s current verification expects both `216.198.79.1` and `64.29.17.1`; a lone classic anycast A record can fail SSL issuance and time out on `https://vocivo.app` while `https://www.vocivo.app` still works.
 
 Set the Vercel env `VITE_APP_URL=https://vocivo.app`. Mobile production builds use `EXPO_PUBLIC_API_URL=https://vocivo.app`. Leave `vocivo.vercel.app` attached as a backup. When the SIP droplet exists, add `sip` as an A record to that droplet IPv4.
