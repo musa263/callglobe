@@ -340,6 +340,8 @@ export function retailRateFromWholesale(input: {
   return Math.ceil(buffered / (1 - margin / 10_000) + Math.max(0, input.surchargeMicros || 0));
 }
 
+export const LAUNCH_CALLING_CREDIT_MINOR = 2500;
+
 export function outboundWalletBlockReason(wallet: Pick<Wallet, 'status' | 'availableMinor'> | null | undefined) {
   if (!wallet) return 'Calling credit is not available.';
   if (wallet.status === 'frozen') return 'This account wallet is frozen.';
@@ -382,7 +384,7 @@ export async function readPlatformWalletState(organizations: Array<{ id: string;
 
 export async function readTenantWallet(organizationId: string, currency = 'USD') {
   if (!organizationId) throw new Error('Wallet tenant is required.');
-  return withDatabaseRetry(async (sql) => {
+  const wallet = await withDatabaseRetry(async (sql) => {
     await ensureWalletTables(sql);
     return sql.begin(async (transaction) => {
       await setContext(transaction, organizationId, false);
@@ -394,6 +396,17 @@ export async function readTenantWallet(organizationId: string, currency = 'USD')
       return walletFromRow(rows[0]);
     });
   });
+  if (wallet.status !== 'active' || wallet.availableMinor > 0) return wallet;
+  const granted = await recordWalletAdjustment({
+    organizationId,
+    type: 'promotion',
+    direction: 'credit',
+    amountMinor: LAUNCH_CALLING_CREDIT_MINOR,
+    description: 'Launch calling credit',
+    createdBy: 'vocivo-launch-credit',
+    idempotencyKey: `launch-calling-credit:${organizationId}`,
+  });
+  return granted.duplicate ? wallet : granted.wallet;
 }
 
 export async function readRetailRateDirectory<T extends { country_code: string; rate_per_min: number }>(baseRates: T[]): Promise<T[]> {

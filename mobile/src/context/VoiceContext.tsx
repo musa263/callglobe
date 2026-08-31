@@ -155,7 +155,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       onHold: call.currentIsHeld,
       isIncoming: call.isIncoming,
       photoUrl: meta.photoUrl || inviteHeader(call, 'X-Vocivo-Caller-Photo') || undefined,
-      routeId: meta.routeId,
+      routeId: meta.routeId || inviteHeader(call, 'X-Vocivo-Route-ID'),
       callerId: meta.callerId,
     };
   }, []);
@@ -284,7 +284,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (cleanup) iceListenerCleanupRef.current.set(call.callId, cleanup);
     };
     bindIceListener();
-    if (!callMetaRef.current.has(call.callId)) callMetaRef.current.set(call.callId, { startedAt: base.startedAt, connectedAt: base.connectedAt });
+    if (!callMetaRef.current.has(call.callId)) {
+      callMetaRef.current.set(call.callId, {
+        startedAt: base.startedAt,
+        connectedAt: base.connectedAt,
+        routeId: inviteHeader(call, 'X-Vocivo-Route-ID') || undefined,
+      });
+    }
+    const incomingRouteId = inviteHeader(call, 'X-Vocivo-Route-ID');
+    if (incomingRouteId && !callRouteIdsRef.current.has(call.callId)) callRouteIdsRef.current.set(call.callId, incomingRouteId);
     setActiveCall((existing) => {
       const next = { ...base, speaker: existing?.speaker ?? base.speaker };
       activeCallRef.current = next;
@@ -929,6 +937,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     await ensureCallMicrophonePermission();
     setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'connecting' } : current);
     try {
+      const routeId = inviteHeader(call, 'X-Vocivo-Route-ID') || callRouteIdsRef.current.get(call.callId);
+      if (routeId) {
+        api.post('/api/voice/progress', { routeId, event: 'answered' }).catch((failure) => reportVoiceError('report answered route', failure));
+      }
       voipClient.setActiveCall(call.callId);
       await call.answer();
       if (Platform.OS === 'android') await VoicePnBridge.hideIncomingCallNotification();
@@ -939,7 +951,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setError(answerError instanceof Error ? answerError.message : 'The incoming call could not be answered.');
       throw answerError;
     }
-  }, []);
+  }, [reportVoiceError]);
   const toggleMute = useCallback(async () => {
     if (callRef.current) await callRef.current.toggleMute();
     else setActiveCall((current) => current ? { ...current, muted: !current.muted } : current);

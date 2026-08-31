@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import cancel from './_lib/routes/voice-cancel.js';
+import progress from './_lib/routes/voice-progress.js';
 import conferences from './_lib/routes/voice-conferences.js';
 import config from './_lib/routes/voice-config.js';
 import devices from './_lib/routes/voice-devices.js';
@@ -24,6 +25,7 @@ type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
 const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   cancel,
+  progress,
   conferences,
   config,
   devices,

@@ -142,6 +142,7 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
         : payload.caller_id_name || 'Vocivo'),
       customHeaders: reservation.flow === 'internal' ? [
         { name: 'X-Vocivo-Call-Type', value: 'internal' },
+        { name: 'X-Vocivo-Route-ID', value: routeId },
         ...(reservation.callerName ? [{ name: 'X-Vocivo-Caller-Name', value: reservation.callerName }] : []),
         ...(reservation.callerExtension ? [{ name: 'X-Vocivo-Caller-Extension', value: reservation.callerExtension }] : []),
         ...(reservation.callerPhotoUrl ? [{ name: 'X-Vocivo-Caller-Photo', value: reservation.callerPhotoUrl }] : []),

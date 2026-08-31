@@ -567,6 +567,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           updatedAt: now,
         };
         try {
+          if (parentCallControlId) {
+            await prepareParkedCallerMedia(parentCallControlId, `${eventId}-early-media`);
+          }
           const claim = await claimOutboundCallWinner(candidatePair, callControlId);
           if (!claim.won) {
             background('reject losing answered fork', terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-losing-fork`));
@@ -681,6 +684,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const otherForks = (pair?.forkDestinationCallControlIds || [])
           .filter((id) => id !== callControlId);
+        if (pair?.phase === 'ringing' && pair.clientCallControlId && !otherForks.length) {
+          await callAction(pair.clientCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-rejected-ringback` }).catch((error) => logWebhookFailure('stop rejected-call ringback', error));
+          await callAction(pair.clientCallControlId, 'hangup', { command_id: `${eventId}-end-rejected-client` }).catch((error) => logWebhookFailure('end rejected client leg', error));
+        }
         if (pair?.phase === 'ringing' && otherForks.length) {
           await saveOutboundCallPair({
             ...pair,

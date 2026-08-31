@@ -3,7 +3,7 @@ import { TelnyxRTC } from '@telnyx/webrtc';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
 import { describeRemote, getCallId, callHeader } from '../voice/callIdentity';
-import { waitForWebCallMedia } from '../voice/webCallMedia';
+import { remoteInboundAudioStarted, waitForWebCallMedia } from '../voice/webCallMedia';
 import { reportWebVoiceError, telnyxErrorMessage } from '../voice/telemetry';
 
 const TERMINAL_STATES = new Set(['hangup', 'destroy', 'purge']);
@@ -67,7 +67,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   }, []);
 
   const ringbackRef = useRef(null);
+  const ringbackWatchRef = useRef(0);
   const stopRingback = useCallback(() => {
+    ringbackWatchRef.current += 1;
     const tone = ringbackRef.current;
     ringbackRef.current = null;
     if (tone) {
@@ -86,6 +88,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
 
   const confirmWebMedia = useCallback(async (call, callId) => {
     if (!callId) return;
+    stopRingback();
     const ready = call ? await waitForWebCallMedia(call, 8_000) : false;
     if (getCallId(callRef.current) !== callId) return;
     stopRingback();
@@ -362,6 +365,11 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           routePhaseRef.current = 'connected';
           void confirmWebMedia(updatedCall, callId);
           resumeAudio().catch((failure) => reportWebVoiceError('resume connected-call audio', failure));
+        } else if (direction !== 'inbound' && ['early', 'ringing'].includes(nextState)) {
+          void remoteInboundAudioStarted(updatedCall, 8_000).then((started) => {
+            if (!started || getCallId(callRef.current) !== callId) return;
+            stopRingback();
+          }).catch((failure) => reportWebVoiceError('stop ringback on early media', failure));
         }
         if (TERMINAL_STATES.has(nextState)) {
           if (callId) locallyEndedCallIdsRef.current.delete(callId);
@@ -459,7 +467,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         lastRouteError = routeError;
         if (attempt === 9 || attempt === 39) reportWebVoiceError('poll extension route status', routeError);
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt < 25 ? 200 : 500));
+      await new Promise((resolve) => setTimeout(resolve, attempt < 40 ? 80 : 250));
     }
     if (routePollRef.current === generation) {
       stopRingback();
@@ -513,6 +521,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setCall(newCall);
       setRemoteIdentity({ name: 'Outbound call', number: destinationNumber, internal: false, photoUrl: '' });
       setState(String(newCall.state || 'requesting').toLowerCase());
+      void remoteInboundAudioStarted(newCall, 20_000).then((started) => {
+        if (!started || getCallId(callRef.current) !== getCallId(newCall)) return;
+        stopRingback();
+      }).catch((failure) => reportWebVoiceError('stop ringback when remote audio starts', failure));
       followRoute(routeId);
     } catch (callError) {
       stopRingback();
@@ -579,6 +591,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       setCall(newCall);
       setRemoteIdentity({ name: resolvedName, number: `Extension ${resolvedExtension}`, internal: true, photoUrl: '' });
       setState(String(newCall.state || 'requesting').toLowerCase());
+      void remoteInboundAudioStarted(newCall, 20_000).then((started) => {
+        if (!started || getCallId(callRef.current) !== getCallId(newCall)) return;
+        stopRingback();
+      }).catch((failure) => reportWebVoiceError('stop ringback when remote audio starts', failure));
       followRoute(routeId);
     } catch (callError) {
       stopRingback();
