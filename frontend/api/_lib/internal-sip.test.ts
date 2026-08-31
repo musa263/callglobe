@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { activeOrganizationExtensionTargets, canonicalVoiceDestination, destinationSipUrisForInternalDial, extensionSipUsernames, isAllowedInternalSipDestination, organizationExtensionSipUri, parseInternalSipUser, voiceDestinationsMatch } from './internal-sip.js';
+import { activeOrganizationExtensionTargets, canonicalVoiceDestination, clientExtensionSipUri, destinationSipUrisForInternalDial, extensionSipUsernames, isAllowedInternalSipDestination, organizationExtensionSipUri, parseInternalSipUser, voiceDestinationsMatch } from './internal-sip.js';
 
 test('Telnyx SIP URIs are recognized as internal destinations', () => {
   assert.equal(parseInternalSipUser('sip:2000@sip.telnyx.com'), '2000');
@@ -17,6 +17,7 @@ test('Vocivo SIP URIs are recognized as internal destinations on the SIP edge', 
     assert.equal(parseInternalSipUser('sip:employee@sip.vocivo.app'), 'employee');
     assert.equal(parseInternalSipUser('sip:employee@sip.telnyx.com'), 'employee');
     assert.equal(organizationExtensionSipUri(defaultPbxConfig(), 'primary', '2000'), 'sip:2000@sip.telnyx.com');
+    assert.equal(clientExtensionSipUri('2000'), 'sip:2000@sip.vocivo.app');
   } finally {
     if (previousEdge === undefined) delete process.env.VOCIVO_VOICE_EDGE;
     else process.env.VOCIVO_VOICE_EDGE = previousEdge;

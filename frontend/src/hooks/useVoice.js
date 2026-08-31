@@ -4,10 +4,10 @@ import { useSipVoice } from './useSipVoice';
 import { useTelnyxVoice } from './useTelnyxVoice';
 
 export function useVoice(token, enabled, identity = {}) {
-  const [edge, setEdge] = useState('telnyx');
+  const [edge, setEdge] = useState(null);
   useEffect(() => {
     if (!enabled || !token) {
-      setEdge('telnyx');
+      setEdge(null);
       return undefined;
     }
     let cancelled = false;
@@ -15,13 +15,12 @@ export function useVoice(token, enabled, identity = {}) {
       if (cancelled) return;
       setEdge(config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx');
     }).catch(() => {
-      if (!cancelled) setEdge('telnyx');
+      // Do not fall back to Telnyx on a config failure. That logs a billed WebRTC session.
+      if (!cancelled) setEdge('sip');
     });
     return () => { cancelled = true; };
   }, [enabled, token]);
-  // Web origination is SIP.js. Keep a Telnyx listener so current TestFlight
-  // CallKit clients can still ring the browser until the iOS SIP client ships.
-  const telnyx = useTelnyxVoice(token, enabled, identity);
+  const telnyx = useTelnyxVoice(token, enabled && edge === 'telnyx', identity);
   const sip = useSipVoice(token, enabled && edge === 'sip', identity);
   if (edge !== 'sip') return telnyx;
 

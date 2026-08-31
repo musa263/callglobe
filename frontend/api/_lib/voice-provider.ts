@@ -21,6 +21,22 @@ export function voiceRouteNeedsTelnyxCredit(flow: 'internal' | 'outbound', edge:
   return !(edge === 'sip' && flow === 'internal');
 }
 
+/** SIP-edge internal calls must never park or Dial on Telnyx Call Control. */
+export function internalCallsUseTelnyxPark(edge: VoiceEdge = voiceEdge()) {
+  return edge !== 'sip';
+}
+
+const PUBLIC_SIP_STUN: VoiceIceServer = { urls: 'stun:stun.l.google.com:19302' };
+
+/** SIP clients use RTPEngine. Telnyx TURN on those sessions bills internal media as carrier traffic. */
+export function sipIceServers(): VoiceIceServer[] {
+  return [PUBLIC_SIP_STUN];
+}
+
+export function clientIceServers(edge: VoiceEdge = voiceEdge(), subject = 'voice-session'): VoiceIceServer[] {
+  return edge === 'sip' ? sipIceServers() : voiceIceServers(subject);
+}
+
 /** @deprecated use voiceEdge */
 export function voiceProvider(config?: PbxConfig) {
   return voiceEdge(config);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit } from './voice-provider.js';
+import { clientIceServers, sipIceServers, sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit, internalCallsUseTelnyxPark } from './voice-provider.js';
 
 const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND'] as const;
 
@@ -46,18 +46,30 @@ test('defaults the voice edge to Telnyx so TestFlight stays on CallKit', () => {
 });
 
 test('enables the self-hosted SIP edge only when explicitly requested', () => {
-  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', VOCIVO_SIP_REALM: 'sip.example.test', VOCIVO_SIP_INBOUND: '1' }, () => {
+  withEnvironment({
+    VOCIVO_VOICE_EDGE: 'sip',
+    VOCIVO_SIP_REALM: 'sip.example.test',
+    VOCIVO_SIP_INBOUND: '1',
+    TELNYX_ICE_SERVERS_JSON: JSON.stringify([
+      { urls: ['turn:turn.telnyx.example:3478'], username: 'ephemeral-user', credential: 'ephemeral-secret' },
+    ]),
+  }, () => {
     assert.equal(voiceEdge(), 'sip');
     assert.equal(sipRealm(), 'sip.example.test');
     assert.equal(sipInboundEnabled(), true);
     assert.equal(voiceRouteNeedsTelnyxCredit('internal'), false);
     assert.equal(voiceRouteNeedsTelnyxCredit('outbound'), true);
+    assert.equal(internalCallsUseTelnyxPark(), false);
+    assert.deepEqual(sipIceServers(), [{ urls: 'stun:stun.l.google.com:19302' }]);
+    assert.deepEqual(clientIceServers('sip'), sipIceServers());
+    assert.equal(JSON.stringify(clientIceServers('sip')).includes('turn'), false);
   });
 });
 
 test('Telnyx park still checks carrier credit for internal calls', () => {
   withEnvironment({}, () => {
     assert.equal(voiceRouteNeedsTelnyxCredit('internal'), true);
+    assert.equal(internalCallsUseTelnyxPark(), true);
   });
 });
 

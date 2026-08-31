@@ -4,7 +4,7 @@ import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { registerVocivoSip } from '../lib/sipNative';
+import { registerVocivoSip, setPreferredVoiceEdge } from '../lib/sipNative';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
 import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../lib/voiceEdge';
 import type { ActiveCall } from '../types';
@@ -55,13 +55,6 @@ export function useVoiceRegistration({
         if (canceled) return;
         const ringtone = await loadIncomingRingtone();
         await applyIncomingRingtone(ringtone);
-        const pushBootstrap = launchedFromPush && bootstrapSession && isVoiceSessionFresh(bootstrapSession, 30_000)
-          ? bootstrapSession
-          : null;
-        const initialSession = pushBootstrap
-          || voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone);
-        loginConfigRef.current = initialSession;
-        await persistVoiceSession(initialSession);
         const pushNotificationDeviceToken = await getVoicePushToken();
         if (pushNotificationDeviceToken) {
           await api.post('/api/voice/devices', {
@@ -72,7 +65,10 @@ export function useVoiceRegistration({
           }).catch((failure) => reportVoiceError('register Vocivo wakeup token', failure));
         }
         const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
-        if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
+        const edge = voiceEdgeFromConfig(edgeConfig);
+        setPreferredVoiceEdge(edge);
+        if (shouldUseSipNative(edge, NativeModules)) {
+          await voipClient.logout().catch((failure) => reportVoiceError('logout Telnyx before SIP edge', failure));
           const sip = await api.post<{
             username: string;
             password: string;
@@ -87,8 +83,18 @@ export function useVoiceRegistration({
             wsUri: sip.wsUri,
             displayName: sip.username,
             iceServers: sip.ice_servers,
-          }).catch((failure) => reportVoiceError('register Vocivo SIP', failure));
+          });
+          if (canceled) return;
+          setPushRegistration(pushNotificationDeviceToken ? 'registered' : 'registering');
+          return;
         }
+        const pushBootstrap = launchedFromPush && bootstrapSession && isVoiceSessionFresh(bootstrapSession, 30_000)
+          ? bootstrapSession
+          : null;
+        const initialSession = pushBootstrap
+          || voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone);
+        loginConfigRef.current = initialSession;
+        await persistVoiceSession(initialSession);
         let registeredToken = pushNotificationDeviceToken;
         let registrationBusy = false;
         let sessionRefreshBusy = false;

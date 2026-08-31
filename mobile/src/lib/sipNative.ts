@@ -30,6 +30,19 @@ let jsAgentReady = false;
 let realm = '';
 let nativeHangup: ((callId?: string) => Promise<void>) | null = null;
 const readyListeners = new Set<(ready: boolean) => void>();
+let preferredEdge: 'sip' | 'telnyx' = 'telnyx';
+
+export function setPreferredVoiceEdge(edge: 'sip' | 'telnyx') {
+  preferredEdge = edge;
+}
+
+export function preferredVoiceEdge() {
+  return preferredEdge;
+}
+
+export function sipEdgeInternalCallsOnly() {
+  return preferredEdge === 'sip';
+}
 
 function emitReady(ready: boolean) {
   readyListeners.forEach((listener) => listener(ready));

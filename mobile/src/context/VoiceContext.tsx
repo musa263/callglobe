@@ -21,7 +21,7 @@ import { inviteHeader, visibleCallAddress } from '../voice/callIdentity';
 import { toLifecycleState, toUiCallPhase, waitForCallState } from '../voice/callState';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from '../voice/contracts';
 import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnection, waitForVoicePushToken } from '../voice/session';
-import { answerVocivoSip, hangupVocivoSip, inviteVocivoSip, onVocivoSipReady, sipClientReady, sipDomain, subscribeVocivoSipEvents } from '../lib/sipNative';
+import { answerVocivoSip, hangupVocivoSip, inviteVocivoSip, onVocivoSipReady, preferredVoiceEdge, sipClientReady, sipDomain, sipEdgeInternalCallsOnly, subscribeVocivoSipEvents } from '../lib/sipNative';
 import { setSipIncomingHandler, sipSessionId, SessionState } from '../lib/sipJsClient';
 import type { Invitation, Session } from 'sip.js';
 import { useVoiceRegistration } from '../voice/useVoiceRegistration';
@@ -728,6 +728,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         });
         return;
       }
+      if (preferredVoiceEdge() === 'sip') {
+        throw new Error('The Vocivo SIP phone is not registered. This call stays on Vocivo SIP and is not placed through Telnyx.');
+      }
       const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
       if (startAttemptRef.current !== attempt) {
         await Promise.all([
@@ -810,7 +813,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
     await ensureCallMicrophonePermission();
     await waitForVoiceConnection();
-    const destination = sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '';
+    const destination = sipUsername || '';
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
     const startedAt = Date.now();
@@ -860,6 +863,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           routeId,
         });
         return;
+      }
+      if (sipEdgeInternalCallsOnly()) {
+        throw new Error('The Vocivo SIP phone is not registered. Internal calls stay on Vocivo SIP and are not placed through Telnyx.');
       }
       const call = await voipClient.newCall(
         reservation.destination,

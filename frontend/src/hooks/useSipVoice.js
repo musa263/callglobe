@@ -211,7 +211,7 @@ export function useSipVoice(token, enabled, identity = {}) {
         method: 'POST',
         body: {
           routeId,
-          destination: sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '',
+              destination: sipUsername || '',
           targetExtension: extension,
           flow: 'internal',
         },

@@ -1,5 +1,5 @@
 import type { PbxConfig } from './pbx-config-store.js';
-import { sipDomain, sipRealm } from './voice-provider.js';
+import { sipDomain, sipRealm, voiceEdge } from './voice-provider.js';
 
 const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)$/i;
 const carrierSipAddress = /^(?:sip:)?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?:;[^<>\s]+)?$/i;
@@ -37,6 +37,12 @@ export function isAllowedInternalSipDestination(destination: string) {
 
 export function extensionSipUri(sipUsername: string) {
   return `sip:${sipUsername}@${telnyxSipHost}`;
+}
+
+/** Destination the SIP/WebRTC client should INVITE. Call Control Dial still uses extensionSipUri. */
+export function clientExtensionSipUri(sipUsername: string) {
+  const host = voiceEdge() === 'sip' ? (sipDomain() || 'sip.vocivo.app') : telnyxSipHost;
+  return `sip:${sipUsername}@${host}`;
 }
 
 export function destinationSipUrisForInternalDial(

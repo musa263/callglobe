@@ -1,6 +1,6 @@
 import { TelnyxConnectionState } from '@telnyx/react-voice-commons-sdk';
 import { getVoicePushToken, voipClient } from '../lib/voipClient';
-import { sipClientReady } from '../lib/sipNative';
+import { sipClientReady, preferredVoiceEdge } from '../lib/sipNative';
 import type { VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 
 export function voiceLoginConfig(response: VoiceTokenResponse, ringtone: string): VoiceLoginConfig {
@@ -28,6 +28,14 @@ export function createRouteId() {
 
 export async function waitForVoiceConnection(timeoutMs = 12_000) {
   if (sipClientReady()) return;
+  if (preferredVoiceEdge() === 'sip') {
+    const deadline = Date.now() + timeoutMs;
+    while (!sipClientReady() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (sipClientReady()) return;
+    throw new Error('The Vocivo SIP phone is not registered yet.');
+  }
   const deadline = Date.now() + timeoutMs;
   while (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));

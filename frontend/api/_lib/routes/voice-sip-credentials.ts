@@ -8,7 +8,7 @@ import { saveSipCredential } from '../sip-credential-store.js';
 import { newSipPassword } from '../sip-edge-auth.js';
 import { accessForSession } from '../saas-access.js';
 import { sessionOrganizationId } from '../tenancy.js';
-import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../voice-provider.js';
+import { clientIceServers, sipDomain, sipRealm, sipWsUri, voiceEdge } from '../voice-provider.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -44,7 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       wsUri: sipWsUri(),
       expiresAt,
       expires_in: 3600,
-      ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
+      ice_servers: clientIceServers(voiceEdge(config), `${extension.organizationId}:${extension.id}`),
       voice_edge: voiceEdge(config),
     });
   } catch (error) {
