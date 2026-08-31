@@ -15,7 +15,7 @@ enum VocivoSipCredentials {
 
   static func store(_ config: VocivoSipConfig) {
     let ice = config.iceServers.compactMap { server -> [String: String]? in
-      let urls = server.urlStrings?.joined(separator: ",") ?? ""
+      let urls = server.urlStrings.joined(separator: ",")
       if urls.isEmpty { return nil }
       return ["urls": urls, "username": server.username ?? "", "credential": server.credential ?? ""]
     }

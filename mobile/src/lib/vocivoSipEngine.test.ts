@@ -11,6 +11,11 @@ test('VocivoSipEngine keeps hangup after VoIP push handling', () => {
   assert.match(source, /func handleVoipPush\(/);
   assert.match(source, /func hangup\(callId: String\?\)/);
   assert.match(source, /func answer\(callId: String\?\)/);
+  const credentials = fs.readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../modules/vocivo-sip/ios/VocivoSipCredentials.swift'),
+    'utf8',
+  );
+  assert.doesNotMatch(credentials, /urlStrings\?/, 'RTCIceServer.urlStrings is non-optional in react-native-webrtc');
   const opens = (source.match(/\{/g) || []).length;
   const closes = (source.match(/\}/g) || []).length;
   assert.equal(opens, closes, 'Swift braces must stay balanced');
