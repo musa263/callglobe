@@ -1,8 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { requiredEnv } from './http.js';
-import { telnyx, telnyxPstnConnectionId } from './telnyx.js';
+import { telnyx } from './telnyx.js';
 import { readPbxConfig, savePbxConfig } from './pbx-config-store.js';
-import { numberOrganizationId } from './tenancy.js';
 
 export type BusinessVoiceConfig = {
   enabled: boolean;
@@ -114,13 +113,7 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
     voice: bounded(input.voice, defaults.voice, 100),
     backgroundImageUrl: typeof input.backgroundImageUrl === 'string' && /^https:\/\//.test(input.backgroundImageUrl) ? input.backgroundImageUrl.slice(0, 500) : '',
   };
-  const pbx = await savePbxConfig((current) => ({ businessVoiceConfigs: { ...current.businessVoiceConfigs, [organizationId]: config } }));
-  const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
-  const payload = await response.json() as { data?: Array<{ id: string; phone_number: string; connection_id?: string | null }> };
-  const callControlId = telnyxPstnConnectionId();
-  await Promise.all((payload.data ?? [])
-    .filter((item) => numberOrganizationId(item.phone_number, pbx) === organizationId && item.connection_id !== callControlId)
-    .map((item) => telnyx(`/phone_numbers/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ connection_id: callControlId }) })));
+  await savePbxConfig((current) => ({ businessVoiceConfigs: { ...current.businessVoiceConfigs, [organizationId]: config } }));
   return config;
 }
 

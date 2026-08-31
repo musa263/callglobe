@@ -24,7 +24,7 @@ const SAMPLE_RATES = [
   { id: 'pk', country_code: 'PK', country_name: 'Pakistan', dial_code: '+92', rate_per_min: 0.04 },
   { id: 'in', country_code: 'IN', country_name: 'India', dial_code: '+91', rate_per_min: 0.015 },
 ];
-const SAMPLE_NUMBER = { id: 'preview', phone_number: '+18447161777', label: 'Vocivo', country_code: 'US', receives_calls: true, source: 'owned' };
+const SAMPLE_NUMBER = { id: 'preview', phone_number: '+15555550100', label: 'Vocivo', country_code: 'US', receives_calls: true, source: 'sip_trunk' };
 const SAMPLE_DIRECTORY = buildDialingDirectory(SAMPLE_RATES);
 
 function historyStorageKey(userId) {

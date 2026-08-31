@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../http.js';
+import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { telnyx, telnyxPstnConnectionId } from '../telnyx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
@@ -130,16 +130,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.body?.action === 'bring_your_own' || req.body?.source === 'sip_trunk') {
         const phoneNumber = text(req.body?.phoneNumber, 24);
         if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber)) return res.status(400).json({ error: 'Enter the number in E.164 format, for example +15165550100.' });
-        const destinationType = ['main', 'extension', 'ring_group'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' : 'main';
+        const destinationType = ['main', 'extension', 'ring_group', 'queue', 'ivr'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr' : 'main';
         const destinationId = text(req.body?.destinationId, 80);
         if (destinationType !== 'main' && !destinationId) return res.status(400).json({ error: 'Choose an inbound destination.' });
         if (destinationType === 'extension') {
           const extension = await getExtension(destinationId).catch(() => null);
           if (!extension || extension.status !== 'active' || extension.organizationId !== activeOrganizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
         }
-        if (destinationType === 'ring_group') {
+        if (['ring_group', 'queue', 'ivr'].includes(destinationType)) {
           const organizationPbx = pbxForOrganization(config, activeOrganizationId);
-          if (!organizationPbx.callHandling.ringGroups.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured ring group.' });
+          const collection = destinationType === 'ring_group' ? organizationPbx.callHandling.ringGroups : destinationType === 'queue' ? organizationPbx.callHandling.queues : organizationPbx.callHandling.ivrs;
+          if (!collection.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured inbound destination.' });
         }
         const existing = config.numberAssignments[phoneNumber];
         if (existing?.organizationId && existing.organizationId !== activeOrganizationId) return res.status(409).json({ error: 'This number already belongs to another organization.' });
@@ -190,7 +191,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await removeNumberAssignment(phoneNumber);
         return res.status(200).json({ released: true, source: 'sip_trunk' });
       }
-      if (id === requiredEnv('TELNYX_PHONE_NUMBER_ID')) return res.status(409).json({ error: 'This is the primary Vocivo service number. Assign a replacement before releasing it.' });
       const currentResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
       const currentPayload = await currentResponse.json() as { data?: { phone_number?: string; deletion_lock_enabled?: boolean } };
       if (currentPayload.data?.phone_number !== phoneNumber) return res.status(409).json({ error: 'The number no longer matches this inventory record. Refresh and try again.' });
@@ -219,14 +219,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!collection.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured inbound destination.' });
     }
     if (isSipTrunkNumberId(id)) {
-      if (['queue', 'ivr'].includes(destinationType)) return res.status(400).json({ error: 'Bring-your-own SIP numbers ring phones on the Vocivo SIP edge. Voice menus and queues stay on carrier Call Control numbers.' });
       const phoneNumber = text(req.body?.phoneNumber, 24) || id.slice('sip-trunk:'.length);
       if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber) || config.numberAssignments[phoneNumber]?.organizationId !== activeOrganizationId) {
         return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
       }
       await assignNumberToOrganization(phoneNumber, organizationId, {
         source: 'sip_trunk',
-        destinationType: destinationType === 'queue' || destinationType === 'ivr' ? 'main' : destinationType,
+        destinationType,
         destinationId: destinationId || undefined,
         messagingEnabled: false,
       });

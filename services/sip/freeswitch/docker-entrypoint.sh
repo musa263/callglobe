@@ -22,5 +22,7 @@ sed -i \
 sed -i \
   -e 's#PUBLIC_IP_REGEX#'"${PUBLIC_IP_REGEX}"'#g' \
   -e 's#$${TELNYX_SIP_AUTH_TOKEN}#'"${TELNYX_SIP_AUTH_TOKEN:-}"'#g' \
+  -e 's#$${VOCIVO_API_URL}#'"${VOCIVO_API_URL:-https://vocivo.app}"'#g' \
+  -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET:-}"'#g' \
   /etc/freeswitch/dialplan/public.xml
 exec /usr/bin/freeswitch -nc -nf -nonat

@@ -23,23 +23,70 @@
     <extension name="vocivo-inbound-did">
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="vocivo_did=+$1"/>
-        <action application="set" data="curl_timeout=4"/>
-        <action application="curl" data="${VOCIVO_API_URL}/api/voice/sip-inbound json ${SIP_EDGE_SECRET} {\"to\":\"${vocivo_did}\"}"/>
+        <action application="set" data="curl_timeout=8"/>
+        <action application="set" data="curl_add_header=Authorization: Bearer $${SIP_EDGE_SECRET}"/>
+        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {\"to\":\"${vocivo_did}\"}"/>
         <action application="log" data="INFO Vocivo inbound lookup ${curl_response_data}"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>
     </extension>
+    <extension name="vocivo-inbound-closed">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;closed&quot;">
+        <action application="answer"/>
+        <action application="sleep" data="400"/>
+        <action application="speak" data="flite|kal|${regex(${curl_response_data}|&quot;prompt&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+        <action application="sleep" data="400"/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-inbound-menu">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${vocivo_gathered}" expression="^$"/>
+      <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;(ivr|ai)&quot;">
+        <action application="answer"/>
+        <action application="sleep" data="300"/>
+        <action application="set" data="vocivo_prompt=${regex(${curl_response_data}|&quot;prompt&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+        <action application="set" data="vocivo_digits=${regex(${curl_response_data}|&quot;digits&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+        <action application="set" data="vocivo_tries=${regex(${curl_response_data}|&quot;tries&quot;\s*:\s*(\d+)|%1)}"/>
+        <action application="set" data="vocivo_timeout=${regex(${curl_response_data}|&quot;timeoutMs&quot;\s*:\s*(\d+)|%1)}"/>
+        <action application="speak" data="flite|kal|${vocivo_prompt}"/>
+        <action application="play_and_get_digits" data="1 1 ${vocivo_tries} ${vocivo_timeout} # silence_stream://2000 silence_stream://250 vocivo_digit [${vocivo_digits}]"/>
+        <action application="set" data="vocivo_gathered=true"/>
+        <action application="set" data="curl_timeout=8"/>
+        <action application="set" data="curl_add_header=Authorization: Bearer $${SIP_EDGE_SECRET}"/>
+        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {\"to\":\"${vocivo_did}\",\"digit\":\"${vocivo_digit}\"}"/>
+        <action application="log" data="INFO Vocivo inbound digit ${vocivo_digit} ${curl_response_data}"/>
+        <action application="transfer" data="vocivo-inbound-result XML public"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-inbound-queue">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${curl_response_data}" expression="&quot;enabled&quot;\s*:\s*true"/>
+      <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;queue&quot;">
+        <action application="answer"/>
+        <action application="sleep" data="300"/>
+        <action application="speak" data="flite|kal|${regex(${curl_response_data}|&quot;prompt&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="call_timeout=${regex(${curl_response_data}|&quot;timeoutSec&quot;\s*:\s*(\d+)|%1)}"/>
+        <action application="bridge" data="${regex(${curl_response_data}|&quot;bridge&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+        <action application="hangup" data="NO_ANSWER"/>
+      </condition>
+    </extension>
     <extension name="vocivo-inbound-bridge">
       <condition field="destination_number" expression="^vocivo-inbound-result$"/>
-      <condition field="${curl_response_data}" expression="&quot;enabled&quot;\s*:\s*true">
+      <condition field="${curl_response_data}" expression="&quot;enabled&quot;\s*:\s*true"/>
+      <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;bridge&quot;">
         <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_timeout=${regex(${curl_response_data}|&quot;timeoutSec&quot;\s*:\s*(\d+)|%1)}"/>
         <action application="bridge" data="${regex(${curl_response_data}|&quot;bridge&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
       </condition>
     </extension>
-    <extension name="vocivo-inbound-call-control-hold">
+    <extension name="vocivo-inbound-unroutable">
       <condition field="destination_number" expression=".*">
-        <action application="log" data="WARNING Vocivo inbound DID has no SIP contacts or is still on Call Control"/>
-        <action application="respond" data="480 Inbound remains on Call Control"/>
+        <action application="log" data="WARNING Vocivo inbound DID has no SIP contacts or inbound plan"/>
+        <action application="respond" data="480 Temporarily unavailable"/>
         <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>
     </extension>

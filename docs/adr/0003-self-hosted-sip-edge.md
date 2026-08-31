@@ -14,11 +14,12 @@ Inbound IVR, queues, voicemail, AI receptionist, and conferences already live in
 1. Ship `services/sip` as the Vocivo SIP edge. Internal AORs fork registered contacts. Outbound E.164 bridges to the Telnyx SIP gateway.
 2. Default `VOCIVO_VOICE_EDGE=telnyx`. Web SIP.js and iOS native SIP are used only when the flag is `sip`.
 3. iOS uses the Vocivo SIP CallKit module for origination and internal SIP when `VOCIVO_VOICE_EDGE=sip`. Inbound DIDs stay on Telnyx Call Control / PushKit. Do not replace Telnyx’s VoIP push registry.
-4. **Bring-your-own SIP numbers** (`source: sip_trunk`) inbound on Kamailio/FreeSWITCH with **no tenant wallet charge**. Companies point any carrier DID at `sip.vocivo.app`. Telnyx-owned Call Control numbers stay on the Voice API until `VOCIVO_SIP_INBOUND=1`; IVR/queue/AI on those carrier numbers stay Call Control. Incoming minutes are never debited from a Vocivo wallet.
+4. **Bring-your-own SIP numbers** (`source: sip_trunk`) inbound on Kamailio/FreeSWITCH with **no tenant wallet charge**. Companies point any carrier DID at `sip.vocivo.app`. Vocivo owns IVR, queues, and the DTMF AI receptionist on that edge. Telnyx-owned Call Control numbers stay on the Voice API until `VOCIVO_SIP_INBOUND=1`. Incoming minutes are never debited from a Vocivo wallet. `+18447161777` is not the inbound product line.
 
 ## Consequences
 
-- Production TestFlight remains on Telnyx park + Call Control.
+- Production TestFlight remains on Telnyx park + Call Control for killed-state iOS inbound until Vocivo VoIP push ships.
 - Internal media on the SIP edge does not traverse Telnyx.
 - PSTN on the SIP edge is SIP origination + carrier minutes, not Call Control Dial/bridge.
+- Conversational LLM audio is not on the SIP edge yet; the Vocivo “AI receptionist” is a company greeting plus DTMF transfer to the team.
 - Flipping Telnyx-owned numbers onto the FQDN trunk is a later operator step. Customer SIP numbers inbound immediately when assigned as `sip_trunk`.

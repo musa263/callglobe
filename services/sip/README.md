@@ -22,7 +22,7 @@ Registered web E.164 INVITEs are bridged to `sofia/gateway/telnyx/+E164`. FreeSW
 
 ## Telnyx trunk
 
-Companies add their own SIP numbers in Admin → Phone numbers. Those DIDs inbound on this host (`source: sip_trunk`) with **no Vocivo wallet charge**. Point the carrier at `sip.vocivo.app:5060` (UDP/TCP). Telnyx Call Control remains only for Vocivo-purchased numbers that still use IVR/queue/AI.
+Companies add their own SIP numbers in Admin → Phone numbers. Those DIDs inbound on this host (`source: sip_trunk`) with **no Vocivo wallet charge**. Point the carrier at `sip.vocivo.app:5060` (UDP/TCP). Vocivo IVR, queues, and the DTMF receptionist run in FreeSWITCH. Telnyx Call Control remains only for Vocivo-purchased numbers that have not been moved with `VOCIVO_SIP_INBOUND=1`.
 
 Keep `VOCIVO_SIP_INBOUND=0` unless you also move a Telnyx-owned DID onto this IP connection.
 
