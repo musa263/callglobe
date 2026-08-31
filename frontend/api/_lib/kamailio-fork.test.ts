@@ -24,7 +24,7 @@ test('Kamailio wakes the phone then forks live contacts without blocking WebSock
   assert.match(cfg, /\$Rp != 8080/);
   assert.match(cfg, /reject unauthenticated E.164 INVITE/);
   assert.match(cfg, /\$du = "sip:127.0.0.1:5080;transport=udp"/);
-  assert.match(cfg, /\$var\(rto\) = \$\(hdr\(Refer-To\)\{nameaddr.uri.user\}\)/);
+  assert.match(cfg, /\$var\(rto\) = \$\(hdr\(Refer-To\)\{nameaddr.uri\}\{uri.user\}\)/);
   assert.match(cfg, /has_totag\(\) && loose_route\(\)/);
   assert.doesNotMatch(cfg, /listen=tcp:0.0.0.0:7443/);
   assert.match(cfg, /autodrop", 0/);

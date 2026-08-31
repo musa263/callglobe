@@ -33,7 +33,7 @@ test('High.docx: conf-* is answered as a FreeSWITCH conference in public context
 test('High.docx: in-dialog REFER follows loose_route and Refer-To', () => {
   const cfg = read('services/sip/kamailio/kamailio.cfg');
   assert.match(cfg, /has_totag\(\) && loose_route\(\)/);
-  assert.match(cfg, /hdr\(Refer-To\)\{nameaddr.uri.user\}/);
+  assert.match(cfg, /hdr\(Refer-To\)\{nameaddr.uri\}\{uri.user\}/);
 });
 
 test('High.docx: REGISTER digest is bound to the AOR and nonces cannot replay', () => {
