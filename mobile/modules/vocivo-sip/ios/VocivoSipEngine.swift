@@ -108,6 +108,8 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       register(config: config) { _ in }
     }
   }
+
+  func hangup(callId: String?) {
     VocivoSipCallKit.shared.onEnd = nil
     if incomingInvite != nil, activeCallId != nil {
       sendResponse(incomingInvite, status: "486 Busy Here")
