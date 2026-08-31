@@ -12,7 +12,9 @@ import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
 import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
+import { voiceEdge, voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
 import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
+import { dialCall, primaryVoiceCallerId } from '../voice-control.js';
 import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
@@ -80,9 +82,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internationalAllowed: profile?.permissions?.international !== false,
       }, destination, callerId);
     }
-    // Tenant wallets do not fund internal calls. Vocivo's carrier account still
-    // has to be operational because Telnyx transports both managed call legs.
-    await assertTelnyxVoiceReady();
+    // Tenant wallets do not fund internal calls. Telnyx park still needs a live
+    // carrier wallet. SIP-edge internal calls fork locally and must not wait on /balance.
+    if (voiceRouteNeedsTelnyxCredit(requestedFlow)) await assertTelnyxVoiceReady();
     if (requestedFlow !== 'internal') {
       const wallet = await readTenantWallet(organizationId);
       const blocked = outboundWalletBlockReason(wallet);
@@ -124,6 +126,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destinationExtensionId: route.destinationExtensionId,
       flow: route.flow,
     });
+    if (requestedFlow === 'internal' && voiceEdge() === 'sip' && destination) {
+      void (async () => {
+        try {
+          const from = await primaryVoiceCallerId();
+          await dialCall({
+            to: destination,
+            from,
+            fromDisplayName: callerName || 'Vocivo',
+            state: {
+              flow: 'extension',
+              callerName,
+              organizationId,
+              routeId,
+              sourceExtensionId,
+              destinationExtensionId,
+              targetExtensionIds: destinationExtensionId ? [destinationExtensionId] : undefined,
+            },
+            commandId: `sip-route-${routeId}`.slice(0, 80),
+            timeoutSeconds: 45,
+          });
+        } catch {
+          // Best-effort CallKit wakeup for TestFlight Telnyx clients.
+        }
+      })();
+    }
     return res.status(201).json({
       routeId: route.routeId,
       routeToken,

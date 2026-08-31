@@ -32,9 +32,11 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = []) {
   if (!target) throw new Error('The SIP destination is invalid.');
   const inviter = new Inviter(userAgent, target, {
     extraHeaders,
+    earlyMedia: true,
     sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } },
   });
-  await inviter.invite();
+  const sending = inviter.invite();
+  sending.catch(() => undefined);
   return inviter;
 }
 

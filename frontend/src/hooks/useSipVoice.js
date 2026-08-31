@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
 import { reportWebVoiceError } from '../voice/telemetry';
 import { sipTargetUri, sipUserFromUri } from '../voice/sipDial';
+import { SessionState } from 'sip.js';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../voice/sipSession';
 
 export function useSipVoice(token, enabled, identity = {}) {
@@ -97,6 +98,17 @@ export function useSipVoice(token, enabled, identity = {}) {
     registerWebPush().catch((failure) => reportWebVoiceError('register browser push subscription', failure));
   }, [enabled, token]);
 
+  const beginOutgoing = useCallback((identity, dialed) => {
+    setError('');
+    setRemoteIdentity(identity);
+    setDialedNumber(dialed || identity.number);
+    setRoutePhase('ringing');
+    setState('requesting');
+    setMediaReady(false);
+    setCallStarting(false);
+    setCall({ id: `pending-${Date.now()}`, pending: true });
+  }, []);
+
   const place = useCallback(async (destination, options) => {
     const userAgent = credentialsRef.current?.userAgent;
     if (!userAgent) throw new Error('The SIP phone is not registered yet.');
@@ -105,25 +117,41 @@ export function useSipVoice(token, enabled, identity = {}) {
     const session = await inviteSipTarget(userAgent, target, options.headers || []);
     attachSipMedia(session);
     sessionRef.current = session;
+    session.stateChange.addListener((next) => {
+      if (next === SessionState.Established || next === 'Established') {
+        setState('active');
+        setRoutePhase('connected');
+        setMediaReady(true);
+      }
+      if (next === SessionState.Terminated || next === 'Terminated') {
+        if (sessionRef.current !== session) return;
+        setCall(null);
+        setState(null);
+        setRoutePhase('ended');
+        setMediaReady(false);
+        sessionRef.current = null;
+      }
+    });
     setCall(session);
     setDialedNumber(options.dialedNumber || destination);
     setRemoteIdentity(options.identity);
     setState('requesting');
     setRoutePhase('ringing');
     setMediaReady(false);
+    setCallStarting(false);
     return session;
   }, []);
 
   const startCall = useCallback(async (destinationNumber, callerNumber) => {
-    setCallStarting(true);
-    setError('');
+    const identity = { name: 'Outbound call', number: destinationNumber, internal: false, photoUrl: '' };
+    beginOutgoing(identity, destinationNumber);
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     routeIdRef.current = routeId;
     try {
       const reservation = await api('/api/voice/route', { method: 'POST', body: { routeId, destination: destinationNumber, callerId: callerNumber, flow: 'outbound' } });
       await place(destinationNumber, {
         dialedNumber: destinationNumber,
-        identity: { name: 'Outbound call', number: destinationNumber, internal: false, photoUrl: '' },
+        identity,
         headers: [
           `X-Vocivo-Flow: outbound`,
           `X-Vocivo-Route-ID: ${routeId}`,
@@ -132,16 +160,17 @@ export function useSipVoice(token, enabled, identity = {}) {
         ],
       });
     } catch (callError) {
+      setCallStarting(false);
+      setCall(null);
+      setRoutePhase(null);
       setError(callError.message || 'The call could not be started.');
       throw callError;
-    } finally {
-      setCallStarting(false);
     }
-  }, [place]);
+  }, [beginOutgoing, place]);
 
   const startInternalCall = useCallback(async (sipUsername, extension, displayName) => {
-    setCallStarting(true);
-    setError('');
+    const identity = { name: displayName || `Extension ${extension}`, number: `Extension ${extension}`, internal: true, photoUrl: '' };
+    beginOutgoing(identity, extension);
     const routeId = `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     routeIdRef.current = routeId;
     try {
@@ -166,12 +195,13 @@ export function useSipVoice(token, enabled, identity = {}) {
         ],
       });
     } catch (callError) {
+      setCallStarting(false);
+      setCall(null);
+      setRoutePhase(null);
       setError(callError.message || 'The extension call could not be started.');
       throw callError;
-    } finally {
-      setCallStarting(false);
     }
-  }, [place]);
+  }, [beginOutgoing, place]);
 
   const answer = useCallback(async () => {
     const incoming = incomingRef.current;
@@ -205,6 +235,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     setState(null);
     setRoutePhase('ended');
     setMediaReady(false);
+    setCallStarting(false);
   }, [hangupSession, remoteIdentity]);
 
   const toggleMute = useCallback(() => {

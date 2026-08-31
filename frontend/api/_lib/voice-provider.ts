@@ -16,6 +16,11 @@ export function voiceEdge(_config?: PbxConfig): VoiceEdge {
   return trimmedEnv('VOCIVO_VOICE_EDGE') === 'sip' ? 'sip' : 'telnyx';
 }
 
+/** Internal SIP-edge calls stay on Kamailio/FreeSWITCH and must not wait on Telnyx /balance. */
+export function voiceRouteNeedsTelnyxCredit(flow: 'internal' | 'outbound', edge: VoiceEdge = voiceEdge()) {
+  return !(edge === 'sip' && flow === 'internal');
+}
+
 /** @deprecated use voiceEdge */
 export function voiceProvider(config?: PbxConfig) {
   return voiceEdge(config);

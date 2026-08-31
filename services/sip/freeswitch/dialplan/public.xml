@@ -4,7 +4,9 @@
       <condition field="destination_number" expression="^([A-Za-z][A-Za-z0-9_.-]{2,80})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="inherit_codec=true"/>
-        <action application="bridge" data="sofia/gateway/telnyx/${destination_number}"/>
+        <action application="set" data="origination_caller_id_name=${caller_id_name}"/>
+        <action application="set" data="origination_caller_id_number=${caller_id_number}"/>
+        <action application="bridge" data="sofia/gateway/telnyx/${destination_number}@sip.telnyx.com"/>
       </condition>
     </extension>
     <extension name="vocivo-inbound-did">

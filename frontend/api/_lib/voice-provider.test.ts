@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider } from './voice-provider.js';
+import { sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit } from './voice-provider.js';
 
 const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND'] as const;
 
@@ -50,6 +50,14 @@ test('enables the self-hosted SIP edge only when explicitly requested', () => {
     assert.equal(voiceEdge(), 'sip');
     assert.equal(sipRealm(), 'sip.example.test');
     assert.equal(sipInboundEnabled(), true);
+    assert.equal(voiceRouteNeedsTelnyxCredit('internal'), false);
+    assert.equal(voiceRouteNeedsTelnyxCredit('outbound'), true);
+  });
+});
+
+test('Telnyx park still checks carrier credit for internal calls', () => {
+  withEnvironment({}, () => {
+    assert.equal(voiceRouteNeedsTelnyxCredit('internal'), true);
   });
 });
 
