@@ -574,7 +574,7 @@ function suffixedPath(pathname: string) {
 }
 
 function publicUrl(pathname: string) {
-  const base = (process.env.VITE_APP_URL || 'https://vocivo.vercel.app').replace(/\/+$/, '');
+  const base = (process.env.VITE_APP_URL || 'https://vocivo.app').replace(/\/+$/, '');
   return `${base}/api/storage?path=${encodeURIComponent(pathname)}`;
 }
 

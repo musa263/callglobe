@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
-const baseUrl = (process.env.EXPO_PUBLIC_API_URL || 'https://vocivo.vercel.app').replace(/\/$/, '');
+export const vocivoOrigin = (process.env.EXPO_PUBLIC_API_URL || 'https://vocivo.app').replace(/\/$/, '');
+const baseUrl = vocivoOrigin;
 const tokenKey = 'vocivo.session';
 let cachedToken: string | null | undefined;
 let tokenRequest: Promise<string | null> | null = null;

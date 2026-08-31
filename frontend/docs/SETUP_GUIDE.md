@@ -35,7 +35,7 @@ TELNYX_ICE_SERVERS_JSON=
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:security@vocivo.com
-VITE_APP_URL=https://vocivo.vercel.app
+VITE_APP_URL=https://vocivo.app
 ```
 
 The Web Push private key is server-only. The browser receives only the VAPID
@@ -57,3 +57,14 @@ Deploy the web app and API together:
 ```bash
 npx vercel --prod
 ```
+
+## Custom domain (`vocivo.app`)
+
+Keep DNS at Namecheap. Add the domain on the Vercel project **vocivo**, then create these records in Namecheap:
+
+| Type | Host | Value |
+| --- | --- | --- |
+| A | `@` | `10.0.1.2` |
+| CNAME | `www` | `cname.vercel-dns.com` |
+
+Set the Vercel env `VITE_APP_URL=https://vocivo.app`. Mobile production builds use `EXPO_PUBLIC_API_URL=https://vocivo.app`. Leave `vocivo.vercel.app` attached as a backup. When the SIP droplet exists, add `sip` as an A record to that droplet IPv4.
