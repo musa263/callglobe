@@ -1,5 +1,18 @@
 <include>
   <context name="public">
+    <!-- Kamailio hairpins registered web/PSTN INVITEs onto this profile. Those
+         E.164 destinations are outbound origination, not inbound DIDs. -->
+    <extension name="vocivo-outbound-pstn">
+      <condition field="network_addr" expression="^PUBLIC_IP_REGEX$"/>
+      <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="inherit_codec=true"/>
+        <action application="set" data="effective_caller_id_number=${sip_h_X-Vocivo-Caller-ID}"/>
+        <action application="set" data="origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID}"/>
+        <action application="set" data="origination_caller_id_name=${caller_id_name}"/>
+        <action application="bridge" data="sofia/gateway/telnyx/+$1"/>
+      </condition>
+    </extension>
     <extension name="vocivo-telnyx-registered-client">
       <condition field="destination_number" expression="^([A-Za-z][A-Za-z0-9_.-]{2,80})$">
         <action application="set" data="hangup_after_bridge=true"/>
