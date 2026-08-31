@@ -42,7 +42,7 @@ if [ "${DRY_RUN:-false}" = true ]; then
 fi
 
 printf 'Deploying the Node.js API and web client to Vercel %s...\n' "$deploy_environment"
-vercel_args=(deploy --yes --cwd "$frontend_dir")
+vercel_args=(deploy --yes --cwd "$root_dir")
 if [ "$deploy_environment" = production ]; then
   vercel_args+=(--prod)
 fi
