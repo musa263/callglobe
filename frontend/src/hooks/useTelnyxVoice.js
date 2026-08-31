@@ -88,10 +88,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     if (!callId) return;
     const ready = call ? await waitForWebCallMedia(call, 8_000) : false;
     if (getCallId(callRef.current) !== callId) return;
-    if (!ready) return;
     stopRingback();
     if (!connectedAtByCallIdRef.current.has(callId)) connectedAtByCallIdRef.current.set(callId, Date.now());
-    setMediaReady(true);
+    if (ready) setMediaReady(true);
   }, [stopRingback]);
   const stopIncomingRingtone = useCallback(() => {
     const tone = incomingToneRef.current;
@@ -358,10 +357,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
           incomingCallRef.current = null;
           setIncomingCall(null);
           stopIncomingRingtone();
-          const outboundStillRinging = Boolean(routeIdRef.current) && routePhaseRef.current !== 'connected' && nextState !== 'held';
-          if (!outboundStillRinging) {
-            void confirmWebMedia(updatedCall, callId);
-          }
+          stopRingback();
+          setRoutePhase('connected');
+          routePhaseRef.current = 'connected';
+          void confirmWebMedia(updatedCall, callId);
           resumeAudio().catch((failure) => reportWebVoiceError('resume connected-call audio', failure));
         }
         if (TERMINAL_STATES.has(nextState)) {
@@ -424,9 +423,18 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     const generation = ++routePollRef.current;
     let lastRouteError = null;
     routeIdRef.current = routeId;
-    setRoutePhase('ringing');
+    if (routePhaseRef.current !== 'connected') setRoutePhase('ringing');
     for (let attempt = 0; attempt < 100 && routePollRef.current === generation; attempt += 1) {
       try {
+        const liveState = String(callRef.current?.state || '').toLowerCase();
+        if (['active', 'held'].includes(liveState) || routePhaseRef.current === 'connected') {
+          setRoutePhase('connected');
+          routePhaseRef.current = 'connected';
+          stopRingback();
+          resumeAudio().catch((failure) => reportWebVoiceError('resume bridged-call audio', failure));
+          void confirmWebMedia(callRef.current, getCallId(callRef.current));
+          return;
+        }
         const result = await api(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
         if (routePollRef.current !== generation) return;
         if (result.phase === 'connected') {
@@ -779,7 +787,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   return {
     ready, statusLabel, error, call, incomingCall, heldCall, conference, remoteIdentity, state: state === 'held' ? 'held' : (routePhase === 'connected' ? 'active' : routePhase || state), muted, dialedNumber, endedCall, callStarting,
     canMerge: Boolean(heldCall && !conference && heldCall.routeId && routeIdRef.current),
-    connected: mediaReady || state === 'held',
+    connected: mediaReady || state === 'held' || state === 'active' || routePhase === 'connected',
     incoming: String(call?.direction || '').toLowerCase() === 'inbound',
     active: (routePhase ? ['requesting', 'ringing', 'connected'].includes(routePhase) : ['requesting', 'trying', 'ringing', 'answering', 'early', 'active', 'held', 'recovering'].includes(state)) && !incomingCall,
     notificationPermission, enableBrowserAlerts, audioBlocked, resumeAudio,

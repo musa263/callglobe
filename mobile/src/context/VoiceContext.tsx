@@ -310,12 +310,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           stopRingback();
           void confirmMediaConnected(call).catch((failure) => reportVoiceError('confirm bidirectional media', failure));
         }
-        setActiveCall((current) => {
-          if (current?.id !== call.callId) return current;
-          const next = { ...current, phase };
-          activeCallRef.current = next;
-          return next;
-        });
+        const takeRemainingCall = (remaining: typeof call) => {
+          if (remaining.currentState === TelnyxCallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
+          voipClient.setActiveCall(remaining.callId);
+          attachCall(remaining);
+        };
         if (phase === 'ended' || phase === 'failed') {
           cancelRoutePolling(call.callId);
           stopRingback();
@@ -323,19 +322,35 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           callRouteIdsRef.current.delete(call.callId);
           callMetaRef.current.delete(call.callId);
           clearCallSubscriptions(call.callId);
+          const remainingNow = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
+          if (remainingNow) {
+            takeRemainingCall(remainingNow);
+            return;
+          }
           const releaseTimer = setTimeout(() => lifecycleRef.current.release(call.callId), 60_000);
           const resumeTimer = setTimeout(() => {
             const remaining = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
-            if (!remaining) {
-              attachCall(null);
+            if (remaining) {
+              takeRemainingCall(remaining);
               return;
             }
-            if (remaining.currentState === TelnyxCallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
-            voipClient.setActiveCall(remaining.callId);
-            attachCall(remaining);
+            setActiveCall((current) => {
+              if (current?.id !== call.callId) return current;
+              const next = { ...current, phase };
+              activeCallRef.current = next;
+              return next;
+            });
+            attachCall(null);
           }, 200);
           attachTimersRef.current.set(call.callId, [releaseTimer, resumeTimer]);
+          return;
         }
+        setActiveCall((current) => {
+          if (current?.id !== call.callId) return current;
+          const next = { ...current, phase };
+          activeCallRef.current = next;
+          return next;
+        });
       }),
       call.isMuted$.subscribe((muted) => setActiveCall((current) => current ? { ...current, muted } : current)),
       call.isHeld$.subscribe((onHold) => setActiveCall((current) => current ? { ...current, onHold } : current)),

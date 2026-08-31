@@ -4,7 +4,7 @@ import { accessForOrganization } from '../saas-access.js';
 import { destinationSipUrisForInternalDial, isAllowedInternalSipDestination, voiceDestinationsMatch } from '../internal-sip.js';
 import { saveOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundPair } from '../outbound-cancel.js';
-import { parkedDestinationDialInput, parkedFlowUsesNativeBridge } from '../parked-destination-dial.js';
+import { parkedDestinationDialInput, parkedFlowUsesNativeBridge, parkedInternalDialTargets } from '../parked-destination-dial.js';
 import { callAction, dialCall, dialCallLegs, primaryVoiceCallerId } from '../voice-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
@@ -115,7 +115,8 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
     const prepared = await destinationPreparation;
     if ('error' in prepared) throw prepared.error;
     const [businessName, sipUsers, sourceSipUsers, resolvedVoiceCallerId] = prepared.value;
-    const destinations = destinationSipUrisForInternalDial(sipUsers, sourceSipUsers, destination);
+    const aliasDestinations = destinationSipUrisForInternalDial(sipUsers, sourceSipUsers, destination);
+    const destinations = parkedInternalDialTargets(destination, aliasDestinations);
     if (!resolvedVoiceCallerId) throw new Error('The signed call route has no authorized caller identity.');
     if (reservation.flow === 'internal' && !destinations.length) throw new Error('The internal destination has no reachable SIP alias.');
     const destinationDial = parkedDestinationDialInput({
