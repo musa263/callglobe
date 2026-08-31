@@ -47,7 +47,7 @@ enum VocivoSipDigest {
 
   static func challengeValue(_ header: String) -> [String: String] {
     var values: [String: String] = [:]
-    let body = header.trimmingCharacters(in: .whitespacesAndNewlines)
+    var body = header.trimmingCharacters(in: .whitespacesAndNewlines)
     if body.lowercased().hasPrefix("digest") {
       body = String(body.drop(while: { $0 != " " && $0 != "\t" })).trimmingCharacters(in: .whitespaces)
     }
