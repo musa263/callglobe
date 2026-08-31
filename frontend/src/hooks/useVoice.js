@@ -26,18 +26,20 @@ export function useVoice(token, enabled, identity = {}) {
   const sip = useSipVoice(token, enabled && edge === 'sip', identity);
   if (edge !== 'sip') return telnyx;
 
+  const incomingCall = telnyx.incomingCall || sip.incomingCall;
   const telnyxLive = Boolean(telnyx.call || telnyx.incomingCall || telnyx.active || telnyx.callStarting);
   const ready = Boolean(sip.ready && telnyx.ready);
-  const statusLabel = !sip.ready ? sip.statusLabel : !telnyx.ready ? telnyx.statusLabel : 'Ready for calls';
-  const error = sip.error || telnyx.error;
+  const statusLabel = !telnyx.ready ? telnyx.statusLabel : !sip.ready ? sip.statusLabel : 'Ready for calls';
+  const error = telnyx.error || sip.error;
 
   if (telnyxLive) {
     return {
       ...telnyx,
-      ready,
-      statusLabel,
+      ready: telnyx.ready || ready,
+      statusLabel: telnyx.ready ? (sip.ready ? 'Ready for calls' : sip.statusLabel) : telnyx.statusLabel,
       error,
       startCall: sip.startCall,
+      startInternalCall: telnyx.startInternalCall,
     };
   }
 
@@ -48,9 +50,10 @@ export function useVoice(token, enabled, identity = {}) {
     error,
     startInternalCall: telnyx.startInternalCall,
     startSecondInternalCall: telnyx.startSecondInternalCall,
-    incomingCall: telnyx.incomingCall,
-    incoming: telnyx.incoming,
-    answer: telnyx.answer,
-    decline: telnyx.decline,
+    incomingCall,
+    incoming: Boolean(incomingCall),
+    answer: telnyx.incomingCall ? telnyx.answer : sip.answer,
+    decline: telnyx.incomingCall ? telnyx.decline : sip.decline,
+    hangup: sip.call ? sip.hangup : telnyx.hangup,
   };
 }

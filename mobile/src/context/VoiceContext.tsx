@@ -660,7 +660,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
     await ensureCallMicrophonePermission();
     await waitForVoiceConnection();
-    const destination = `sip:${sipUsername}@sip.telnyx.com`;
+    const destination = sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '';
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
     const startedAt = Date.now();

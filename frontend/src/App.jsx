@@ -10,7 +10,7 @@ import { api, clearSession, getStoredSession, storeSession } from './lib/api';
 import { buildDialingDirectory } from './lib/countries';
 import { useVoice } from './hooks/useVoice';
 import AdminConsole from './admin/AdminConsole';
-import { describeRemote } from './voice/callIdentity';
+import { describeIncoming } from './voice/callIdentity';
 
 const KEYS = [
   ['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
@@ -115,7 +115,7 @@ function CallerIdMenu({ numbers, selected, onSelect, open, onToggle }) {
 }
 
 function IncomingCall({ call, onAnswer, onDecline }) {
-  const identity = describeRemote(call);
+  const identity = describeIncoming(call);
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal incoming-modal">

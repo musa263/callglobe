@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { TelnyxRTC } from '@telnyx/webrtc';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
-import { describeRemote, getCallId } from '../voice/callIdentity';
+import { describeRemote, getCallId, callHeader } from '../voice/callIdentity';
 import { waitForWebCallMedia } from '../voice/webCallMedia';
 import { reportWebVoiceError, telnyxErrorMessage } from '../voice/telemetry';
 
@@ -612,6 +612,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const decline = useCallback(() => {
     stopIncomingRingtone();
     const incoming = incomingCallRef.current || incomingCall;
+    const routeId = callHeader(incoming, 'X-Vocivo-Route-ID');
+    if (routeId) cancelWebRoute(routeId);
     incoming?.hangup?.();
     incomingCallRef.current = null;
     setIncomingCall(null);
