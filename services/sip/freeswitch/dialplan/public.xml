@@ -8,7 +8,7 @@
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="inherit_codec=true"/>
-        <action application="bridge" data="{origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID},origination_caller_id_name=Vocivo,sip_cid_type=pid,absolute_codec_string=PCMU,PCMA,OPUS,nolocal:sip_h_X-Telnyx-Token=$${TELNYX_SIP_AUTH_TOKEN},nolocal:sip_h_P-Asserted-Identity=&lt;sip:${sip_h_X-Vocivo-Caller-ID}@sip.telnyx.com&gt;}sofia/gateway/telnyx/+$1"/>
+        <action application="bridge" data="{origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID},origination_caller_id_name=Vocivo,sip_cid_type=pid,absolute_codec_string=PCMU,PCMA,OPUS,nolocal:sip_h_P-Asserted-Identity=&lt;sip:${sip_h_X-Vocivo-Caller-ID}@sip.telnyx.com&gt;}sofia/gateway/telnyx/+$1"/>
       </condition>
     </extension>
     <extension name="vocivo-telnyx-registered-client">

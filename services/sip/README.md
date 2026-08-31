@@ -22,7 +22,7 @@ Registered web E.164 INVITEs are bridged to `sofia/gateway/telnyx/+E164`. FreeSW
 
 ## Telnyx trunk
 
-Create an IP connection in Mission Control whose authorized IP is this host’s public IPv4. Use token authentication on that connection and put the same value in `TELNYX_SIP_AUTH_TOKEN`. FreeSWITCH sends it as `X-Telnyx-Token` on PSTN INVITEs. Do not leave the gateway username empty while Telnyx still challenges with 407 — Sofia then authenticates as `FreeSWITCH` and Telnyx returns 403 (unable to locate the account). Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`.
+Outbound PSTN uses a Telnyx **credential** SIP connection (`TELNYX_SIP_USERNAME` / `TELNYX_SIP_PASSWORD`). Telnyx challenges INVITEs with 407; Sofia must answer with those credentials. An empty username becomes `FreeSWITCH` and Telnyx returns 403. Keep the DID on the Call Control application for inbound. Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`.
 
 Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INBOUND=1` on both Vercel and this host. See [ADR 0003](../../docs/adr/0003-self-hosted-sip-edge.md).
 
