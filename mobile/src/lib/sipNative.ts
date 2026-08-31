@@ -1,4 +1,3 @@
-import { NativeModules } from 'react-native';
 import type { Session } from 'sip.js';
 
 type NativeConfig = {
@@ -40,8 +39,16 @@ async function sipJs() {
   return import('./sipJsClient');
 }
 
+function loadNativeModules(): { VocivoSip?: VocivoSipNative } {
+  try {
+    return (require('react-native') as typeof import('react-native')).NativeModules || {};
+  } catch {
+    return {};
+  }
+}
+
 export function vocivoSipModule(): VocivoSipNative | null {
-  const fromRn = NativeModules.VocivoSip as VocivoSipNative | undefined;
+  const fromRn = loadNativeModules().VocivoSip;
   if (fromRn) return fromRn;
   try {
     const { requireOptionalNativeModule } = require('expo-modules-core') as typeof import('expo-modules-core');
@@ -74,8 +81,12 @@ export function subscribeVocivoSipEvents(handlers: SipEventHandlers) {
     const { EventEmitter } = require('expo-modules-core') as typeof import('expo-modules-core');
     emitter = new EventEmitter(native as object) as Emitter;
   } catch {
-    const { NativeEventEmitter } = require('react-native') as typeof import('react-native');
-    emitter = new NativeEventEmitter(native as never) as Emitter;
+    try {
+      const { NativeEventEmitter } = require('react-native') as typeof import('react-native');
+      emitter = new NativeEventEmitter(native as never) as Emitter;
+    } catch {
+      return () => undefined;
+    }
   }
   const subscriptions = [
     handlers.onIncomingCall ? emitter.addListener('onIncomingCall', (payload) => handlers.onIncomingCall?.(payload)) : null,
