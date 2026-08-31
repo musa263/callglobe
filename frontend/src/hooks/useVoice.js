@@ -19,7 +19,38 @@ export function useVoice(token, enabled, identity = {}) {
     });
     return () => { cancelled = true; };
   }, [enabled, token]);
-  const telnyx = useTelnyxVoice(token, enabled && edge !== 'sip', identity);
+  // TestFlight iOS is still Telnyx CallKit. The SIP trunk Telnyx answers OPTIONS
+  // on but rejects SIP-URI INVITEs (403 D30), so extension calls and iOS ringing
+  // stay on the Telnyx SDK even when the web PSTN path uses Kamailio.
+  const telnyx = useTelnyxVoice(token, enabled, identity);
   const sip = useSipVoice(token, enabled && edge === 'sip', identity);
-  return edge === 'sip' ? sip : telnyx;
+  if (edge !== 'sip') return telnyx;
+
+  const telnyxLive = Boolean(telnyx.call || telnyx.incomingCall || telnyx.active || telnyx.callStarting);
+  const ready = Boolean(sip.ready && telnyx.ready);
+  const statusLabel = !sip.ready ? sip.statusLabel : !telnyx.ready ? telnyx.statusLabel : 'Ready for calls';
+  const error = sip.error || telnyx.error;
+
+  if (telnyxLive) {
+    return {
+      ...telnyx,
+      ready,
+      statusLabel,
+      error,
+      startCall: sip.startCall,
+    };
+  }
+
+  return {
+    ...sip,
+    ready,
+    statusLabel,
+    error,
+    startInternalCall: telnyx.startInternalCall,
+    startSecondInternalCall: telnyx.startSecondInternalCall,
+    incomingCall: telnyx.incomingCall,
+    incoming: telnyx.incoming,
+    answer: telnyx.answer,
+    decline: telnyx.decline,
+  };
 }
