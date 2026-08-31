@@ -10,7 +10,7 @@ import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { claimOutboundCallWinner, clearOutboundCallPair, liveOutboundDestinationId, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundLegs, terminateOutboundPair, hangupConferenceParticipant } from '../outbound-cancel.js';
 import { isInboundCallAnswered, isInboundCallInitiated, isParkedClientCall, ivrMenuSelection, voiceRouteHangupOutcome } from '../voice-routing.js';
-import { bridgeOutboundCalls } from '../outbound-bridge.js';
+import { answerParkedCallerThenBridge, bridgeOutboundCalls } from '../outbound-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
@@ -578,14 +578,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             await terminateOutboundPair(claim.pair, `${eventId}-terminal`);
             return res.status(200).json({ received: true });
           }
-          // Stop carrier ringback on the parked caller before bridging. Leaving
-          // playback attached keeps the web caller in ringing audio with no
-          // path to the answered extension.
-          await callAction(parentCallControlId, 'playback_stop', {
-            stop: 'all',
-            command_id: `${eventId}-stop-ringback`,
-          }).catch((error) => console.warn('Vocivo could not stop carrier ringback before bridge', publicError(error)));
-          await bridgeOutboundCalls(parentCallControlId, callControlId, eventId);
+          await answerParkedCallerThenBridge(parentCallControlId, callControlId, eventId);
           const connectedAt = new Date().toISOString();
           await saveOutboundCallPair({
             ...claim.pair,

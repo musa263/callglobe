@@ -8,6 +8,30 @@ function retryable(error: unknown) {
     && ([404, 409, 422, 429].includes(error.status) || error.status >= 500);
 }
 
+function alreadyAnswered(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /already answered|call has already been answered|not in a parked/i.test(message);
+}
+
+export async function answerParkedCallerThenBridge(
+  clientCallControlId: string,
+  destinationCallControlId: string,
+  eventId: string,
+  action: BridgeAction = callAction,
+  wait: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+) {
+  try {
+    await action(clientCallControlId, 'answer', { command_id: `${eventId}-answer-parked` });
+  } catch (error) {
+    if (!alreadyAnswered(error)) throw error;
+  }
+  await action(clientCallControlId, 'playback_stop', {
+    stop: 'all',
+    command_id: `${eventId}-stop-ringback`,
+  }).catch(() => undefined);
+  await bridgeOutboundCalls(clientCallControlId, destinationCallControlId, eventId, action, wait);
+}
+
 export async function bridgeOutboundCalls(
   clientCallControlId: string,
   destinationCallControlId: string,

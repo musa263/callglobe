@@ -68,8 +68,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     },
   ));
 
-  // Telnyx streams ringback into the parked call leg. Keeping Expo Audio out of
-  // an active call also leaves the iOS WebRTC/CallKit audio session authoritative.
+  // Local ringback stays off on iPhone so CallKit/WebRTC owns the audio session.
+  // Telnyx no longer answers the parked caller until the far end picks up.
   const startRingback = useCallback(() => undefined, []);
   const stopRingback = useCallback(() => undefined, []);
 

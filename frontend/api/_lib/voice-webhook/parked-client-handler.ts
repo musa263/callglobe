@@ -10,7 +10,7 @@ import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
 import { resolveParkedReservation } from '../voice-routing.js';
 import type { VoicePayload } from './contracts.js';
-import { background, callerDisplay, customHeader, enterpriseRingbackUrl, logWebhookFailure } from './support.js';
+import { background, callerDisplay, customHeader, logWebhookFailure } from './support.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 
@@ -106,13 +106,9 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
     (error: unknown) => ({ error }),
   );
 
-  await callAction(callControlId, 'answer', { command_id: `${eventId}-answer-client` });
-  background('carrier ringback', callAction(callControlId, 'playback_start', {
-    audio_url: enterpriseRingbackUrl(),
-    loop: 'infinity',
-    command_id: `${eventId}-ringback`,
-  }));
-
+  // Keep the parked caller unanswered until the destination answers. Answering
+  // here started Telnyx Call Control minutes for ringback. The destination
+  // Dial is an independent Call Control call and does not need the caller answered.
   let destinationCall;
   try {
     const prepared = await destinationPreparation;

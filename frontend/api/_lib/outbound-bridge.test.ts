@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bridgeOutboundCalls } from './outbound-bridge.js';
+import { answerParkedCallerThenBridge, bridgeOutboundCalls } from './outbound-bridge.js';
 import { TelnyxApiError } from './telnyx.js';
 
 test('retries a transient bridge race with a fresh command id', async () => {
@@ -44,4 +44,25 @@ test('stops after three transient bridge failures', async () => {
 
   await assert.rejects(() => bridgeOutboundCalls('client', 'destination', 'event', action, async () => undefined), /Temporarily unavailable/);
   assert.equal(attempts, 3);
+});
+
+test('answers the parked caller only when the destination answers, then bridges', async () => {
+  const actions: string[] = [];
+  const action = async (_callId: string, command: string) => {
+    actions.push(command);
+    return new Response('{}', { status: 200 });
+  };
+  await answerParkedCallerThenBridge('client', 'destination', 'event', action, async () => undefined);
+  assert.deepEqual(actions, ['answer', 'playback_stop', 'bridge']);
+});
+
+test('treats an already-answered parked caller as ready to bridge', async () => {
+  const actions: string[] = [];
+  const action = async (_callId: string, command: string) => {
+    actions.push(command);
+    if (command === 'answer') throw new TelnyxApiError(422, 'Call has already been answered');
+    return new Response('{}', { status: 200 });
+  };
+  await answerParkedCallerThenBridge('client', 'destination', 'event', action, async () => undefined);
+  assert.deepEqual(actions, ['answer', 'playback_stop', 'bridge']);
 });

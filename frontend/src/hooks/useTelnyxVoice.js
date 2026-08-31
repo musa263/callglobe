@@ -66,19 +66,33 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
     }
   }, []);
 
+  const ringbackRef = useRef(null);
+  const stopRingback = useCallback(() => {
+    const tone = ringbackRef.current;
+    ringbackRef.current = null;
+    if (tone) {
+      tone.pause();
+      tone.currentTime = 0;
+    }
+  }, []);
+  const startRingback = useCallback(() => {
+    if (ringbackRef.current) return;
+    const tone = new Audio('/audio/ringback.wav');
+    tone.loop = true;
+    tone.volume = 0.55;
+    ringbackRef.current = tone;
+    tone.play().catch((failure) => reportWebVoiceError('play outbound ringback', failure));
+  }, []);
+
   const confirmWebMedia = useCallback(async (call, callId) => {
     if (!callId) return;
     const ready = call ? await waitForWebCallMedia(call, 8_000) : false;
     if (getCallId(callRef.current) !== callId) return;
     if (!ready) return;
+    stopRingback();
     if (!connectedAtByCallIdRef.current.has(callId)) connectedAtByCallIdRef.current.set(callId, Date.now());
     setMediaReady(true);
-  }, []);
-
-  // The parked Telnyx leg supplies ringback. A second browser loop can survive
-  // the bridge event and overlap the connected call audio.
-  const stopRingback = useCallback(() => undefined, []);
-  const startRingback = useCallback(() => undefined, []);
+  }, [stopRingback]);
   const stopIncomingRingtone = useCallback(() => {
     const tone = incomingToneRef.current;
     incomingToneRef.current = null;
