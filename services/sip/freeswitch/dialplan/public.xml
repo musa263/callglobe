@@ -1,5 +1,12 @@
 <include>
   <context name="public">
+    <extension name="vocivo-telnyx-registered-client">
+      <condition field="destination_number" expression="^([A-Za-z][A-Za-z0-9_.-]{2,80})$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="inherit_codec=true"/>
+        <action application="bridge" data="sofia/gateway/telnyx/${destination_number}"/>
+      </condition>
+    </extension>
     <extension name="vocivo-inbound-did">
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="vocivo_did=+$1"/>
