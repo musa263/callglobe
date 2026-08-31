@@ -17,6 +17,7 @@ test('VocivoSipEngine keeps hangup after VoIP push handling', () => {
   assert.match(source, /func answer\(callId: String\?\)/);
   assert.match(source, /func swapHeld\(\)/);
   assert.match(source, /func merge\(to target: String/);
+  assert.match(source, /pendingMergeByes/);
   assert.match(source, /replacingActive/);
   assert.ok(source.includes('requestUri: "sip:\\(config.domain)"'));
   assert.ok(source.includes('SIP/2.0/WSS invalid;branch='));

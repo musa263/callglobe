@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { claimReplayKey } from './object-store.js';
 
 export type DigestChallenge = {
   username: string;
@@ -45,6 +46,15 @@ export function consumeDigestReplay(username: string, nonce: string, nc?: string
   if (usedNonces.has(key)) return false;
   usedNonces.set(key, now);
   return true;
+}
+
+export async function consumeDigestReplayDurable(username: string, nonce: string, nc?: string) {
+  const digest = createHash('sha256').update(`${username}:${nonce}:${nc || 'none'}`).digest('hex').slice(0, 32);
+  try {
+    return await claimReplayKey(`sipn:${digest}`, new Date(Date.now() + 10 * 60 * 1000));
+  } catch {
+    return consumeDigestReplay(username, nonce, nc);
+  }
 }
 
 export function parseDigestAuthorization(header: string, method = 'REGISTER'): DigestChallenge | null {

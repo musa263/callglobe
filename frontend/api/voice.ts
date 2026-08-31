@@ -18,7 +18,9 @@ import webPush from './_lib/routes/voice-web-push.js';
 import aiTransfer from './_lib/routes/voice-ai-transfer.js';
 import sipAuth from './_lib/routes/voice-sip-auth.js';
 import sipCredentials from './_lib/routes/voice-sip-credentials.js';
+import sipHangup from './_lib/routes/voice-sip-hangup.js';
 import sipInbound from './_lib/routes/voice-sip-inbound.js';
+import sipNonce from './_lib/routes/voice-sip-nonce.js';
 import sipWakeup from './_lib/routes/voice-sip-wakeup.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
@@ -43,7 +45,9 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   'web-push': webPush,
   'sip-auth': sipAuth,
   'sip-credentials': sipCredentials,
+  'sip-hangup': sipHangup,
   'sip-inbound': sipInbound,
+  'sip-nonce': sipNonce,
   'sip-wakeup': sipWakeup,
 });
 

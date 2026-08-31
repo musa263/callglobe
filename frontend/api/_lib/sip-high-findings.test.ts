@@ -4,8 +4,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { consumeDigestReplay } from './sip-digest.js';
+import { issueSipNonce, verifySipNonce } from './sip-edge-auth.js';
 import { outboundPstnChargeMinor } from './wallet-store.js';
 import { voiceWalletCharge } from './inbound-billing.js';
+
+process.env.AUTH_SECRET ||= 'test-auth-secret';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -40,11 +43,16 @@ test('High.docx: REGISTER digest is bound to the AOR and nonces cannot replay', 
   const auth = read('frontend/api/_lib/routes/voice-sip-auth.ts');
   assert.match(auth, /fromUser/);
   assert.match(auth, /toUser/);
-  assert.match(auth, /consumeDigestReplay/);
+  assert.match(auth, /verifySipNonce/);
+  assert.match(auth, /consumeDigestReplayDurable/);
   const kamailio = read('services/sip/kamailio/kamailio.cfg');
   assert.match(kamailio, /fromUser/);
   assert.equal(consumeDigestReplay('ext', 'nonce-1', '00000001'), true);
   assert.equal(consumeDigestReplay('ext', 'nonce-1', '00000001'), false);
+  process.env.AUTH_SECRET = process.env.AUTH_SECRET || 'test-auth-secret';
+  const nonce = issueSipNonce('ext-2000');
+  assert.equal(verifySipNonce('ext-2000', nonce), true);
+  assert.equal(verifySipNonce('other', nonce), false);
 });
 
 test('High.docx: SIP credentials reuse HA1 until expiry instead of rotating every login', () => {
@@ -63,6 +71,10 @@ test('High.docx: outbound PSTN minutes debit; inbound and internal do not', () =
   assert.equal(outboundPstnChargeMinor(0, 10), 0);
   const webhook = read('frontend/api/_lib/routes/voice-webhook.ts');
   assert.match(webhook, /maybeChargeOutboundHangup/);
+  const hangup = read('frontend/api/_lib/routes/voice-sip-hangup.ts');
+  assert.match(hangup, /durationSeconds/);
+  const publicXml = read('services/sip/freeswitch/dialplan/public.xml');
+  assert.match(publicXml, /sip-hangup.sh/);
 });
 
 test('High.docx: RTPEngine and FreeSWITCH no longer share one RTP port range', () => {
@@ -84,8 +96,10 @@ test('High.docx: iOS dialogs, CANCEL, Call-ID, CallKit, hold re-INVITE', () => {
   assert.match(engine, /digestNc/);
   assert.match(engine, /socket != nil/);
   assert.match(engine, /expires=\\\(contactExpires\)/);
+  assert.match(engine, /pendingMergeByes/);
   const media = read('mobile/modules/vocivo-sip/ios/VocivoSipMedia.swift');
   assert.doesNotMatch(media, /localAudio\[target\]\?\.isEnabled = !held/);
+  assert.match(media, /flushIceWaiters\(slot: slot\)/);
 });
 
 test('High.docx: Android does not take the iOS-only native SIP path', () => {
@@ -108,6 +122,8 @@ test('High.docx: web inbound Terminated, waiting INVITE, REFER without mass hang
   assert.match(sip, /SessionState.Terminated/);
   assert.match(sip, /incomingRef.current !== invitation/);
   assert.match(sip, /hangupSession\(session\)/);
+  const control = read('frontend/src/voice/sipCallControl.js');
+  assert.match(control, /ReferrerState/);
   assert.match(sip, /canMerge: Boolean\(heldCall && mediaReady && !conference\)/);
   assert.match(sip, /Open this tab again to reconnect/);
   assert.match(sip, /sip-credentials[\s\S]*50 \* 60 \* 1000/);
@@ -118,7 +134,9 @@ test('High.docx: web inbound Terminated, waiting INVITE, REFER without mass hang
 
 test('Medium.docx leftovers: wakeup window, nginx snippet, no public 7443', () => {
   const cfg = read('services/sip/kamailio/kamailio.cfg');
-  assert.match(cfg, /\$avp\(tries\) > 20/);
+  assert.match(cfg, /route\(CHALLENGE\)/);
+  assert.match(cfg, /8081\/sip-nonce/);
+  assert.match(cfg, /db_mode", 2/);
   assert.match(cfg, /lookup\("location"\)/);
   assert.doesNotMatch(cfg, /listen=tcp:0.0.0.0:7443/);
   assert.ok(fs.existsSync(path.join(root, 'services/sip/nginx/vocivo-sip-edge-proxy.conf')));

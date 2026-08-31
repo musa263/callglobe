@@ -117,9 +117,7 @@ final class VocivoSipMedia: NSObject, RTCPeerConnectionDelegate {
     }
     iceWaiters[slot, default: []].append(completion)
     DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-      if self?.peers[slot]?.iceGatheringState == .complete {
-        self?.flushIceWaiters(slot: slot)
-      }
+      self?.flushIceWaiters(slot: slot)
     }
   }
 

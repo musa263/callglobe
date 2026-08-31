@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { digestMatches, parseDigestAuthorization, consumeDigestReplay, type DigestChallenge } from '../sip-digest.js';
+import { digestMatches, parseDigestAuthorization, consumeDigestReplayDurable, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredential } from '../sip-credential-store.js';
-import { sipEdgeAuthorized } from '../sip-edge-auth.js';
+import { sipEdgeAuthorized, verifySipNonce } from '../sip-edge-auth.js';
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -40,7 +40,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const ok = digestMatches(stored.ha1, challenge);
     if (!ok) return res.status(403).json({ ok: false });
-    if (!consumeDigestReplay(challenge.username, challenge.nonce, challenge.nc)) {
+    if (!verifySipNonce(challenge.username, challenge.nonce)) {
+      return res.status(403).json({ ok: false, error: 'Digest nonce is invalid or expired.' });
+    }
+    if (!await consumeDigestReplayDurable(challenge.username, challenge.nonce, challenge.nc)) {
       return res.status(403).json({ ok: false, error: 'Digest nonce was already used.' });
     }
     return res.status(ok ? 200 : 403).json({

@@ -41,6 +41,8 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   private var pendingCallKitAnswer = false
   private var localMuted = false
   private var digestNc = 1
+  private var pendingMergeByes: [String] = []
+  private var pendingReferOk = 0
   var onEvent: ((String, [String: Any]) -> Void)?
 
   func register(config: VocivoSipConfig, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -208,21 +210,14 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       return
     }
     let uri = target.hasPrefix("sip:") ? target : "sip:\(target)"
+    pendingMergeByes = [activeCallId, heldCallId].compactMap { $0 }
+    pendingReferOk = pendingMergeByes.count
     if let active = activeCallId {
       send(method: "REFER", extra: [("Refer-To", "<\(uri)>"), ("Referred-By", "<sip:\(config?.username ?? "")@\(config?.domain ?? "")>")], cseq: inviteCSeq + 1, callId: active)
     }
     if let held = heldCallId {
       send(method: "REFER", extra: [("Refer-To", "<\(uri)>"), ("Referred-By", "<sip:\(config?.username ?? "")@\(config?.domain ?? "")>")], cseq: inviteCSeq + 2, callId: held)
     }
-    if let active = activeCallId { sendBye(callId: active) }
-    if let held = heldCallId { sendBye(callId: held) }
-    if let endedUuid = heldUuid { VocivoSipCallKit.shared.end(uuid: endedUuid) }
-    VocivoSipCallKit.shared.end(uuid: activeUuid)
-    incomingInvite = nil
-    lastInvite = nil
-    clearHeld()
-    activeCallId = nil
-    VocivoSipMedia.shared.reset()
     invite(target: uri, headers: [["name": "X-Vocivo-Flow", "value": "conference"]], completion: completion)
   }
 
@@ -442,6 +437,16 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
         sendAck(message)
       } else if code >= 400 {
         finishCall()
+      }
+      return
+    }
+    if cseq.contains("REFER") {
+      if (200..<300).contains(code) {
+        pendingReferOk = max(0, pendingReferOk - 1)
+        if pendingReferOk == 0 {
+          pendingMergeByes.forEach { sendBye(callId: $0) }
+          pendingMergeByes = []
+        }
       }
     }
   }

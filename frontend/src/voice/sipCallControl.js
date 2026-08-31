@@ -32,5 +32,20 @@ export async function referSipSession(session, targetUri) {
   const Referrer = sip.Referrer;
   if (!Referrer) throw new Error('SIP transfer is unavailable in this client.');
   const referrer = new Referrer(session, uri);
-  await referrer.refer();
+  const ReferrerState = sip.ReferrerState || {};
+  await new Promise((resolve, reject) => {
+    let finished = false;
+    const done = (error) => {
+      if (finished) return;
+      finished = true;
+      if (error) reject(error);
+      else resolve(undefined);
+    };
+    referrer.stateChange?.addListener?.((state) => {
+      if (state === ReferrerState.Terminated || state === 'Terminated') done();
+    });
+    referrer.refer().then(() => {
+      setTimeout(() => done(), 1500);
+    }).catch(done);
+  });
 }

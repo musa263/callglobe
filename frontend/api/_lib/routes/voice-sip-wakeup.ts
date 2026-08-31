@@ -6,7 +6,7 @@ import { listExtensions } from '../pbx.js';
 import { listPushDevices } from '../push-device-store.js';
 import { sipEdgeAuthorized } from '../sip-edge-auth.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
-import { sendApnsVoip, vocivoSipPushPayload } from '../apns-voip.js';
+import { apnsConfigured, sendApnsVoip, vocivoSipPushPayload } from '../apns-voip.js';
 import { otherWakeupDevices, readWakeupCall, saveWakeupCall } from '../sip-wakeup-store.js';
 
 function text(value: unknown, max: number) {
@@ -97,7 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const from = text(req.body?.from, 80);
     if (!username) return res.status(400).json({ error: 'A SIP username is required.' });
     const lookup = await ringDevices({ username, callId, callerName, from });
-    return res.status(200).json(lookup);
+    return res.status(200).json({ ...lookup, apnsConfigured: apnsConfigured() });
   } catch (error) {
     if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });

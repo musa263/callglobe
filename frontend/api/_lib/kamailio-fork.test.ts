@@ -29,7 +29,8 @@ test('Kamailio wakes the phone then forks live contacts without blocking WebSock
   assert.doesNotMatch(cfg, /listen=tcp:0.0.0.0:7443/);
   assert.match(cfg, /autodrop", 0/);
   assert.match(cfg, /\$Rp != 8080 && !sanity_check/);
-  assert.match(cfg, /REGISTER challenge \$fU/);
+  assert.match(cfg, /route\(CHALLENGE\)/);
+  assert.match(cfg, /db_sqlite.so/);
   assert.match(cfg, /REGISTER ok \$fU/);
   assert.match(cfg, /route\(REFER\)/);
   assert.match(cfg, /\$rU =~ "\^conf-"/);

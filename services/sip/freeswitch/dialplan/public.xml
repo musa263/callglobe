@@ -14,6 +14,8 @@
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="inherit_codec=true"/>
+        <action application="set" data="session_in_hangup_hook=true"/>
+        <action application="set" data="api_hangup_hook=system /bin/sh /opt/vocivo-fs/sip-hangup.sh ${sip_h_X-Vocivo-Route-ID} ${uuid} ${billsec}"/>
         <action application="bridge" data="{origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID},origination_caller_id_name=Vocivo,sip_cid_type=pid,absolute_codec_string=PCMU,PCMA,OPUS,nolocal:sip_h_P-Asserted-Identity=&lt;sip:${sip_h_X-Vocivo-Caller-ID}@sip.telnyx.com&gt;}sofia/gateway/telnyx/+$1"/>
       </condition>
     </extension>
