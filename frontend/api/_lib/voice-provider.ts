@@ -28,9 +28,16 @@ export function internalCallsUseTelnyxPark(edge: VoiceEdge = voiceEdge()) {
 
 const PUBLIC_SIP_STUN: VoiceIceServer = { urls: 'stun:stun.l.google.com:19302' };
 
-/** SIP clients use RTPEngine. Telnyx TURN on those sessions bills internal media as carrier traffic. */
+/** SIP clients use RTPEngine. Optional self-hosted TURN is allowed; Telnyx TURN is not. */
 export function sipIceServers(): VoiceIceServer[] {
-  return [PUBLIC_SIP_STUN];
+  const servers: VoiceIceServer[] = [PUBLIC_SIP_STUN];
+  const turn = trimmedEnv('VOCIVO_TURN_URI');
+  const username = trimmedEnv('VOCIVO_TURN_USERNAME');
+  const credential = trimmedEnv('VOCIVO_TURN_CREDENTIAL');
+  if (turn && username && credential && validIceUrl(turn)) {
+    servers.push({ urls: turn, username, credential });
+  }
+  return servers;
 }
 
 export function clientIceServers(edge: VoiceEdge = voiceEdge(), subject = 'voice-session'): VoiceIceServer[] {

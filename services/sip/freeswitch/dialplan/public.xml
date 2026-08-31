@@ -2,6 +2,12 @@
   <context name="public">
     <!-- Kamailio hairpins registered web/PSTN INVITEs onto this profile. Those
          E.164 destinations are outbound origination, not inbound DIDs. -->
+    <extension name="vocivo-conference">
+      <condition field="destination_number" expression="^conf-([A-Za-z0-9_-]+)$">
+        <action application="answer"/>
+        <action application="conference" data="$1@default"/>
+      </condition>
+    </extension>
     <extension name="vocivo-outbound-pstn">
       <condition field="network_addr" expression="^(PUBLIC_IP_REGEX|127\.0\.0\.1)$"/>
       <condition field="${sip_h_X-Vocivo-Caller-ID}" expression="^\+[1-9]\d{6,14}$"/>
@@ -12,7 +18,7 @@
       </condition>
     </extension>
     <extension name="vocivo-telnyx-registered-client">
-      <condition field="destination_number" expression="^([A-Za-z][A-Za-z0-9_.-]{2,80})$">
+      <condition field="destination_number" expression="^(?!conf-)([A-Za-z][A-Za-z0-9_.-]{2,80})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="inherit_codec=true"/>
         <action application="set" data="origination_caller_id_name=${caller_id_name}"/>
@@ -21,6 +27,7 @@
       </condition>
     </extension>
     <extension name="vocivo-inbound-did">
+      <condition field="${sip_h_X-Vocivo-Flow}" expression="^inbound$"/>
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="vocivo_did=+$1"/>
         <action application="set" data="curl_timeout=8"/>

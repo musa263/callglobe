@@ -82,7 +82,9 @@ final class VocivoSipMedia: NSObject, RTCPeerConnectionDelegate {
 
   func setRemoteSdp(_ sdp: String, type: RTCSdpType, completion: @escaping () -> Void) {
     let description = RTCSessionDescription(type: type, sdp: sdp)
-    peers[activeSlot]?.setRemoteDescription(description) { _ in completion() }
+    peers[activeSlot]?.setRemoteDescription(description) { error in
+      if error == nil { completion() }
+    }
   }
 
   /// Mute only the local microphone. Remote audio stays enabled so mute is not
@@ -93,7 +95,6 @@ final class VocivoSipMedia: NSObject, RTCPeerConnectionDelegate {
 
   func setHeld(_ held: Bool, slot: Int? = nil) {
     let target = slot ?? activeSlot
-    localAudio[target]?.isEnabled = !held
     peers[target]?.transceivers.forEach { transceiver in
       transceiver.receiver.track?.isEnabled = !held
     }
@@ -115,8 +116,10 @@ final class VocivoSipMedia: NSObject, RTCPeerConnectionDelegate {
       return
     }
     iceWaiters[slot, default: []].append(completion)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-      self?.flushIceWaiters(slot: slot)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+      if self?.peers[slot]?.iceGatheringState == .complete {
+        self?.flushIceWaiters(slot: slot)
+      }
     }
   }
 

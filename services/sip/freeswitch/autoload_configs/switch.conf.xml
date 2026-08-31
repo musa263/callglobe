@@ -3,7 +3,7 @@
     <param name="colorize-logging" value="true"/>
     <param name="max-sessions" value="200"/>
     <param name="sessions-per-second" value="20"/>
-    <param name="rtp-start-port" value="16384"/>
-    <param name="rtp-end-port" value="16484"/>
+    <param name="rtp-start-port" value="20000"/>
+    <param name="rtp-end-port" value="20100"/>
   </settings>
 </configuration>

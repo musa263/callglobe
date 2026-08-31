@@ -14,6 +14,7 @@ import { answerParkedCallerThenBridge, bridgeOutboundCalls, prepareParkedCallerM
 import { outboundUsesNativeBridgeOnAnswer } from '../outbound-native-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
+import { maybeChargeOutboundHangup } from '../outbound-pstn-charge.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
 import { normalizeE164, organizationForNumber } from '../tenancy.js';
 import { verifyTelnyxWebhook } from '../telnyx-webhook-auth.js';
@@ -698,7 +699,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(200).json({ received: true });
         }
         const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
-        if (state.routeId) await updateVoiceRoute(state.routeId, outcome);
+        if (state.routeId) {
+          await updateVoiceRoute(state.routeId, outcome);
+          if (outcome.phase === 'ended') {
+            await maybeChargeOutboundHangup(state.routeId, eventId).catch((error) => logWebhookFailure('debit outbound PSTN', error));
+          }
+        }
         if (pair && (pair.status === 'conference' || pair.status === 'merging')) {
           await hangupConferenceParticipant(pair, callControlId, `${eventId}-destination-hangup`);
         } else if (pair) {

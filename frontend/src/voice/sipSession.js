@@ -40,7 +40,7 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = []) {
       sessionDescriptionHandlerOptions: { constraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false } },
   });
   const sending = inviter.invite();
-  sending.catch(() => undefined);
+  await sending;
   return inviter;
 }
 

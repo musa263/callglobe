@@ -19,7 +19,14 @@ test('Kamailio wakes the phone then forks live contacts without blocking WebSock
   assert.match(cfg, /if \(lookup\("location"\)\)/);
   assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1200"\)/);
   assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1000"\)/);
-  assert.match(cfg, /async_route\("WAIT_REGISTER", "1"\)/);
+  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1"\)/);
+  assert.match(cfg, /async_route\("WAIT_REGISTER", "2"\)/);
+  assert.match(cfg, /\$Rp != 8080/);
+  assert.match(cfg, /reject unauthenticated E.164 INVITE/);
+  assert.match(cfg, /\$du = "sip:127.0.0.1:5080;transport=udp"/);
+  assert.match(cfg, /\$var\(rto\) = \$\(hdr\(Refer-To\)\{nameaddr.uri.user\}\)/);
+  assert.match(cfg, /has_totag\(\) && loose_route\(\)/);
+  assert.doesNotMatch(cfg, /listen=tcp:0.0.0.0:7443/);
   assert.match(cfg, /autodrop", 0/);
   assert.match(cfg, /\$Rp != 8080 && !sanity_check/);
   assert.match(cfg, /REGISTER challenge \$fU/);

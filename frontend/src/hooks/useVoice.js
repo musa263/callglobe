@@ -15,8 +15,7 @@ export function useVoice(token, enabled, identity = {}) {
       if (cancelled) return;
       setEdge(config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx');
     }).catch(() => {
-      // Do not fall back to Telnyx on a config failure. That logs a billed WebRTC session.
-      if (!cancelled) setEdge('sip');
+      if (!cancelled) setEdge((current) => current);
     });
     return () => { cancelled = true; };
   }, [enabled, token]);

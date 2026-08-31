@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { digestExpectedResponse, digestHa1, digestMatches, parseDigestAuthorization } from './sip-digest.js';
+import { digestExpectedResponse, digestHa1, digestMatches, parseDigestAuthorization, consumeDigestReplay } from './sip-digest.js';
 
 test('verifies SIP Digest against a stored HA1 without recovering the password', () => {
   const username = 'ext-2000';
@@ -33,4 +33,9 @@ test('parses comma-separated Digest Authorization headers from SIP.js', () => {
   assert.equal(parsed?.qop, 'auth');
   assert.equal(parsed?.nc, '00000001');
   assert.equal(parsed?.cnonce, 'xyz');
+});
+
+test('rejects a reused Digest nonce and nc pair', () => {
+  assert.equal(consumeDigestReplay('ext-replay', 'n1', '00000001'), true);
+  assert.equal(consumeDigestReplay('ext-replay', 'n1', '00000001'), false);
 });

@@ -4,7 +4,7 @@ import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { registerVocivoSip, setPreferredVoiceEdge } from '../lib/sipNative';
+import { registerVocivoSip, setPreferredVoiceEdge, unregisterVocivoSip } from '../lib/sipNative';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
 import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../lib/voiceEdge';
 import type { ActiveCall } from '../types';
@@ -38,6 +38,7 @@ export function useVoiceRegistration({
     if (loading) return;
     if (!isAuthenticated || isPreview) {
       loginConfigRef.current = null;
+      unregisterVocivoSip().catch((failure) => reportVoiceError('unregister SIP', failure));
       voipClient.logout().catch((failure) => reportVoiceError('logout', failure));
       setPushRegistration('unavailable');
       return;
@@ -67,7 +68,7 @@ export function useVoiceRegistration({
         const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
         const edge = voiceEdgeFromConfig(edgeConfig);
         setPreferredVoiceEdge(edge);
-        if (shouldUseSipNative(edge, NativeModules)) {
+        if (shouldUseSipNative(edge, NativeModules, Platform.OS)) {
           await voipClient.logout().catch((failure) => reportVoiceError('logout Telnyx before SIP edge', failure));
           const sip = await api.post<{
             username: string;

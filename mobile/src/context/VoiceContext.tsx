@@ -419,6 +419,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
 
   const emergencyTransportCleanup = useCallback((state: TelnyxConnectionState) => {
+    if (sipClientReady() || preferredVoiceEdge() === 'sip') return;
     startAttemptRef.current += 1;
     if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
     transportLossTimerRef.current = null;
@@ -477,6 +478,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       }
     });
     const callsSubscription = voipClient.calls$.subscribe((calls) => {
+      if (sipClientReady() || preferredVoiceEdge() === 'sip') return;
       const currentId = voipClient.currentActiveCall?.callId;
       const waiting = calls.find((call) => call.callId !== currentId && call.isIncoming && call.currentState === TelnyxCallState.RINGING);
       const held = calls.find((call) => call.callId !== currentId && call.currentState === TelnyxCallState.HELD);
@@ -614,6 +616,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [watchSipSession]);
 
   const refreshIncomingCalls = useCallback(async () => {
+    if (sipClientReady() || preferredVoiceEdge() === 'sip') {
+      setPushRegistration('registered');
+      return;
+    }
     setPushRegistration('registering');
     let data = loginConfigRef.current;
     if (!isVoiceSessionFresh(data, 60_000)) {
@@ -988,9 +994,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       const member = result.users.find((user) => user.id === targetExtensionId);
       if (!member?.sipUsername) throw new Error('That colleague is not available.');
       await referVocivoSip(sipTargetUri(member.sipUsername));
-      await hangupVocivoSip(sipSessionRef.current, activeCallRef.current?.id);
-      activeCallRef.current = null;
-      setActiveCall(null);
       return;
     }
     await api.post('/api/voice/transfer', { targetExtensionId });
@@ -998,6 +1001,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const answerWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
+    if (sipClientReady()) {
+      await answerVocivoSip(waitingCall.id);
+      setWaitingCall(null);
+      return;
+    }
     const incoming = voipClient.getCall(waitingCall.id);
     const current = voipClient.currentActiveCall;
     if (!incoming) return;
@@ -1033,6 +1041,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const rejectWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
+    if (sipClientReady()) {
+      await hangupVocivoSip(sipSessionRef.current, waitingCall.id);
+      setWaitingCall(null);
+      return;
+    }
     await voipClient.getCall(waitingCall.id)?.hangup();
   }, [waitingCall?.id]);
 

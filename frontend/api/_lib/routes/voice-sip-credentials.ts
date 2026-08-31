@@ -4,7 +4,7 @@ import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../h
 import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { digestHa1 } from '../sip-digest.js';
-import { saveSipCredential } from '../sip-credential-store.js';
+import { saveSipCredential, readSipCredential } from '../sip-credential-store.js';
 import { newSipPassword } from '../sip-edge-auth.js';
 import { accessForSession } from '../saas-access.js';
 import { sessionOrganizationId } from '../tenancy.js';
@@ -25,14 +25,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
     if (!extension.sipUsername) return res.status(409).json({ error: 'This extension has no SIP username.' });
     const realm = sipRealm();
-    const password = newSipPassword();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const existing = await readSipCredential(extension.sipUsername);
+    const remainingMs = existing ? new Date(existing.expiresAt).getTime() - Date.now() : 0;
+    const password = existing?.password && remainingMs > 10 * 60 * 1000
+      ? existing.password
+      : newSipPassword();
+    const expiresAt = existing?.password && remainingMs > 10 * 60 * 1000
+      ? existing.expiresAt
+      : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     await saveSipCredential({
       username: extension.sipUsername,
       extensionId: extension.id,
       organizationId: extension.organizationId,
       realm,
       ha1: digestHa1(extension.sipUsername, realm, password),
+      password,
       expiresAt,
     });
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -43,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       domain: sipDomain(),
       wsUri: sipWsUri(),
       expiresAt,
-      expires_in: 3600,
+      expires_in: 86400,
       ice_servers: clientIceServers(voiceEdge(config), `${extension.organizationId}:${extension.id}`),
       voice_edge: voiceEdge(config),
     });

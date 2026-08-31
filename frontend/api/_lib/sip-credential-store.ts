@@ -9,6 +9,7 @@ export type StoredSipCredential = {
   organizationId: string;
   realm: string;
   ha1: string;
+  password?: string;
   expiresAt: string;
 };
 

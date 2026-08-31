@@ -34,6 +34,13 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   private var heldIncomingInvite: VocivoSipMessage?
   private var heldLastInvite: (target: String, sdp: String, headers: [[String: String]])?
   private var pendingPush: (uuid: UUID, callId: String, from: String, displayName: String, reported: Bool)?
+  private var remoteTag = ""
+  private var remoteTarget = ""
+  private var recordRoutes: [String] = []
+  private var dialogConfirmed = false
+  private var pendingCallKitAnswer = false
+  private var localMuted = false
+  private var digestNc = 1
   var onEvent: ((String, [String: Any]) -> Void)?
 
   func register(config: VocivoSipConfig, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -55,15 +62,17 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   func unregister() {
     registerTimer?.invalidate()
     if config != nil { send(method: "REGISTER", extra: [("Expires", "0")]) }
+    pendingRegister?(.failure(NSError(domain: "VocivoSip", code: 0, userInfo: [NSLocalizedDescriptionKey: "SIP registration was cancelled."])))
+    pendingRegister = nil
     socket?.cancel(with: .goingAway, reason: nil)
     socket = nil
     session = nil
-    pendingRegister = nil
+    config = nil
     VocivoSipMedia.shared.reset()
   }
 
   func invite(target: String, headers: [[String: String]], completion: @escaping (Result<String, Error>) -> Void) {
-    guard config != nil else {
+    guard config != nil, socket != nil else {
       completion(.failure(NSError(domain: "VocivoSip", code: 2, userInfo: [NSLocalizedDescriptionKey: "The SIP phone is not registered yet."])))
       return
     }
@@ -104,7 +113,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     let display = dictionary["callerName"] as? String ?? from
     pendingPush = (uuid, callId, from, display, true)
     activeUuid = uuid
-    activeCallId = callId
+    if !callId.isEmpty { activeCallId = callId }
     VocivoSipCallKit.shared.onAnswer = { [weak self] _ in self?.answer(callId: self?.activeCallId) }
     VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
     VocivoSipCallKit.shared.reportIncoming(uuid: uuid, handle: from, displayName: display) { _ in
@@ -131,8 +140,13 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       VocivoSipMedia.shared.reset(slot: 1 - VocivoSipMedia.shared.activeSlot)
       return
     }
-    if incomingInvite != nil, activeCallId != nil {
+    if let targetId, let heldCallId, targetId == heldCallId {
+      return
+    }
+    if incomingInvite != nil, !dialogConfirmed {
       sendResponse(incomingInvite, status: "486 Busy Here")
+    } else if lastInvite != nil, !dialogConfirmed, let callId = activeCallId ?? callId {
+      send(method: "CANCEL", requestUri: lastInvite?.target, extra: [], cseq: inviteCSeq, callId: callId)
     } else if let callId = activeCallId ?? callId {
       sendBye(callId: callId)
     }
@@ -140,11 +154,29 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   }
 
   func setMuted(_ muted: Bool) {
+    localMuted = muted
     VocivoSipMedia.shared.setMuted(muted)
   }
 
   func setHeld(_ held: Bool) {
     VocivoSipMedia.shared.setHeld(held)
+    if !held { VocivoSipMedia.shared.setMuted(localMuted) }
+    guard dialogConfirmed, let callId = activeCallId else { return }
+    inviteCSeq += 1
+    VocivoSipMedia.shared.createOffer { [weak self] sdp in
+      guard let self, var sdp else { return }
+      if held {
+        sdp = sdp.replacingOccurrences(of: "a=sendrecv", with: "a=sendonly")
+      }
+      self.send(
+        method: "INVITE",
+        requestUri: self.remoteTarget.isEmpty ? nil : self.remoteTarget,
+        extra: [("Content-Type", "application/sdp")],
+        body: sdp,
+        cseq: self.inviteCSeq,
+        callId: callId
+      )
+    }
   }
 
   func swapHeld() {
@@ -209,7 +241,11 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   }
 
   func answer(callId: String?) {
-    guard let invite = incomingInvite else { return }
+    guard let invite = incomingInvite else {
+      pendingCallKitAnswer = true
+      return
+    }
+    pendingCallKitAnswer = false
     VocivoSipMedia.shared.setRemoteSdp(remoteSdp, type: .offer) {
       VocivoSipMedia.shared.createAnswer { [weak self] sdp in
         guard let self, let sdp else { return }
@@ -249,49 +285,68 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
 
   private func send(method: String, requestUri: String? = nil, extra: [(String, String)], body: String = "", cseq: Int? = nil, callId: String? = nil) {
     guard let config else { return }
-    let uri = requestUri ?? (method == "REGISTER" ? "sip:\(config.domain)" : "sip:\(config.username)@\(config.domain)")
     let seq = cseq ?? registerCSeq
     let display = config.displayName
       .replacingOccurrences(of: "\"", with: "")
       .replacingOccurrences(of: "\r", with: "")
       .replacingOccurrences(of: "\n", with: " ")
     let contactUser = config.username.replacingOccurrences(of: "\"", with: "")
+    let contactExpires = extra.contains(where: { $0.0.caseInsensitiveCompare("Expires") == .orderedSame && $0.1 == "0" }) ? "0" : "600"
+    let inDialog = method != "REGISTER" && !remoteTag.isEmpty && (callId ?? registerCallId) == (activeCallId ?? registerCallId)
+    let dialogUri = requestUri ?? (inDialog && !remoteTarget.isEmpty ? remoteTarget : (method == "REGISTER" ? "sip:\(config.domain)" : "sip:\(contactUser)@\(config.domain)"))
     var message = VocivoSipMessage(
-      startLine: "\(method) \(uri) SIP/2.0",
+      startLine: "\(method) \(dialogUri) SIP/2.0",
       headers: [
         ("Via", "SIP/2.0/WSS invalid;branch=\(VocivoSipIds.branch());rport"),
         ("Max-Forwards", "70"),
         ("From", "\"\(display.isEmpty ? contactUser : display)\" <sip:\(contactUser)@\(config.domain)>;tag=\(fromTag)"),
-        ("To", method == "REGISTER" ? "<sip:\(contactUser)@\(config.domain)>" : "<\(uri)>"),
+        ("To", method == "REGISTER" ? "<sip:\(contactUser)@\(config.domain)>" : (inDialog ? "<\(dialogUri)>;tag=\(remoteTag)" : "<\(dialogUri)>")),
         ("Call-ID", callId ?? registerCallId),
         ("CSeq", "\(seq) \(method)"),
-        ("Contact", "<sip:\(contactUser)@invalid;transport=ws>;expires=600"),
+        ("Contact", "<sip:\(contactUser)@invalid;transport=ws>;expires=\(contactExpires)"),
         ("Allow", "INVITE, ACK, CANCEL, BYE, OPTIONS, NOTIFY, REFER, INFO, UPDATE"),
         ("Supported", "outbound, path"),
         ("User-Agent", "VocivoSip/1.0"),
       ],
       body: body
     )
+    recordRoutes.forEach { message.headers.append(("Route", $0)) }
     extra.forEach { message.setHeader($0.0, $0.1) }
     message.setHeader("Content-Length", "\(body.utf8.count)")
     socket?.send(.string(message.serialized())) { _ in }
   }
 
   private func sendResponse(_ invite: VocivoSipMessage?, status: String, body: String = "", contentType: String? = nil) {
-    guard let invite, let via = invite.header("Via"), let from = invite.header("From"), let to = invite.header("To"), let callId = invite.header("Call-ID"), let cseq = invite.header("CSeq") else { return }
-    let taggedTo = to.contains("tag=") ? to : "\(to);tag=\(VocivoSipIds.tag())"
-    var headers = [
-      ("Via", via),
+    guard let invite, let from = invite.header("From"), let to = invite.header("To"), let callId = invite.header("Call-ID"), let cseq = invite.header("CSeq") else { return }
+    let taggedTo = to.contains("tag=") ? to : "\(to);tag=\(fromTag)"
+    var headers: [(String, String)] = invite.headers.filter { $0.0.caseInsensitiveCompare("Via") == .orderedSame }
+    if headers.isEmpty, let via = invite.header("Via") { headers.append(("Via", via)) }
+    headers.append(contentsOf: [
       ("From", from),
       ("To", taggedTo),
       ("Call-ID", callId),
       ("CSeq", cseq),
       ("Contact", "<sip:\(config?.username ?? "vocivo")@invalid;transport=ws>"),
       ("Content-Length", "\(body.utf8.count)"),
-    ]
+    ])
     if let contentType { headers.insert(("Content-Type", contentType), at: headers.count - 1) }
     let message = VocivoSipMessage(startLine: "SIP/2.0 \(status)", headers: headers, body: body)
     socket?.send(.string(message.serialized())) { _ in }
+  }
+
+  private func captureDialog(from message: VocivoSipMessage, reverseRoutes: Bool) {
+    dialogConfirmed = true
+    if let to = message.header("To"), let range = to.range(of: "tag=") {
+      remoteTag = String(to[range.upperBound...]).split(separator: ";").first.map(String.init) ?? remoteTag
+    }
+    if let from = message.header("From"), remoteTag.isEmpty, let range = from.range(of: "tag=") {
+      remoteTag = String(from[range.upperBound...]).split(separator: ";").first.map(String.init) ?? remoteTag
+    }
+    if let contact = message.header("Contact") {
+      remoteTarget = contact.slice(from: "<", to: ">") ?? contact
+    }
+    let routes = message.headers.filter { $0.0.caseInsensitiveCompare("Record-Route") == .orderedSame }.map(\.1)
+    recordRoutes = reverseRoutes ? routes.reversed() : routes
   }
 
   private func listen() {
@@ -299,7 +354,8 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       guard let self else { return }
       switch result {
       case .failure:
-        break
+        pendingRegister?(.failure(NSError(domain: "VocivoSip", code: 1006, userInfo: [NSLocalizedDescriptionKey: "The SIP websocket closed."])))
+        pendingRegister = nil
       case .success(.string(let text)):
         self.handle(text)
       case .success(.data(let data)):
@@ -317,7 +373,17 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       if method == "INVITE" { handleIncomingInvite(message) }
       if method == "OPTIONS" { sendResponse(message, status: "200 OK") }
       if method == "BYE" || method == "CANCEL" {
+        let byeId = message.header("Call-ID") ?? ""
+        if !byeId.isEmpty, byeId != activeCallId, byeId != heldCallId {
+          sendResponse(message, status: "200 OK")
+          return
+        }
         sendResponse(message, status: "200 OK")
+        if byeId == heldCallId {
+          clearHeld()
+          VocivoSipMedia.shared.reset(slot: 1 - VocivoSipMedia.shared.activeSlot)
+          return
+        }
         finishCall()
       }
       if method == "ACK" { return }
@@ -361,11 +427,13 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
           return (name, value)
         }
         extra.append((headerName, digest(for: message, method: "INVITE", uri: lastInvite.target) ?? ""))
+        extra.removeAll { $0.0 == headerName && $0.1.isEmpty }
         extra.append(("Content-Type", "application/sdp"))
         send(method: "INVITE", requestUri: lastInvite.target, extra: extra, body: lastInvite.sdp, cseq: inviteCSeq, callId: activeCallId)
       } else if (180...183).contains(code) {
         onEvent?("onCallRinging", ["callId": activeCallId ?? ""])
       } else if (200..<300).contains(code) {
+        captureDialog(from: message, reverseRoutes: true)
         if !message.body.isEmpty {
           VocivoSipMedia.shared.setRemoteSdp(message.body, type: .answer) {}
         }
@@ -387,6 +455,10 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     incomingInvite = message
     activeCallId = sipCallId
     remoteSdp = message.body
+    captureDialog(from: message, reverseRoutes: false)
+    if let from = message.header("From"), let range = from.range(of: "tag=") {
+      remoteTag = String(from[range.upperBound...]).split(separator: ";").first.map(String.init) ?? remoteTag
+    }
     sendResponse(message, status: "100 Trying")
     sendResponse(message, status: "180 Ringing")
     let from = message.header("From") ?? "Incoming call"
@@ -408,11 +480,12 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       VocivoSipCallKit.shared.reportIncoming(uuid: uuid, handle: handle, displayName: display) { _ in }
     }
     onEvent?("onIncomingCall", ["callId": sipCallId, "from": handle, "displayName": display, "uuid": uuid.uuidString])
+    if pendingCallKitAnswer { answer(callId: sipCallId) }
   }
 
   private func sendAck(_ response: VocivoSipMessage) {
     guard let to = response.header("To") else { return }
-    let uri = to.slice(from: "<", to: ">") ?? "sip:\(config?.domain ?? "")"
+    let uri = remoteTarget.isEmpty ? (to.slice(from: "<", to: ">") ?? "sip:\(config?.domain ?? "")") : remoteTarget
     send(method: "ACK", requestUri: uri, extra: [], cseq: inviteCSeq, callId: activeCallId)
   }
 
@@ -421,6 +494,8 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     let header = message.header("WWW-Authenticate") ?? message.header("Proxy-Authenticate") ?? ""
     let values = VocivoSipDigest.challengeValue(header)
     guard let realm = values["realm"], let nonce = values["nonce"] else { return nil }
+    let nc = String(format: "%08d", digestNc)
+    digestNc += 1
     return VocivoSipDigest.authorization(
       user: config.username,
       password: config.password,
@@ -430,7 +505,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       method: method,
       qop: values["qop"]?.components(separatedBy: ",").first,
       opaque: values["opaque"],
-      nc: "00000001",
+      nc: nc,
       cnonce: VocivoSipIds.random(8)
     )
   }
@@ -471,6 +546,11 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     incomingInvite = nil
     lastInvite = nil
     pendingPush = nil
+    remoteTag = ""
+    remoteTarget = ""
+    recordRoutes = []
+    dialogConfirmed = false
+    pendingCallKitAnswer = false
     let endedId = activeCallId ?? ""
     let endedUuid = activeUuid
     activeCallId = nil

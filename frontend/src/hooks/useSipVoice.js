@@ -98,12 +98,31 @@ export function useSipVoice(token, enabled, identity = {}) {
             displayName: identityRef.current,
             iceServers: credentials.ice_servers,
             onInvite: (invitation) => {
+              const number = String(invitation.remoteIdentity?.uri || '');
+              const internal = !/sip:\+?[1-9]\d{6,14}@/i.test(number);
+              invitation.stateChange.addListener((next) => {
+                if (next !== SessionState.Terminated && next !== 'Terminated') return;
+                if (incomingRef.current === invitation) {
+                  incomingRef.current = null;
+                  setIncomingCall(null);
+                }
+                if (sessionRef.current === invitation) {
+                  sessionRef.current = null;
+                  setCall(null);
+                  setState(null);
+                  setRoutePhase(null);
+                  setMediaReady(false);
+                }
+              });
+              if (incomingRef.current && incomingRef.current !== invitation) {
+                hangupSession(incomingRef.current);
+              }
               incomingRef.current = invitation;
               setIncomingCall(invitation);
               setRemoteIdentity({
                 name: invitation.remoteIdentity?.displayName || 'Incoming call',
-                number: String(invitation.remoteIdentity?.uri || ''),
-                internal: true,
+                number,
+                internal,
                 photoUrl: '',
               });
               attachSipMedia(invitation);
@@ -126,12 +145,17 @@ export function useSipVoice(token, enabled, identity = {}) {
       }
       if (cancelled) return;
       const message = lastError instanceof Error ? lastError.message : 'The SIP phone could not register.';
-      setError(message.includes('WebSocket') ? 'The Vocivo phone lost its SIP connection. Retrying…' : message);
+      setError(message.includes('WebSocket') ? 'The Vocivo phone lost its SIP connection. Open this tab again to reconnect.' : message);
       setStatusLabel('SIP unavailable');
     };
     connect();
+    const refresh = window.setInterval(() => {
+      if (cancelled) return;
+      api('/api/voice/sip-credentials', { method: 'POST', body: {} }).catch((failure) => reportWebVoiceError('SIP credential refresh', failure));
+    }, 50 * 60 * 1000);
     return () => {
       cancelled = true;
+      window.clearInterval(refresh);
       disconnect();
     };
   }, [disconnect, enabled, token]);
@@ -428,8 +452,8 @@ export function useSipVoice(token, enabled, identity = {}) {
   }, [hangupSession, remoteIdentity]);
 
   const removeConferenceParticipant = useCallback(async () => {
-    throw new Error('Remove the conference by hanging up. SIP conferences do not use Telnyx participant control.');
-  }, []);
+    hangup();
+  }, [hangup]);
 
   const transferCall = useCallback(async (targetExtensionId) => {
     const session = sessionRef.current;
@@ -439,8 +463,12 @@ export function useSipVoice(token, enabled, identity = {}) {
     const member = (result.users || []).find((user) => user.id === targetExtensionId);
     if (!member?.sipUsername) throw new Error('That colleague is not available.');
     await referSipSession(session, sipTargetUri(member.sipUsername, domain));
-    hangup();
-  }, [hangup]);
+    hangupSession(session);
+    sessionRef.current = null;
+    setCall(null);
+    setState(null);
+    setRoutePhase(null);
+  }, [hangupSession]);
 
   return {
     ready,
@@ -456,7 +484,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     dialedNumber,
     endedCall,
     callStarting,
-    canMerge: Boolean(heldCall && !conference),
+    canMerge: Boolean(heldCall && mediaReady && !conference),
     connected: mediaReady || state === 'held',
     incoming: Boolean(incomingCall),
     active: Boolean(call) && !incomingCall,

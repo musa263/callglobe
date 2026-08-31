@@ -10,6 +10,10 @@ test('VocivoSipEngine keeps hangup after VoIP push handling', () => {
   const source = fs.readFileSync(enginePath, 'utf8');
   assert.match(source, /func handleVoipPush\(/);
   assert.match(source, /func hangup\(callId: String\?\)/);
+  assert.match(source, /"CANCEL"/);
+  assert.match(source, /pendingCallKitAnswer/);
+  assert.match(source, /captureDialog/);
+  assert.match(source, /remoteTag/);
   assert.match(source, /func answer\(callId: String\?\)/);
   assert.match(source, /func swapHeld\(\)/);
   assert.match(source, /func merge\(to target: String/);

@@ -58,6 +58,14 @@ async function sipJs() {
   return import('./sipJsClient');
 }
 
+function isIosNativePlatform() {
+  try {
+    return (require('react-native') as typeof import('react-native')).Platform.OS === 'ios';
+  } catch {
+    return false;
+  }
+}
+
 function loadNativeModules(): { VocivoSip?: VocivoSipNative } {
   try {
     return (require('react-native') as typeof import('react-native')).NativeModules || {};
@@ -120,7 +128,7 @@ export function subscribeVocivoSipEvents(handlers: SipEventHandlers) {
 export async function registerVocivoSip(config: NativeConfig) {
   realm = config.domain;
   const native = vocivoSipModule();
-  if (native) {
+  if (native && isIosNativePlatform()) {
     await native.register(config);
     nativeRegistered = true;
     jsAgentReady = false;

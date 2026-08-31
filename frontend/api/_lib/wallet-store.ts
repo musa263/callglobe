@@ -3,7 +3,7 @@ import type { Sql, TransactionSql } from 'postgres';
 import { withDatabaseRetry } from './object-store.js';
 
 export type WalletStatus = 'active' | 'frozen';
-export type WalletEntryType = 'topup' | 'manual_credit' | 'manual_debit' | 'refund' | 'chargeback' | 'promotion';
+export type WalletEntryType = 'topup' | 'manual_credit' | 'manual_debit' | 'refund' | 'chargeback' | 'promotion' | 'call_charge';
 
 export type Wallet = {
   organizationId: string;
@@ -379,10 +379,39 @@ async function applyLaunchCallingCreditIfEmpty(
 }
 
 export function outboundWalletBlockReason(wallet: Pick<Wallet, 'status' | 'availableMinor'> | null | undefined) {
-  if (!wallet) return 'Calling credit is not available.';
+  if (!wallet) return 'Calling credit is required before placing this call.';
   if (wallet.status === 'frozen') return 'This account wallet is frozen.';
   if (wallet.availableMinor <= 0) return 'Calling credit is required before placing this call.';
   return '';
+}
+
+export function outboundPstnChargeMinor(durationSeconds: number, ratePerMinuteMinor: number) {
+  const seconds = Number.isFinite(durationSeconds) ? Math.max(0, Math.floor(durationSeconds)) : 0;
+  const rate = Number.isSafeInteger(ratePerMinuteMinor) ? ratePerMinuteMinor : 0;
+  if (seconds <= 0 || rate <= 0) return 0;
+  return Math.max(1, Math.ceil(seconds / 60)) * rate;
+}
+
+export async function chargeOutboundPstnUsage(input: {
+  organizationId: string;
+  durationSeconds: number;
+  ratePerMinuteMinor: number;
+  reference: string;
+  idempotencyKey: string;
+}) {
+  const amountMinor = outboundPstnChargeMinor(input.durationSeconds, input.ratePerMinuteMinor);
+  if (amountMinor <= 0 || !input.organizationId) return { charged: false as const, amountMinor: 0 };
+  await recordWalletAdjustment({
+    organizationId: input.organizationId,
+    type: 'call_charge',
+    direction: 'debit',
+    amountMinor,
+    reference: input.reference,
+    description: 'Outbound PSTN minutes',
+    createdBy: 'vocivo-voice',
+    idempotencyKey: input.idempotencyKey.slice(0, 120),
+  });
+  return { charged: true as const, amountMinor };
 }
 
 export function walletBalanceAfter(currentMinor: number, direction: 'credit' | 'debit', amountMinor: number) {

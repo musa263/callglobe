@@ -34,6 +34,19 @@ export function digestMatches(ha1: string, challenge: DigestChallenge) {
   return expected.length === supplied.length && timingSafeEqual(expected, supplied);
 }
 
+const usedNonces = new Map<string, number>();
+
+export function consumeDigestReplay(username: string, nonce: string, nc?: string) {
+  const key = `${username}:${nonce}:${nc || 'none'}`;
+  const now = Date.now();
+  for (const [seen, at] of usedNonces) {
+    if (now - at > 10 * 60 * 1000) usedNonces.delete(seen);
+  }
+  if (usedNonces.has(key)) return false;
+  usedNonces.set(key, now);
+  return true;
+}
+
 export function parseDigestAuthorization(header: string, method = 'REGISTER'): DigestChallenge | null {
   const raw = header.trim();
   if (!raw) return null;

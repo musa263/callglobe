@@ -9,4 +9,5 @@ const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), './
 test('web SIP reconnects after an abnormal WebSocket close', () => {
   assert.match(source, /reconnectionAttempts: 12/);
   assert.match(source, /keepAliveInterval: 30/);
+  assert.match(source, /await sending/);
 });
