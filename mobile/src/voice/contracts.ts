@@ -33,6 +33,7 @@ export type VoiceContextValue = {
   refreshIncomingCalls: () => Promise<void>;
   startCall: (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string, photoUrl?: string) => Promise<void>;
   startSecondCall: (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => Promise<void>;
+  startSecondInternalCall: (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => Promise<void>;
   startInternalCall: (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => Promise<void>;
   transferCall: (targetExtensionId: string) => Promise<void>;
   answerWaitingCall: () => Promise<void>;

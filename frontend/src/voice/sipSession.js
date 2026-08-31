@@ -33,7 +33,7 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = []) {
   const inviter = new Inviter(userAgent, target, {
     extraHeaders,
     earlyMedia: false,
-    sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } },
+      sessionDescriptionHandlerOptions: { constraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false } },
   });
   const sending = inviter.invite();
   sending.catch(() => undefined);

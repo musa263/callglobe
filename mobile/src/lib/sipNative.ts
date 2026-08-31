@@ -15,6 +15,12 @@ type VocivoSipNative = {
   invite(target: string, headers?: Array<{ name: string; value: string }>): Promise<string>;
   hangup(callId?: string): Promise<void>;
   answer(callId?: string): Promise<void>;
+  setMuted?(muted: boolean): Promise<void>;
+  setHeld?(held: boolean): Promise<void>;
+  sendDtmf?(digit: string): Promise<void>;
+  refer?(target: string): Promise<void>;
+  swap?(): Promise<void>;
+  merge?(target: string): Promise<string>;
 };
 
 type SipEventHandlers = {
@@ -181,4 +187,69 @@ export async function answerVocivoSip(callId?: string) {
   if (native && nativeRegistered) {
     await native.answer(callId);
   }
+}
+
+export async function setVocivoSipMuted(muted: boolean, session?: Session | null) {
+  const native = vocivoSipModule();
+  if (native && nativeRegistered && native.setMuted) {
+    await native.setMuted(muted);
+    return;
+  }
+  const pc = session?.sessionDescriptionHandler?.peerConnection as {
+    getSenders?: () => Array<{ track?: { kind: string; enabled: boolean } }>;
+    getReceivers?: () => Array<{ track?: { kind: string; enabled: boolean } }>;
+  } | undefined;
+  pc?.getSenders?.()?.forEach((sender) => {
+    if (sender.track?.kind === 'audio') sender.track.enabled = !muted;
+  });
+  pc?.getReceivers?.()?.forEach((receiver) => {
+    if (receiver.track?.kind === 'audio') receiver.track.enabled = true;
+  });
+}
+
+export async function setVocivoSipHeld(held: boolean, session?: Session | null) {
+  const native = vocivoSipModule();
+  if (native && nativeRegistered && native.setHeld) {
+    await native.setHeld(held);
+    return;
+  }
+  if (session && typeof (session as { invite?: (options: unknown) => Promise<unknown> }).invite === 'function') {
+    await (session as { invite: (options: unknown) => Promise<unknown> }).invite({
+      sessionDescriptionHandlerOptions: {
+        constraints: { audio: true, video: false },
+        hold: Boolean(held),
+      },
+    });
+  }
+}
+
+export async function swapVocivoSip() {
+  const native = vocivoSipModule();
+  if (native && nativeRegistered && native.swap) {
+    await native.swap();
+  }
+}
+
+export async function mergeVocivoSip(target: string) {
+  const native = vocivoSipModule();
+  if (native && nativeRegistered && native.merge) {
+    return native.merge(target);
+  }
+  throw new Error('SIP merge is not available on this device.');
+}
+
+export async function sendVocivoSipDtmf(digit: string) {
+  const native = vocivoSipModule();
+  if (native && nativeRegistered && native.sendDtmf) {
+    await native.sendDtmf(digit);
+  }
+}
+
+export async function referVocivoSip(target: string) {
+  const native = vocivoSipModule();
+  if (native && nativeRegistered && native.refer) {
+    await native.refer(target);
+    return;
+  }
+  throw new Error('SIP transfer is not available on this device.');
 }

@@ -15,7 +15,7 @@ final class VocivoSipCallKit: NSObject, CXProviderDelegate {
   private override init() {
     let config = CXProviderConfiguration()
     config.supportsVideo = false
-    config.maximumCallsPerCallGroup = 1
+    config.maximumCallsPerCallGroup = 2
     config.supportedHandleTypes = [.generic, .phoneNumber]
     if let ringtone = Bundle.main.path(forResource: "vocivo_classic", ofType: "wav") {
       config.ringtoneSound = URL(fileURLWithPath: ringtone).lastPathComponent

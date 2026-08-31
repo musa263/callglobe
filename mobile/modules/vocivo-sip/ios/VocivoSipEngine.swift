@@ -28,6 +28,11 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   private var remoteSdp = ""
   private var incomingInvite: VocivoSipMessage?
   private var lastInvite: (target: String, sdp: String, headers: [[String: String]])?
+  private var heldCallId: String?
+  private var heldUuid: UUID?
+  private var heldRemoteSdp = ""
+  private var heldIncomingInvite: VocivoSipMessage?
+  private var heldLastInvite: (target: String, sdp: String, headers: [[String: String]])?
   private var pendingPush: (uuid: UUID, callId: String, from: String, displayName: String, reported: Bool)?
   var onEvent: ((String, [String: Any]) -> Void)?
 
@@ -63,13 +68,17 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       return
     }
     pendingInvite = completion
+    let replacingActive = activeCallId == nil
+    if !replacingActive {
+      parkActiveToHeld()
+    }
     let uuid = UUID()
     activeUuid = uuid
     let handle = target.replacingOccurrences(of: "sip:", with: "").split(separator: "@").first.map(String.init) ?? target
     VocivoSipCallKit.shared.startOutgoing(uuid: uuid, handle: handle, displayName: handle)
     VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
     VocivoSipCallKit.shared.onMute = { _, muted in VocivoSipMedia.shared.setMuted(muted) }
-    _ = VocivoSipMedia.shared.makePeer(iceServers: config?.iceServers ?? [])
+    _ = VocivoSipMedia.shared.makePeer(iceServers: config?.iceServers ?? [], replacingActive: replacingActive)
     VocivoSipMedia.shared.createOffer { [weak self] sdp in
       guard let self, let sdp else {
         completion(.failure(NSError(domain: "VocivoSip", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unable to create SIP offer."])))
@@ -111,12 +120,92 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
 
   func hangup(callId: String?) {
     VocivoSipCallKit.shared.onEnd = nil
+    let targetId = callId ?? activeCallId
+    if targetId == heldCallId, heldCallId != nil {
+      if heldIncomingInvite != nil {
+        sendResponse(heldIncomingInvite, status: "486 Busy Here")
+      } else if let heldCallId {
+        sendBye(callId: heldCallId)
+      }
+      clearHeld()
+      VocivoSipMedia.shared.reset(slot: 1 - VocivoSipMedia.shared.activeSlot)
+      return
+    }
     if incomingInvite != nil, activeCallId != nil {
       sendResponse(incomingInvite, status: "486 Busy Here")
     } else if let callId = activeCallId ?? callId {
       sendBye(callId: callId)
     }
     finishCall()
+  }
+
+  func setMuted(_ muted: Bool) {
+    VocivoSipMedia.shared.setMuted(muted)
+  }
+
+  func setHeld(_ held: Bool) {
+    VocivoSipMedia.shared.setHeld(held)
+  }
+
+  func swapHeld() {
+    guard heldCallId != nil else { return }
+    VocivoSipMedia.shared.swapSlots()
+    let nextHeldId = activeCallId
+    let nextHeldUuid = activeUuid
+    let nextHeldSdp = remoteSdp
+    let nextHeldIncoming = incomingInvite
+    let nextHeldLast = lastInvite
+    activeCallId = heldCallId
+    activeUuid = heldUuid ?? activeUuid
+    remoteSdp = heldRemoteSdp
+    incomingInvite = heldIncomingInvite
+    lastInvite = heldLastInvite
+    heldCallId = nextHeldId
+    heldUuid = nextHeldUuid
+    heldRemoteSdp = nextHeldSdp
+    heldIncomingInvite = nextHeldIncoming
+    heldLastInvite = nextHeldLast
+    VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
+    VocivoSipCallKit.shared.onMute = { _, muted in VocivoSipMedia.shared.setMuted(muted) }
+    VocivoSipCallKit.shared.onAnswer = { [weak self] _ in self?.answer(callId: self?.activeCallId) }
+  }
+
+  func merge(to target: String, completion: @escaping (Result<String, Error>) -> Void) {
+    guard heldCallId != nil, activeCallId != nil else {
+      completion(.failure(NSError(domain: "VocivoSip", code: 5, userInfo: [NSLocalizedDescriptionKey: "Two connected Vocivo calls are required before merging."])))
+      return
+    }
+    let uri = target.hasPrefix("sip:") ? target : "sip:\(target)"
+    if let active = activeCallId {
+      send(method: "REFER", extra: [("Refer-To", "<\(uri)>"), ("Referred-By", "<sip:\(config?.username ?? "")@\(config?.domain ?? "")>")], cseq: inviteCSeq + 1, callId: active)
+    }
+    if let held = heldCallId {
+      send(method: "REFER", extra: [("Refer-To", "<\(uri)>"), ("Referred-By", "<sip:\(config?.username ?? "")@\(config?.domain ?? "")>")], cseq: inviteCSeq + 2, callId: held)
+    }
+    if let active = activeCallId { sendBye(callId: active) }
+    if let held = heldCallId { sendBye(callId: held) }
+    if let endedUuid = heldUuid { VocivoSipCallKit.shared.end(uuid: endedUuid) }
+    VocivoSipCallKit.shared.end(uuid: activeUuid)
+    incomingInvite = nil
+    lastInvite = nil
+    clearHeld()
+    activeCallId = nil
+    VocivoSipMedia.shared.reset()
+    invite(target: uri, headers: [["name": "X-Vocivo-Flow", "value": "conference"]], completion: completion)
+  }
+
+  func sendDtmf(_ digit: String) {
+    let tone = digit.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !tone.isEmpty, let callId = activeCallId else { return }
+    send(method: "INFO", extra: [("Content-Type", "application/dtmf-relay")], body: "Signal=\(tone.prefix(1))\r\nDuration=160\r\n", cseq: inviteCSeq + 1, callId: callId)
+  }
+
+  func refer(target: String) throws {
+    guard let config, let callId = activeCallId, incomingInvite != nil || lastInvite != nil else {
+      throw NSError(domain: "VocivoSip", code: 4, userInfo: [NSLocalizedDescriptionKey: "There is no live SIP call to transfer."])
+    }
+    let uri = target.hasPrefix("sip:") ? target : "sip:\(target)"
+    send(method: "REFER", extra: [("Refer-To", "<\(uri)>"), ("Referred-By", "<sip:\(config.username)@\(config.domain)>")], cseq: inviteCSeq + 1, callId: callId)
   }
 
   func answer(callId: String?) {
@@ -171,8 +260,8 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
         ("To", method == "REGISTER" ? "<sip:\(config.username)@\(config.domain)>" : "<\(uri)>"),
         ("Call-ID", callId ?? registerCallId),
         ("CSeq", "\(seq) \(method)"),
-        ("Contact", "<sip:\(config.username)@\(config.domain);transport=ws>"),
-        ("Allow", "INVITE, ACK, CANCEL, BYE, OPTIONS, NOTIFY"),
+        ("Contact", "<sip:\(config.username)@\(config.domain);transport=ws>;q=0.5"),
+        ("Allow", "INVITE, ACK, CANCEL, BYE, OPTIONS, NOTIFY, REFER, INFO, UPDATE"),
         ("User-Agent", "VocivoSip/1.0"),
         ("Content-Length", "\(body.utf8.count)"),
       ],
@@ -280,8 +369,12 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   }
 
   private func handleIncomingInvite(_ message: VocivoSipMessage) {
-    incomingInvite = message
     let sipCallId = message.header("Call-ID") ?? ""
+    let replacingActive = activeCallId == nil || activeCallId == sipCallId
+    if !replacingActive {
+      parkActiveToHeld()
+    }
+    incomingInvite = message
     activeCallId = sipCallId
     remoteSdp = message.body
     sendResponse(message, status: "100 Trying")
@@ -298,7 +391,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     let uuid = matched ?? headerUuid ?? UUID()
     let alreadyReported = pendingPush?.reported == true && uuid == pendingPush?.uuid
     activeUuid = uuid
-    _ = VocivoSipMedia.shared.makePeer(iceServers: config?.iceServers ?? [])
+    _ = VocivoSipMedia.shared.makePeer(iceServers: config?.iceServers ?? [], replacingActive: replacingActive)
     VocivoSipCallKit.shared.onAnswer = { [weak self] _ in self?.answer(callId: self?.activeCallId) }
     VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
     if !alreadyReported {
@@ -332,17 +425,55 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     )
   }
 
+  private func parkActiveToHeld() {
+    VocivoSipMedia.shared.setHeld(true)
+    heldCallId = activeCallId
+    heldUuid = activeUuid
+    heldRemoteSdp = remoteSdp
+    heldIncomingInvite = incomingInvite
+    heldLastInvite = lastInvite
+    incomingInvite = nil
+    lastInvite = nil
+  }
+
+  private func clearHeld() {
+    heldCallId = nil
+    heldUuid = nil
+    heldRemoteSdp = ""
+    heldIncomingInvite = nil
+    heldLastInvite = nil
+  }
+
+  private func restoreHeld() {
+    activeCallId = heldCallId
+    activeUuid = heldUuid ?? UUID()
+    remoteSdp = heldRemoteSdp
+    incomingInvite = heldIncomingInvite
+    lastInvite = heldLastInvite
+    clearHeld()
+    VocivoSipMedia.shared.swapSlots()
+    VocivoSipMedia.shared.setHeld(false)
+    VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
+    VocivoSipCallKit.shared.onMute = { _, muted in VocivoSipMedia.shared.setMuted(muted) }
+  }
+
   private func finishCall() {
     incomingInvite = nil
     lastInvite = nil
     pendingPush = nil
     let endedId = activeCallId ?? ""
+    let endedUuid = activeUuid
     activeCallId = nil
     remoteSdp = ""
-    VocivoSipMedia.shared.reset()
-    VocivoSipCallKit.shared.onEnd = nil
-    VocivoSipCallKit.shared.end(uuid: activeUuid)
+    VocivoSipMedia.shared.reset(slot: VocivoSipMedia.shared.activeSlot)
+    VocivoSipCallKit.shared.end(uuid: endedUuid)
     onEvent?("onCallEnded", ["callId": endedId])
+    if heldCallId != nil {
+      restoreHeld()
+      return
+    }
+    VocivoSipCallKit.shared.onEnd = nil
+    VocivoSipMedia.shared.reset()
   }
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {

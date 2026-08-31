@@ -5,10 +5,14 @@ import { reportWebVoiceError } from '../voice/telemetry';
 import { sipTargetUri, sipUserFromUri } from '../voice/sipDial';
 import { SessionState } from 'sip.js';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../voice/sipSession';
+import { conferenceSipUri, referSipSession, setSipHeld, setSipMuted } from '../voice/sipCallControl';
 
 export function useSipVoice(token, enabled, identity = {}) {
   const sessionRef = useRef(null);
   const incomingRef = useRef(null);
+  const heldSessionRef = useRef(null);
+  const heldRouteIdRef = useRef(null);
+  const heldIdentityRef = useRef(null);
   const routeIdRef = useRef(null);
   const credentialsRef = useRef(null);
   const [ready, setReady] = useState(false);
@@ -18,6 +22,8 @@ export function useSipVoice(token, enabled, identity = {}) {
   const [incomingCall, setIncomingCall] = useState(null);
   const [state, setState] = useState(null);
   const [muted, setMuted] = useState(false);
+  const [heldCall, setHeldCall] = useState(null);
+  const [conference, setConference] = useState(null);
   const [dialedNumber, setDialedNumber] = useState('');
   const [remoteIdentity, setRemoteIdentity] = useState({ name: 'Phone call', number: '', internal: false, photoUrl: '' });
   const [callStarting, setCallStarting] = useState(false);
@@ -241,7 +247,7 @@ export function useSipVoice(token, enabled, identity = {}) {
   const answer = useCallback(async () => {
     const incoming = incomingRef.current;
     if (!incoming) return;
-    await incoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
+    await incoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false } } });
     sessionRef.current = incoming;
     incomingRef.current = null;
     setCall(incoming);
@@ -260,38 +266,164 @@ export function useSipVoice(token, enabled, identity = {}) {
   const hangup = useCallback(() => {
     stopRingback();
     if (routeIdRef.current) api('/api/voice/cancel', { method: 'POST', body: { routeId: routeIdRef.current } }).catch(() => undefined);
+    if (heldRouteIdRef.current) api('/api/voice/cancel', { method: 'POST', body: { routeId: heldRouteIdRef.current } }).catch(() => undefined);
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
+    hangupSession(heldSessionRef.current);
     setEndedCall({ id: sipSessionId(sessionRef.current), identity: remoteIdentity });
     sessionRef.current = null;
     incomingRef.current = null;
+    heldSessionRef.current = null;
+    heldIdentityRef.current = null;
     routeIdRef.current = null;
+    heldRouteIdRef.current = null;
     setCall(null);
     setIncomingCall(null);
+    setHeldCall(null);
+    setConference(null);
     setState(null);
     setRoutePhase('ended');
     setMediaReady(false);
     setCallStarting(false);
+    setMuted(false);
   }, [hangupSession, remoteIdentity, stopRingback]);
 
   const toggleMute = useCallback(() => {
-    const pc = sessionRef.current?.sessionDescriptionHandler?.peerConnection;
-    pc?.getSenders().forEach((sender) => {
-      if (sender.track?.kind === 'audio') sender.track.enabled = muted;
+    setMuted((value) => {
+      const next = !value;
+      setSipMuted(sessionRef.current, next);
+      return next;
     });
-    setMuted((value) => !value);
-  }, [muted]);
+  }, []);
 
   const toggleHold = useCallback(async () => {
     if (!sessionRef.current) return;
-    if (state === 'held') await sessionRef.current.unhold?.();
-    else await sessionRef.current.hold?.();
-    setState((value) => (value === 'held' ? 'active' : 'held'));
+    const nextHeld = state !== 'held';
+    await setSipHeld(sessionRef.current, nextHeld);
+    setState(nextHeld ? 'held' : 'active');
   }, [state]);
 
-  const unsupported = useCallback(async () => {
-    throw new Error('Conference merge stays on Telnyx Call Control until inbound SIP cutover.');
+  const startSecondCall = useCallback(async (destinationNumber, callerNumber) => {
+    const current = sessionRef.current;
+    if (!current || heldSessionRef.current || conference) throw new Error('Connect the first call before adding another caller.');
+    await setSipHeld(current, true);
+    heldSessionRef.current = current;
+    heldRouteIdRef.current = routeIdRef.current;
+    heldIdentityRef.current = remoteIdentity;
+    setHeldCall({ id: sipSessionId(current), identity: remoteIdentity, routeId: routeIdRef.current, state: 'held' });
+    sessionRef.current = null;
+    try {
+      await startCall(destinationNumber, callerNumber);
+    } catch (error) {
+      sessionRef.current = current;
+      routeIdRef.current = heldRouteIdRef.current;
+      heldSessionRef.current = null;
+      heldRouteIdRef.current = null;
+      heldIdentityRef.current = null;
+      setHeldCall(null);
+      await setSipHeld(current, false);
+      attachSipMedia(current);
+      setCall(current);
+      setState('active');
+      setRoutePhase('connected');
+      throw error;
+    }
+  }, [conference, remoteIdentity, startCall]);
+
+  const startSecondInternalCall = useCallback(async (sipUsername, extension, displayName) => {
+    const current = sessionRef.current;
+    if (!current || heldSessionRef.current || conference) throw new Error('Connect the first call before adding another caller.');
+    await setSipHeld(current, true);
+    heldSessionRef.current = current;
+    heldRouteIdRef.current = routeIdRef.current;
+    heldIdentityRef.current = remoteIdentity;
+    setHeldCall({ id: sipSessionId(current), identity: remoteIdentity, routeId: routeIdRef.current, state: 'held' });
+    sessionRef.current = null;
+    try {
+      await startInternalCall(sipUsername, extension, displayName);
+    } catch (error) {
+      sessionRef.current = current;
+      routeIdRef.current = heldRouteIdRef.current;
+      heldSessionRef.current = null;
+      heldRouteIdRef.current = null;
+      heldIdentityRef.current = null;
+      setHeldCall(null);
+      await setSipHeld(current, false);
+      attachSipMedia(current);
+      setCall(current);
+      setState('active');
+      setRoutePhase('connected');
+      throw error;
+    }
+  }, [conference, remoteIdentity, startInternalCall]);
+
+  const swapCalls = useCallback(async () => {
+    const current = sessionRef.current;
+    const held = heldSessionRef.current;
+    if (!current || !held || conference) throw new Error('There is no held call to swap.');
+    const heldIdentity = heldIdentityRef.current;
+    await setSipHeld(current, true);
+    await setSipHeld(held, false);
+    attachSipMedia(held);
+    heldSessionRef.current = current;
+    const nextHeldRoute = routeIdRef.current;
+    const nextHeldIdentity = remoteIdentity;
+    routeIdRef.current = heldRouteIdRef.current;
+    heldRouteIdRef.current = nextHeldRoute;
+    heldIdentityRef.current = nextHeldIdentity;
+    sessionRef.current = held;
+    setHeldCall({ id: sipSessionId(current), identity: nextHeldIdentity, routeId: nextHeldRoute, state: 'held' });
+    setCall(held);
+    setRemoteIdentity(heldIdentity || remoteIdentity);
+    setState('active');
+    setRoutePhase('connected');
+  }, [conference, remoteIdentity]);
+
+  const mergeCalls = useCallback(async () => {
+    const active = sessionRef.current;
+    const held = heldSessionRef.current;
+    const userAgent = credentialsRef.current?.userAgent;
+    const domain = userAgent?.configuration?.uri?.host || '';
+    if (!active || !held || !userAgent || !domain) throw new Error('Two connected Vocivo calls are required before merging.');
+    const conferenceId = `m${Date.now().toString(36)}`;
+    const target = conferenceSipUri(conferenceId, domain);
+    const participants = [
+      { id: sipSessionId(held), routeId: heldRouteIdRef.current, ...(heldIdentityRef.current || {}) },
+      { id: sipSessionId(active), routeId: routeIdRef.current, ...remoteIdentity },
+    ];
+    const room = await inviteSipTarget(userAgent, target, ['X-Vocivo-Flow: conference']);
+    attachSipMedia(room);
+    await referSipSession(active, target);
+    await referSipSession(held, target);
+    hangupSession(active);
+    hangupSession(held);
+    sessionRef.current = room;
+    heldSessionRef.current = null;
+    heldRouteIdRef.current = null;
+    heldIdentityRef.current = null;
+    setHeldCall(null);
+    setCall(room);
+    setConference({ id: conferenceId, participants });
+    setRemoteIdentity({ name: 'Conference', number: 'Conference', internal: true, photoUrl: '' });
+    setState('active');
+    setRoutePhase('connected');
+    setMediaReady(true);
+  }, [hangupSession, remoteIdentity]);
+
+  const removeConferenceParticipant = useCallback(async () => {
+    throw new Error('Remove the conference by hanging up. SIP conferences do not use Telnyx participant control.');
   }, []);
+
+  const transferCall = useCallback(async (targetExtensionId) => {
+    const session = sessionRef.current;
+    const domain = credentialsRef.current?.userAgent?.configuration?.uri?.host || '';
+    if (!session || !domain) throw new Error('There is no live SIP call to transfer.');
+    const result = await api('/api/voice/directory');
+    const member = (result.users || []).find((user) => user.id === targetExtensionId);
+    if (!member?.sipUsername) throw new Error('That colleague is not available.');
+    await referSipSession(session, sipTargetUri(member.sipUsername, domain));
+    hangup();
+  }, [hangup]);
 
   return {
     ready,
@@ -299,15 +431,15 @@ export function useSipVoice(token, enabled, identity = {}) {
     error,
     call,
     incomingCall,
-    heldCall: null,
-    conference: null,
+    heldCall,
+    conference,
     remoteIdentity,
-    state: routePhase === 'connected' ? 'active' : routePhase || state,
+    state: state === 'held' ? 'held' : (routePhase === 'connected' ? 'active' : routePhase || state),
     muted,
     dialedNumber,
     endedCall,
     callStarting,
-    canMerge: false,
+    canMerge: Boolean(heldCall && !conference),
     connected: mediaReady || state === 'held',
     incoming: Boolean(incomingCall),
     active: Boolean(call) && !incomingCall,
@@ -323,12 +455,12 @@ export function useSipVoice(token, enabled, identity = {}) {
     resumeAudio: async () => undefined,
     startCall,
     startInternalCall,
-    startSecondCall: unsupported,
-    startSecondInternalCall: unsupported,
-    swapCalls: unsupported,
-    mergeCalls: unsupported,
-    removeConferenceParticipant: unsupported,
-    transferCall: unsupported,
+    startSecondCall,
+    startSecondInternalCall,
+    swapCalls,
+    mergeCalls,
+    removeConferenceParticipant,
+    transferCall,
     sendDtmf: (digit) => sessionRef.current?.info?.({ contentType: 'application/dtmf-relay', body: `Signal=${digit}\r\nDuration=250` }),
     answer,
     decline,

@@ -1,5 +1,11 @@
 <include>
   <context name="default">
+    <extension name="vocivo-conference">
+      <condition field="destination_number" expression="^conf-([A-Za-z0-9_-]+)$">
+        <action application="answer"/>
+        <action application="conference" data="$1@default"/>
+      </condition>
+    </extension>
     <extension name="vocivo-internal-aor">
       <condition field="destination_number" expression="^([A-Za-z0-9_.-]{2,64})$">
         <action application="set" data="hangup_after_bridge=true"/>

@@ -75,5 +75,43 @@ public final class VocivoSipModule: Module {
       VocivoSipEngine.shared.answer(callId: callId)
       promise.resolve(nil)
     }
+
+    AsyncFunction("setMuted") { (muted: Bool, promise: Promise) in
+      VocivoSipEngine.shared.setMuted(muted)
+      promise.resolve(nil)
+    }
+
+    AsyncFunction("setHeld") { (held: Bool, promise: Promise) in
+      VocivoSipEngine.shared.setHeld(held)
+      promise.resolve(nil)
+    }
+
+    AsyncFunction("sendDtmf") { (digit: String, promise: Promise) in
+      VocivoSipEngine.shared.sendDtmf(digit)
+      promise.resolve(nil)
+    }
+
+    AsyncFunction("swap") { (promise: Promise) in
+      VocivoSipEngine.shared.swapHeld()
+      promise.resolve(nil)
+    }
+
+    AsyncFunction("merge") { (target: String, promise: Promise) in
+      VocivoSipEngine.shared.merge(to: target) { result in
+        switch result {
+        case .success(let callId): promise.resolve(callId)
+        case .failure(let error): promise.reject("SIP_MERGE", error.localizedDescription)
+        }
+      }
+    }
+
+    AsyncFunction("refer") { (target: String, promise: Promise) in
+      do {
+        try VocivoSipEngine.shared.refer(target: target)
+        promise.resolve(nil)
+      } catch {
+        promise.reject("SIP_REFER", error.localizedDescription)
+      }
+    }
   }
 }
