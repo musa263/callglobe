@@ -16,7 +16,7 @@ export type PbxConfig = {
   numberAssignments: Record<string, {
     organizationId: string;
     label?: string;
-    source?: 'owned' | 'verified';
+    source?: 'owned' | 'verified' | 'sip_trunk';
     destinationType?: 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr';
     destinationId?: string;
     messagingEnabled?: boolean;

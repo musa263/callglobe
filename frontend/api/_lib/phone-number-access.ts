@@ -1,4 +1,5 @@
 import type { VocivoSession } from './auth.js';
+import { numberReceivesCalls, numberSource } from './inbound-billing.js';
 import { readPbxConfig, type PbxConfig } from './pbx-config-store.js';
 import { telnyx } from './telnyx.js';
 import { normalizeE164, sessionCanAccessNumber, sessionOrganizationId } from './tenancy.js';
@@ -33,16 +34,17 @@ export function assignedNumbersForOrganization(config: PbxConfig, organizationId
   return Object.entries(config.numberAssignments)
     .filter(([, assignment]) => assignment.organizationId === organizationId)
     .map(([phoneNumber, assignment]) => {
-      const source = assignment.source || (assignment.destinationType ? 'owned' : 'verified');
+      const source = numberSource(assignment);
       return {
         id: `assigned:${phoneNumber}`,
         phone_number: phoneNumber,
-        label: assignment.label || (source === 'verified' ? 'Verified caller ID' : 'Vocivo number'),
+        label: assignment.label || (source === 'sip_trunk' ? 'SIP trunk number' : source === 'verified' ? 'Verified caller ID' : 'Vocivo number'),
         country_code: null,
         status: 'active',
-        receives_calls: source === 'owned' && Boolean(assignment.destinationType),
+        receives_calls: numberReceivesCalls(assignment),
         messaging_enabled: source === 'owned' && assignment.messagingEnabled === true,
         source,
+        inbound_billing: source === 'sip_trunk' || source === 'owned' ? 'free' : 'none',
       };
     });
 }

@@ -38,7 +38,7 @@
     </extension>
     <extension name="vocivo-inbound-call-control-hold">
       <condition field="destination_number" expression=".*">
-        <action application="log" data="WARNING Vocivo inbound DID stays on Telnyx Call Control until VOCIVO_SIP_INBOUND=1"/>
+        <action application="log" data="WARNING Vocivo inbound DID has no SIP contacts or is still on Call Control"/>
         <action application="respond" data="480 Inbound remains on Call Control"/>
         <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>

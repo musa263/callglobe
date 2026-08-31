@@ -85,6 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // carrier wallet. SIP-edge internal calls fork locally and must not wait on /balance.
     if (voiceRouteNeedsTelnyxCredit(requestedFlow)) await assertTelnyxVoiceReady();
     if (requestedFlow !== 'internal') {
+      // Incoming PSTN is never billed to the tenant wallet. This route is outbound or internal only.
       const wallet = await readTenantWallet(organizationId);
       const blocked = outboundWalletBlockReason(wallet);
       if (blocked) return res.status(402).json({ error: blocked });

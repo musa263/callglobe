@@ -7,6 +7,8 @@ import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.j
 import { getExtension } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
 import { invalidatePhoneNumberCache } from '../phone-number-access.js';
+import { isSipTrunkNumberId, sipTrunkNumberId } from '../inbound-billing.js';
+import { sipDomain } from '../voice-provider.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 
@@ -95,15 +97,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .flatMap((item) => successfulOrderNumbers(item)));
       const assignedConfig = await readPbxConfig();
       const visibleNumbers = (numbersPayload.data ?? []).filter((item) => assignedConfig.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
+      const telnyxPhones = new Set(visibleNumbers.map((item) => item.phone_number));
+      const sipTrunkNumbers = Object.entries(assignedConfig.numberAssignments)
+        .filter(([, assignment]) => assignment.organizationId === activeOrganizationId && assignment.source === 'sip_trunk')
+        .map(([phoneNumber, assignment]) => ({
+          id: sipTrunkNumberId(phoneNumber),
+          phoneNumber,
+          status: 'active',
+          country: '',
+          connectionName: 'Bring-your-own SIP',
+          messagingProfileId: '',
+          tags: ['sip_trunk'],
+          purchasedAt: '',
+          inboundBilling: 'free',
+          assignment,
+        }));
       const visibleProfileIds = new Set(visibleNumbers.map((item) => String(item.messaging_profile_id || '')).filter(Boolean));
       const visibleProfiles = access.superadmin ? profilesPayload.data ?? [] : (profilesPayload.data ?? []).filter((item) => visibleProfileIds.has(String(item.id || '')));
       return res.status(200).json({
-        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: assignedConfig.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
+        sipInboundHost: sipDomain(),
+        sipInboundPort: 5060,
+        inboundWalletCharge: false,
+        numbers: [
+          ...visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, inboundBilling: 'carrier', assignment: assignedConfig.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
+          ...sipTrunkNumbers.filter((item) => !telnyxPhones.has(item.phoneNumber)),
+        ],
         orders: (ordersPayload.data ?? []).filter((item) => String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
         messagingProfiles: visibleProfiles.map((item) => ({ id: item.id, name: item.name || item.id, ...(access.superadmin ? { webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' } : {}) })),
       });
     }
     if (req.method === 'POST') {
+      if (req.body?.action === 'bring_your_own' || req.body?.source === 'sip_trunk') {
+        const phoneNumber = text(req.body?.phoneNumber, 24);
+        if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber)) return res.status(400).json({ error: 'Enter the number in E.164 format, for example +15165550100.' });
+        const destinationType = ['main', 'extension', 'ring_group'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' : 'main';
+        const destinationId = text(req.body?.destinationId, 80);
+        if (destinationType !== 'main' && !destinationId) return res.status(400).json({ error: 'Choose an inbound destination.' });
+        if (destinationType === 'extension') {
+          const extension = await getExtension(destinationId).catch(() => null);
+          if (!extension || extension.status !== 'active' || extension.organizationId !== activeOrganizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
+        }
+        if (destinationType === 'ring_group') {
+          const organizationPbx = pbxForOrganization(config, activeOrganizationId);
+          if (!organizationPbx.callHandling.ringGroups.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured ring group.' });
+        }
+        const existing = config.numberAssignments[phoneNumber];
+        if (existing?.organizationId && existing.organizationId !== activeOrganizationId) return res.status(409).json({ error: 'This number already belongs to another organization.' });
+        if (subscriptionAccess.superadmin === false) {
+          const assigned = Object.values(config.numberAssignments).filter((assignment) => assignment.organizationId === activeOrganizationId).length;
+          if (!existing && assigned + 1 > subscriptionAccess.plan.limits.phoneNumbers) return res.status(409).json({ error: `Your ${subscriptionAccess.plan.name} plan includes ${subscriptionAccess.plan.limits.phoneNumbers} phone numbers.` });
+        }
+        await assignNumberToOrganization(phoneNumber, activeOrganizationId, {
+          source: 'sip_trunk',
+          destinationType,
+          destinationId: destinationId || undefined,
+          label: text(req.body?.label, 80) || 'SIP trunk number',
+          messagingEnabled: false,
+        });
+        return res.status(201).json({
+          number: { id: sipTrunkNumberId(phoneNumber), phoneNumber, source: 'sip_trunk', inboundBilling: 'free' },
+          sipInboundHost: sipDomain(),
+          sipInboundPort: 5060,
+        });
+      }
       if (req.body?.confirmPurchase !== true) return res.status(400).json({ error: 'Explicit purchase confirmation is required.' });
       const phoneNumbers = Array.isArray(req.body?.phoneNumbers) ? req.body.phoneNumbers.map((value: unknown) => text(value, 24)).filter((value: string) => /^\+[1-9]\d{6,14}$/.test(value)).slice(0, 10) : [];
       if (!phoneNumbers.length) return res.status(400).json({ error: 'Choose at least one valid phone number.' });
@@ -129,8 +185,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const id = text(req.body?.id, 80);
       const phoneNumber = text(req.body?.phoneNumber, 24);
       if (!id || !/^\+[1-9]\d{6,14}$/.test(phoneNumber)) return res.status(400).json({ error: 'Phone number ID and E.164 number are required.' });
-      if (id === requiredEnv('TELNYX_PHONE_NUMBER_ID')) return res.status(409).json({ error: 'This is the primary Vocivo service number. Assign a replacement before releasing it.' });
       if (config.numberAssignments[phoneNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
+      if (isSipTrunkNumberId(id) || config.numberAssignments[phoneNumber]?.source === 'sip_trunk') {
+        await removeNumberAssignment(phoneNumber);
+        return res.status(200).json({ released: true, source: 'sip_trunk' });
+      }
+      if (id === requiredEnv('TELNYX_PHONE_NUMBER_ID')) return res.status(409).json({ error: 'This is the primary Vocivo service number. Assign a replacement before releasing it.' });
       const currentResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
       const currentPayload = await currentResponse.json() as { data?: { phone_number?: string; deletion_lock_enabled?: boolean } };
       if (currentPayload.data?.phone_number !== phoneNumber) return res.status(409).json({ error: 'The number no longer matches this inventory record. Refresh and try again.' });
@@ -143,6 +203,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const id = text(req.body?.id, 80);
     if (!id) return res.status(400).json({ error: 'Phone number ID is required.' });
+    const requestedOrganizationId = text(req.body?.organizationId, 50);
+    const organizationId = access.superadmin ? requestedOrganizationId || activeOrganizationId : activeOrganizationId;
+    if (organizationId && !config.organizations.some((item) => item.id === organizationId && item.status === 'active')) return res.status(400).json({ error: 'Choose an active organization.' });
+    const destinationType = ['main', 'extension', 'ring_group', 'queue', 'ivr'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr' : 'main';
+    const destinationId = text(req.body?.destinationId, 80);
+    if (organizationId && destinationType !== 'main' && !destinationId) return res.status(400).json({ error: 'Choose an inbound destination.' });
+    if (organizationId && destinationType === 'extension') {
+      const extension = await getExtension(destinationId).catch(() => null);
+      if (!extension || extension.status !== 'active' || extension.organizationId !== organizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
+    }
+    if (organizationId && ['ring_group', 'queue', 'ivr'].includes(destinationType)) {
+      const organizationPbx = pbxForOrganization(config, organizationId);
+      const collection = destinationType === 'ring_group' ? organizationPbx.callHandling.ringGroups : destinationType === 'queue' ? organizationPbx.callHandling.queues : organizationPbx.callHandling.ivrs;
+      if (!collection.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured inbound destination.' });
+    }
+    if (isSipTrunkNumberId(id)) {
+      if (['queue', 'ivr'].includes(destinationType)) return res.status(400).json({ error: 'Bring-your-own SIP numbers ring phones on the Vocivo SIP edge. Voice menus and queues stay on carrier Call Control numbers.' });
+      const phoneNumber = text(req.body?.phoneNumber, 24) || id.slice('sip-trunk:'.length);
+      if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber) || config.numberAssignments[phoneNumber]?.organizationId !== activeOrganizationId) {
+        return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
+      }
+      await assignNumberToOrganization(phoneNumber, organizationId, {
+        source: 'sip_trunk',
+        destinationType: destinationType === 'queue' || destinationType === 'ivr' ? 'main' : destinationType,
+        destinationId: destinationId || undefined,
+        messagingEnabled: false,
+      });
+      return res.status(200).json({ number: { id, phoneNumber, source: 'sip_trunk', inboundBilling: 'free' } });
+    }
     const ownedResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
     const owned = await ownedResponse.json() as { data?: { phone_number?: string } };
     const ownedNumber = text(owned.data?.phone_number, 24);
@@ -164,21 +253,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body.messaging_profile_id = requestedProfileId || null;
     }
     if (Array.isArray(req.body?.tags)) body.tags = req.body.tags.map((item: unknown) => text(item, 50)).filter(Boolean).slice(0, 20);
-    const requestedOrganizationId = text(req.body?.organizationId, 50);
-    const organizationId = access.superadmin ? requestedOrganizationId || activeOrganizationId : activeOrganizationId;
-    if (organizationId && !config.organizations.some((item) => item.id === organizationId && item.status === 'active')) return res.status(400).json({ error: 'Choose an active organization.' });
-    const destinationType = ['main', 'extension', 'ring_group', 'queue', 'ivr'].includes(req.body?.destinationType) ? req.body.destinationType as 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr' : 'main';
-    const destinationId = text(req.body?.destinationId, 80);
-    if (organizationId && destinationType !== 'main' && !destinationId) return res.status(400).json({ error: 'Choose an inbound destination.' });
-    if (organizationId && destinationType === 'extension') {
-      const extension = await getExtension(destinationId).catch(() => null);
-      if (!extension || extension.status !== 'active' || extension.organizationId !== organizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
-    }
-    if (organizationId && ['ring_group', 'queue', 'ivr'].includes(destinationType)) {
-      const organizationPbx = pbxForOrganization(config, organizationId);
-      const collection = destinationType === 'ring_group' ? organizationPbx.callHandling.ringGroups : destinationType === 'queue' ? organizationPbx.callHandling.queues : organizationPbx.callHandling.ivrs;
-      if (!collection.some((item) => item.id === destinationId)) return res.status(400).json({ error: 'Choose a configured inbound destination.' });
-    }
     const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
     const payload = await response.json() as { data?: Record<string, unknown> };
     const phoneNumber = text((payload.data as { phone_number?: unknown } | undefined)?.phone_number, 24);

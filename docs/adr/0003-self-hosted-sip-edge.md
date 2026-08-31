@@ -14,11 +14,11 @@ Inbound IVR, queues, voicemail, AI receptionist, and conferences already live in
 1. Ship `services/sip` as the Vocivo SIP edge. Internal AORs fork registered contacts. Outbound E.164 bridges to the Telnyx SIP gateway.
 2. Default `VOCIVO_VOICE_EDGE=telnyx`. Web SIP.js and iOS native SIP are used only when the flag is `sip`.
 3. iOS uses the Vocivo SIP CallKit module for origination and internal SIP when `VOCIVO_VOICE_EDGE=sip`. Inbound DIDs stay on Telnyx Call Control / PushKit. Do not replace Telnyx’s VoIP push registry.
-4. Inbound DIDs stay on the Telnyx Call Control application until `VOCIVO_SIP_INBOUND=1` **and** the DID is assigned to the droplet IP connection. FreeSWITCH then looks up `/api/voice/sip-inbound` and forks extension contacts. IVR/queue/voicemail destination types stay on Call Control even when the flag is on.
+4. **Bring-your-own SIP numbers** (`source: sip_trunk`) inbound on Kamailio/FreeSWITCH with **no tenant wallet charge**. Companies point any carrier DID at `sip.vocivo.app`. Telnyx-owned Call Control numbers stay on the Voice API until `VOCIVO_SIP_INBOUND=1`; IVR/queue/AI on those carrier numbers stay Call Control. Incoming minutes are never debited from a Vocivo wallet.
 
 ## Consequences
 
 - Production TestFlight remains on Telnyx park + Call Control.
 - Internal media on the SIP edge does not traverse Telnyx.
 - PSTN on the SIP edge is SIP origination + carrier minutes, not Call Control Dial/bridge.
-- Flipping numbers onto the FQDN trunk is a later operator step after web SIP and killed-state ring pass.
+- Flipping Telnyx-owned numbers onto the FQDN trunk is a later operator step. Customer SIP numbers inbound immediately when assigned as `sip_trunk`.
