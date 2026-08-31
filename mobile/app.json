@@ -11,10 +11,6 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "app.vocivo.mobile",
-      "associatedDomains": [
-        "applinks:vocivo.app",
-        "applinks:www.vocivo.app"
-      ],
       "infoPlist": {
         "NSCameraUsageDescription": "Vocivo may use your camera for compatible calling features when you grant permission.",
         "NSContactsUsageDescription": "Vocivo uses your contacts so you can quickly call or message people you choose.",
