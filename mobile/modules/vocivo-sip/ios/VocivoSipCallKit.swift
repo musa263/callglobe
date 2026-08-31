@@ -2,7 +2,7 @@ import AVFoundation
 import CallKit
 import Foundation
 
-/// CallKit for Vocivo SIP legs only. Inbound DIDs stay on Telnyx Call Control / PushKit.
+/// CallKit for Vocivo SIP legs. Incoming VoIP pushes reuse this provider; Telnyx keeps the single PKPushRegistry.
 final class VocivoSipCallKit: NSObject, CXProviderDelegate {
   static let shared = VocivoSipCallKit()
 

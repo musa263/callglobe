@@ -18,8 +18,8 @@ type VocivoSipNative = {
 };
 
 type SipEventHandlers = {
-  onIncomingCall?: (event: { callId?: string; from?: string; displayName?: string }) => void;
-  onCallConnected?: (event: { callId?: string }) => void;
+  onIncomingCall?: (event: { callId?: string; from?: string; displayName?: string; uuid?: string }) => void;
+  onCallConnected?: (event: { callId?: string; uuid?: string }) => void;
   onCallRinging?: (event: { callId?: string }) => void;
   onCallEnded?: (event: { callId?: string }) => void;
   onRegistered?: () => void;

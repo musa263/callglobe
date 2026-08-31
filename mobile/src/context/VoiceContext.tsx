@@ -566,6 +566,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         setActiveCall((current) => current && (!event.callId || current.id === event.callId)
           ? { ...current, phase: 'active', connectedAt: current.connectedAt || Date.now() }
           : current);
+        if (event.callId) {
+          api.post('/api/voice/sip-wakeup', { action: 'answered', callId: event.callId, uuid: event.uuid }).catch(() => undefined);
+        }
       },
       onCallEnded: (event) => {
         setActiveCall((current) => current && (!event.callId || current.id === event.callId) ? null : current);

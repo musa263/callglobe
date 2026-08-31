@@ -16,7 +16,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-`SIP_EDGE_SECRET` must match Vercel. Kamailio authenticates REGISTER against `POST /api/voice/sip-auth`. Missed contacts call `POST /api/voice/sip-wakeup`.
+`SIP_EDGE_SECRET` must match Vercel. Kamailio authenticates REGISTER against `POST /api/voice/sip-auth`. Missed contacts call `POST /api/voice/sip-wakeup` (APNs VoIP + web push), then wait for REGISTER before 480.
 
 Registered web E.164 INVITEs are bridged to `sofia/gateway/telnyx/+E164`. FreeSWITCH `public` treats numbers from this host as outbound origination; numbers arriving from Telnyx stay on the inbound DID path.
 

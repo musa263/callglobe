@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   s.source_files   = '**/*.{h,m,swift}'
   s.dependency 'ExpoModulesCore'
   s.dependency 'JitsiWebRTC', '~> 124.0.0'
-  s.frameworks     = 'CallKit', 'AVFoundation', 'AudioToolbox'
+  s.frameworks     = 'CallKit', 'AVFoundation', 'AudioToolbox', 'PushKit'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'SWIFT_COMPILATION_MODE' => 'wholemodule'

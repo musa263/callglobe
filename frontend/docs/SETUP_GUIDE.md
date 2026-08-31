@@ -36,6 +36,10 @@ TELNYX_ICE_SERVERS_JSON=
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:security@vocivo.com
+APNS_KEY_ID=
+APNS_TEAM_ID=
+APNS_AUTH_KEY=
+APNS_TOPIC=app.vocivo.mobile.voip
 VITE_APP_URL=https://vocivo.app
 ```
 

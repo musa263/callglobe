@@ -28,6 +28,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   private var remoteSdp = ""
   private var incomingInvite: VocivoSipMessage?
   private var lastInvite: (target: String, sdp: String, headers: [[String: String]])?
+  private var pendingPush: (uuid: UUID, callId: String, from: String, displayName: String, reported: Bool)?
   var onEvent: ((String, [String: Any]) -> Void)?
 
   func register(config: VocivoSipConfig, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -78,7 +79,35 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     }
   }
 
-  func hangup(callId: String?) {
+  func handleVoipPush(_ dictionary: [AnyHashable: Any], completion: @escaping () -> Void) {
+    let uuid = UUID(uuidString: dictionary["uuid"] as? String ?? "") ?? UUID()
+    let callId = dictionary["callId"] as? String ?? ""
+    if dictionary["cancelled"] as? String == "1" {
+      if pendingPush?.uuid == uuid || activeUuid == uuid {
+        hangup(callId: callId)
+      } else {
+        VocivoSipCallKit.shared.end(uuid: uuid)
+      }
+      completion()
+      return
+    }
+    let from = dictionary["from"] as? String ?? "sip"
+    let display = dictionary["callerName"] as? String ?? from
+    pendingPush = (uuid, callId, from, display, true)
+    activeUuid = uuid
+    activeCallId = callId
+    VocivoSipCallKit.shared.onAnswer = { [weak self] _ in self?.answer(callId: self?.activeCallId) }
+    VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
+    VocivoSipCallKit.shared.reportIncoming(uuid: uuid, handle: from, displayName: display) { _ in
+      completion()
+    }
+    onEvent?("onIncomingCall", ["callId": callId, "from": from, "displayName": display, "uuid": uuid.uuidString])
+    if config == nil, let stored = VocivoSipCredentials.load() {
+      register(config: stored) { _ in }
+    } else if socket == nil, let config {
+      register(config: config) { _ in }
+    }
+  }
     VocivoSipCallKit.shared.onEnd = nil
     if incomingInvite != nil, activeCallId != nil {
       sendResponse(incomingInvite, status: "486 Busy Here")
@@ -94,7 +123,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       VocivoSipMedia.shared.createAnswer { [weak self] sdp in
         guard let self, let sdp else { return }
         self.sendResponse(invite, status: "200 OK", body: sdp, contentType: "application/sdp")
-        self.onEvent?("onCallConnected", ["callId": self.activeCallId ?? ""])
+        self.onEvent?("onCallConnected", ["callId": self.activeCallId ?? "", "uuid": self.activeUuid.uuidString])
       }
     }
   }
@@ -240,7 +269,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
           VocivoSipMedia.shared.setRemoteSdp(message.body, type: .answer) {}
         }
         VocivoSipCallKit.shared.reportOutgoingConnected(uuid: activeUuid)
-        onEvent?("onCallConnected", ["callId": activeCallId ?? ""])
+        onEvent?("onCallConnected", ["callId": activeCallId ?? "", "uuid": activeUuid.uuidString])
         sendAck(message)
       } else if code >= 400 {
         finishCall()
@@ -250,20 +279,30 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
 
   private func handleIncomingInvite(_ message: VocivoSipMessage) {
     incomingInvite = message
-    activeCallId = message.header("Call-ID")
+    let sipCallId = message.header("Call-ID") ?? ""
+    activeCallId = sipCallId
     remoteSdp = message.body
     sendResponse(message, status: "100 Trying")
     sendResponse(message, status: "180 Ringing")
     let from = message.header("From") ?? "Incoming call"
     let handle = from.slice(from: "sip:", to: "@") ?? "sip"
     let display = from.slice(from: "\"", to: "\"") ?? handle
-    let uuid = UUID()
+    let headerUuid = message.header("X-Vocivo-Call-UUID").flatMap { UUID(uuidString: $0) }
+    let matched = pendingPush.flatMap { pending -> UUID? in
+      if !pending.callId.isEmpty && pending.callId == sipCallId { return pending.uuid }
+      if headerUuid == pending.uuid { return pending.uuid }
+      return nil
+    }
+    let uuid = matched ?? headerUuid ?? UUID()
+    let alreadyReported = pendingPush?.reported == true && uuid == pendingPush?.uuid
     activeUuid = uuid
     _ = VocivoSipMedia.shared.makePeer(iceServers: config?.iceServers ?? [])
     VocivoSipCallKit.shared.onAnswer = { [weak self] _ in self?.answer(callId: self?.activeCallId) }
     VocivoSipCallKit.shared.onEnd = { [weak self] _ in self?.hangup(callId: nil) }
-    VocivoSipCallKit.shared.reportIncoming(uuid: uuid, handle: handle, displayName: display) { _ in }
-    onEvent?("onIncomingCall", ["callId": activeCallId ?? "", "from": handle, "displayName": display])
+    if !alreadyReported {
+      VocivoSipCallKit.shared.reportIncoming(uuid: uuid, handle: handle, displayName: display) { _ in }
+    }
+    onEvent?("onIncomingCall", ["callId": sipCallId, "from": handle, "displayName": display, "uuid": uuid.uuidString])
   }
 
   private func sendAck(_ response: VocivoSipMessage) {
@@ -294,6 +333,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   private func finishCall() {
     incomingInvite = nil
     lastInvite = nil
+    pendingPush = nil
     let endedId = activeCallId ?? ""
     activeCallId = nil
     remoteSdp = ""

@@ -34,14 +34,16 @@ public final class VocivoSipModule: Module {
           return RTCIceServer(urlStrings: urls, username: item["username"] as? String, credential: item["credential"] as? String)
         }
       }
-      VocivoSipEngine.shared.register(config: VocivoSipConfig(
+      let sipConfig = VocivoSipConfig(
         username: username,
         password: password,
         domain: domain,
         wsUri: wsUri,
         displayName: (config["displayName"] as? String) ?? username,
         iceServers: ice
-      )) { result in
+      )
+      VocivoSipCredentials.store(sipConfig)
+      VocivoSipEngine.shared.register(config: sipConfig) { result in
         switch result {
         case .success: promise.resolve(nil)
         case .failure(let error): promise.reject("SIP_REGISTER", error.localizedDescription)
@@ -50,6 +52,7 @@ public final class VocivoSipModule: Module {
     }
 
     AsyncFunction("unregister") { (promise: Promise) in
+      VocivoSipCredentials.clear()
       VocivoSipEngine.shared.unregister()
       promise.resolve(nil)
     }
