@@ -33,3 +33,32 @@ export function digestMatches(ha1: string, challenge: DigestChallenge) {
   const supplied = Buffer.from(challenge.response, 'utf8');
   return expected.length === supplied.length && timingSafeEqual(expected, supplied);
 }
+
+export function parseDigestAuthorization(header: string, method = 'REGISTER'): DigestChallenge | null {
+  const raw = header.trim();
+  if (!raw) return null;
+  const value = raw.replace(/^Digest\s+/i, '');
+  const fields: Record<string, string> = {};
+  const token = /([a-z][a-z0-9_-]*)\s*=\s*(?:"([^"]*)"|([^,\s]+))/gi;
+  let match: RegExpExecArray | null;
+  while ((match = token.exec(value))) {
+    fields[match[1].toLowerCase()] = match[2] ?? match[3] ?? '';
+  }
+  const username = fields.username || '';
+  const realm = fields.realm || '';
+  const nonce = fields.nonce || '';
+  const uri = fields.uri || '';
+  const response = fields.response || '';
+  if (!username || !realm || !nonce || !uri || !response) return null;
+  return {
+    username,
+    realm,
+    nonce,
+    uri,
+    response,
+    method: method.toUpperCase() || 'REGISTER',
+    cnonce: fields.cnonce || undefined,
+    nc: fields.nc || undefined,
+    qop: fields.qop || undefined,
+  };
+}

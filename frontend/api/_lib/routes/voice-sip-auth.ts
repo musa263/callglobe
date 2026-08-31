@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { digestMatches, type DigestChallenge } from '../sip-digest.js';
+import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredential } from '../sip-credential-store.js';
 import { sipEdgeAuthorized } from '../sip-edge-auth.js';
 
@@ -13,7 +13,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
   try {
     if (!sipEdgeAuthorized(req)) return res.status(401).json({ error: 'SIP edge authentication failed.', ok: false });
-    const challenge: DigestChallenge = {
+    const fromHeader = parseDigestAuthorization(text(req.body?.authorization, 1200), text(req.body?.method, 16) || 'REGISTER');
+    const challenge: DigestChallenge = fromHeader || {
       username: text(req.body?.username, 80),
       realm: text(req.body?.realm, 120),
       nonce: text(req.body?.nonce, 200),
