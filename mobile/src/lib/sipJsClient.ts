@@ -32,6 +32,13 @@ export function sipDomain() {
   return credentials?.domain || '';
 }
 
+export function markExternalSipReady(domain: string, ready = true) {
+  credentials = ready
+    ? { username: '', password: '', domain, wsUri: '', displayName: '' }
+    : null;
+  emitReady(ready);
+}
+
 export function onSipReady(listener: (ready: boolean) => void) {
   readyListeners.add(listener);
   listener(sipUserAgentReady());

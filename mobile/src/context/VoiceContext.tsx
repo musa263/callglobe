@@ -21,7 +21,8 @@ import { inviteHeader, visibleCallAddress } from '../voice/callIdentity';
 import { toLifecycleState, toUiCallPhase, waitForCallState } from '../voice/callState';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from '../voice/contracts';
 import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnection, waitForVoicePushToken } from '../voice/session';
-import { hangupSipSession, onSipReady, setSipIncomingHandler, sipDomain, sipInvite, sipSessionId, sipUserAgentReady, SessionState } from '../lib/sipJsClient';
+import { answerVocivoSip, hangupVocivoSip, inviteVocivoSip, onVocivoSipReady, sipClientReady, sipDomain, subscribeVocivoSipEvents } from '../lib/sipNative';
+import { setSipIncomingHandler, sipSessionId, SessionState } from '../lib/sipJsClient';
 import type { Invitation, Session } from 'sip.js';
 import { useVoiceRegistration } from '../voice/useVoiceRegistration';
 import { useAuth } from './AuthContext';
@@ -38,7 +39,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pushRegistration, setPushRegistration] = useState<VoiceContextValue['pushRegistration']>('registering');
-  const [sipReady, setSipReady] = useState(sipUserAgentReady());
+  const [sipReady, setSipReady] = useState(sipClientReady());
   const callRef = useRef<Call | null>(null);
   const callMetaRef = useRef(new Map<string, Partial<ActiveCall>>());
   const callRouteIdsRef = useRef(new Map<string, string>());
@@ -134,8 +135,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const terminateCall = useCallback((callId: string, routeId?: string) => lifecycleRef.current.terminate(callId, async () => {
     const sipSession = sipSessionRef.current;
     if (sipSession && sipSessionId(sipSession) === callId) {
-      await hangupSipSession(sipSession);
+      await hangupVocivoSip(sipSession, callId);
       sipSessionRef.current = null;
+      await cancelRemoteRoute(routeId);
+      return;
+    }
+    if (sipClientReady()) {
+      await hangupVocivoSip(null, callId);
       await cancelRemoteRoute(routeId);
       return;
     }
@@ -534,13 +540,41 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         onHold: false,
       });
     });
-    const offReady = onSipReady((ready) => {
+    const offReady = onVocivoSipReady((ready) => {
       setSipReady(ready);
       if (ready) setConnection(TelnyxConnectionState.CONNECTED);
+    });
+    const offNative = subscribeVocivoSipEvents({
+      onIncomingCall: (event) => {
+        const callId = event.callId || `sip_${Date.now()}`;
+        setActiveCall({
+          id: callId,
+          number: event.from || 'sip',
+          displayName: event.displayName || 'Incoming call',
+          destinationCountry: 'Internal',
+          phase: 'ringing',
+          startedAt: Date.now(),
+          muted: false,
+          speaker: false,
+          onHold: false,
+        });
+      },
+      onCallRinging: (event) => {
+        setActiveCall((current) => current && (!event.callId || current.id === event.callId) ? { ...current, phase: 'ringing' } : current);
+      },
+      onCallConnected: (event) => {
+        setActiveCall((current) => current && (!event.callId || current.id === event.callId)
+          ? { ...current, phase: 'active', connectedAt: current.connectedAt || Date.now() }
+          : current);
+      },
+      onCallEnded: (event) => {
+        setActiveCall((current) => current && (!event.callId || current.id === event.callId) ? null : current);
+      },
     });
     return () => {
       setSipIncomingHandler(null);
       offReady();
+      offNative();
     };
   }, [watchSipSession]);
 
@@ -658,20 +692,22 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         return;
       }
       startRingback();
-      if (sipUserAgentReady()) {
-        const session = await sipInvite(sipTargetUri(number), outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+      if (sipClientReady()) {
+        const placed = await inviteVocivoSip(sipTargetUri(number), outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
         if (startAttemptRef.current !== attempt) {
           await Promise.all([
-            hangupSipSession(session),
+            placed.hangup(),
             api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel rejected outbound route', failure)),
           ]);
           return;
         }
-        const callId = sipSessionId(session) || routeId;
-        sipSessionRef.current = session;
+        const callId = placed.id || routeId;
+        if (placed.session) {
+          sipSessionRef.current = placed.session;
+          watchSipSession(placed.session, callId);
+        }
         callRouteIdsRef.current.set(callId, routeId);
         callMetaRef.current.set(callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, startedAt, routeId, callerId: reservation.callerId });
-        watchSipSession(session, callId);
         setActiveCall({
           id: callId,
           number,
@@ -788,23 +824,25 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       startRingback();
       const remoteName = reservation.destinationName || displayName;
       const remoteExtension = reservation.destinationExtension || extension;
-      if (sipUserAgentReady()) {
-        const session = await sipInvite(
+      if (sipClientReady()) {
+        const placed = await inviteVocivoSip(
           sipTargetUri(reservation.destination || sipUsername),
           outboundHeaders(reservation.destination, undefined, 'internal', routeId, reservation.routeToken, { name: remoteName, extension: remoteExtension }),
         );
         if (startAttemptRef.current !== attempt) {
           await Promise.all([
-            hangupSipSession(session),
+            placed.hangup(),
             api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel rejected internal route', failure)),
           ]);
           return;
         }
-        const callId = sipSessionId(session) || routeId;
-        sipSessionRef.current = session;
+        const callId = placed.id || routeId;
+        if (placed.session) {
+          sipSessionRef.current = placed.session;
+          watchSipSession(placed.session, callId);
+        }
         callRouteIdsRef.current.set(callId, routeId);
         callMetaRef.current.set(callId, { number: remoteExtension, displayName: remoteName, destinationCountry: 'Internal', photoUrl, startedAt, routeId });
-        watchSipSession(session, callId);
         setActiveCall({
           id: callId,
           number: remoteExtension,
@@ -1057,6 +1095,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       await sipIncoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
       durationRef.current = 0;
       setDuration(0);
+      setActiveCall((current) => current ? { ...current, phase: 'connecting' } : current);
+      return;
+    }
+    if (sipClientReady() && activeCall?.id) {
+      await answerVocivoSip(activeCall.id);
       setActiveCall((current) => current ? { ...current, phase: 'connecting' } : current);
       return;
     }

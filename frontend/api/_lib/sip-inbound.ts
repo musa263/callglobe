@@ -12,6 +12,7 @@ export type SipInboundLookup = {
 };
 
 export async function lookupSipInbound(to: string, config: PbxConfig): Promise<SipInboundLookup> {
+  // Inbound DIDs stay on the Telnyx Call Control application unless VOCIVO_SIP_INBOUND=1.
   if (!sipInboundEnabled()) {
     return { enabled: false, reason: 'call_control', usernames: [], bridge: '' };
   }

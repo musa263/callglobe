@@ -29,4 +29,4 @@ Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INB
 ## Clients
 
 - Web: SIP.js over `VOCIVO_SIP_WSS_URI` when `VOCIVO_VOICE_EDGE=sip`.
-- iOS: Telnyx SDK remains the default. Vocivo SIP + CallKit is used only when the native module is linked.
+- iOS: Vocivo native SIP + CallKit for origination and internal legs when `VOCIVO_VOICE_EDGE=sip`. Inbound DIDs stay on Telnyx Call Control. Telnyx SDK remains the fallback if the native module is not linked.

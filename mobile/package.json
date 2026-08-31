@@ -47,7 +47,8 @@
     "react-native-url-polyfill": "^3.0.0",
     "react-native-webrtc": "^124.0.5",
     "react-native-webview": "13.15.0",
-    "sip.js": "^0.21.2"
+    "sip.js": "^0.21.2",
+    "vocivo-sip": "file:./modules/vocivo-sip"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

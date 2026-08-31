@@ -73,7 +73,7 @@ export function useVoiceRegistration({
         }
         const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
         if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
-        const sip = await api.post<{
+          const sip = await api.post<{
             username: string;
             password: string;
             domain: string;
