@@ -269,7 +269,6 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
         ("Allow", "INVITE, ACK, CANCEL, BYE, OPTIONS, NOTIFY, REFER, INFO, UPDATE"),
         ("Supported", "outbound, path"),
         ("User-Agent", "VocivoSip/1.0"),
-        ("Content-Length", "\(body.utf8.count)"),
       ],
       body: body
     )
@@ -329,7 +328,12 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     if cseq.contains("REGISTER") {
       if code == 401 || code == 407 {
         registerCSeq += 1
-        sendRegister(authorization: digest(for: message, method: "REGISTER", uri: "sip:\(config?.domain ?? "")"))
+        if let authorization = digest(for: message, method: "REGISTER", uri: "sip:\(config?.domain ?? "")") {
+          sendRegister(authorization: authorization)
+        } else {
+          pendingRegister?(.failure(NSError(domain: "VocivoSip", code: 401, userInfo: [NSLocalizedDescriptionKey: "SIP registration failed (401 digest)."])))
+          pendingRegister = nil
+        }
       } else if (200..<300).contains(code) {
         pendingRegister?(.success(()))
         pendingRegister = nil

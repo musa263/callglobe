@@ -47,7 +47,10 @@ enum VocivoSipDigest {
 
   static func challengeValue(_ header: String) -> [String: String] {
     var values: [String: String] = [:]
-    let body = header.replacingOccurrences(of: "Digest ", with: "", options: .anchored)
+    let body = header.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.lowercased().hasPrefix("digest") {
+      body = String(body.drop(while: { $0 != " " && $0 != "\t" })).trimmingCharacters(in: .whitespaces)
+    }
     let pattern = #"(\w+)=(?:"([^"]*)"|([^\s,]+))"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return values }
     regex.enumerateMatches(in: body, range: NSRange(body.startIndex..., in: body)) { match, _, _ in
