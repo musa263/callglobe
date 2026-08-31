@@ -3,14 +3,12 @@
     <!-- Kamailio hairpins registered web/PSTN INVITEs onto this profile. Those
          E.164 destinations are outbound origination, not inbound DIDs. -->
     <extension name="vocivo-outbound-pstn">
-      <condition field="network_addr" expression="^PUBLIC_IP_REGEX$"/>
+      <condition field="network_addr" expression="^(PUBLIC_IP_REGEX|127\.0\.0\.1)$"/>
+      <condition field="${sip_h_X-Vocivo-Caller-ID}" expression="^\+[1-9]\d{6,14}$"/>
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="inherit_codec=true"/>
-        <action application="set" data="effective_caller_id_number=${sip_h_X-Vocivo-Caller-ID}"/>
-        <action application="set" data="origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID}"/>
-        <action application="set" data="origination_caller_id_name=${caller_id_name}"/>
-        <action application="bridge" data="sofia/gateway/telnyx/+$1"/>
+        <action application="bridge" data="{origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID},origination_caller_id_name=Vocivo,sip_cid_type=pid,absolute_codec_string=PCMU,PCMA,OPUS,nolocal:sip_h_P-Asserted-Identity=&lt;sip:${sip_h_X-Vocivo-Caller-ID}@sip.telnyx.com&gt;}sofia/gateway/telnyx/+$1"/>
       </condition>
     </extension>
     <extension name="vocivo-telnyx-registered-client">

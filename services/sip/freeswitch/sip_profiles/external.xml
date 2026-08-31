@@ -7,6 +7,7 @@
       <param name="password" value="$${TELNYX_SIP_PASSWORD}"/>
       <param name="register" value="false"/>
       <param name="caller-id-in-from" value="true"/>
+      <param name="from-domain" value="sip.telnyx.com"/>
       <param name="extension-in-contact" value="true"/>
       <param name="ping" value="30"/>
     </gateway>
