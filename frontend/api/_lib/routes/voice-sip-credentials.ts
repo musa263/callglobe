@@ -3,44 +3,52 @@ import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
+import { digestHa1 } from '../sip-digest.js';
+import { saveSipCredential } from '../sip-credential-store.js';
+import { newSipPassword } from '../sip-edge-auth.js';
 import { accessForSession } from '../saas-access.js';
-import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../voice-provider.js';
 import { sessionOrganizationId } from '../tenancy.js';
+import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../voice-provider.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
-  if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
+  if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
   try {
     const session = await requireSession(req);
-    if (session.sub === 'vocivo-owner') return res.status(403).json({ error: 'Platform administrators do not have a calling extension.' });
-    const access = await accessForSession(session);
+    if (!session.extensionId || session.sub === 'vocivo-owner') return res.status(403).json({ error: 'A calling extension is required.' });
+    const config = await readPbxConfig();
+    const access = await accessForSession(session, config);
     if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) {
       return res.status(403).json({ error: 'Calling is not enabled for this account.' });
     }
-    if (!session.extensionId) return res.status(403).json({ error: 'This administrator account does not have a calling extension.' });
-    const config = await readPbxConfig();
     const extension = await getExtension(session.extensionId);
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
-    const edge = voiceEdge(config);
-    const provider = edge;
+    if (!extension.sipUsername) return res.status(409).json({ error: 'This extension has no SIP username.' });
+    const realm = sipRealm();
+    const password = newSipPassword();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await saveSipCredential({
+      username: extension.sipUsername,
+      extensionId: extension.id,
+      organizationId: extension.organizationId,
+      realm,
+      ha1: digestHa1(extension.sipUsername, realm, password),
+      expiresAt,
+    });
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({
-      provider,
-      voice_edge: edge,
-      pbx_engine: provider,
-      authentication: edge === 'sip' ? 'digest' : 'token',
-      token_endpoint: '/api/telnyx/token',
-      sip_credentials_endpoint: '/api/voice/sip-credentials',
-      sip_domain: edge === 'sip' ? sipDomain() : 'sip.telnyx.com',
-      sip_realm: edge === 'sip' ? sipRealm() : 'sip.telnyx.com',
-      sip_ws_uri: edge === 'sip' ? sipWsUri() : '',
+      username: extension.sipUsername,
+      password,
+      realm,
+      domain: sipDomain(),
+      wsUri: sipWsUri(),
+      expiresAt,
+      expires_in: 3600,
       ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
-      extension: extension.extension,
-      organization_id: extension.organizationId,
+      voice_edge: voiceEdge(config),
     });
   } catch (error) {
     if (writeAuthError(res, error)) return;
-    if (error instanceof Error && ['Organization inactive', 'Subscription inactive'].includes(error.message)) return res.status(403).json({ error: 'Calling is unavailable while this company account is inactive.' });
     return res.status(500).json({ error: publicError(error) });
   }
 }

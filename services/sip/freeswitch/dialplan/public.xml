@@ -1,0 +1,27 @@
+<include>
+  <context name="public">
+    <extension name="vocivo-inbound-did">
+      <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
+        <action application="set" data="vocivo_did=+$1"/>
+        <action application="set" data="curl_timeout=4"/>
+        <action application="curl" data="${VOCIVO_API_URL}/api/voice/sip-inbound json ${SIP_EDGE_SECRET} {\"to\":\"${vocivo_did}\"}"/>
+        <action application="log" data="INFO Vocivo inbound lookup ${curl_response_data}"/>
+        <action application="transfer" data="vocivo-inbound-result XML public"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-inbound-bridge">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${curl_response_data}" expression="&quot;enabled&quot;\s*:\s*true">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="bridge" data="${regex(${curl_response_data}|&quot;bridge&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-inbound-call-control-hold">
+      <condition field="destination_number" expression=".*">
+        <action application="log" data="WARNING Vocivo inbound DID stays on Telnyx Call Control until VOCIVO_SIP_INBOUND=1"/>
+        <action application="respond" data="480 Inbound remains on Call Control"/>
+        <action application="hangup" data="NO_ROUTE_DESTINATION"/>
+      </condition>
+    </extension>
+  </context>
+</include>

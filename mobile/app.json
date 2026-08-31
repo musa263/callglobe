@@ -62,6 +62,7 @@
         }
       ],
       "./plugins/withTelnyxVoip",
+      "./plugins/withVocivoSip",
       [
         "expo-splash-screen",
         {

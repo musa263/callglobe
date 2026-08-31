@@ -8,13 +8,13 @@ This document is the entry point for engineers working on Vocivo. It describes t
 iOS / Android (React Native) -+
                               +-- HTTPS -- Vercel API -- PostgreSQL
 Web phone / Admin (React) ----+              |
-        |                                    +-- Telnyx REST + signed webhooks
+        |                                    +-- Telnyx REST + signed webhooks (default edge)
         +-------- Telnyx WebRTC SDK ----------+
-                                             |
-                                             +-- Python TTS service
+        |                                    +-- Python TTS service
+        +-- (flagged) SIP.js / native SIP --- Kamailio + RTPEngine + FreeSWITCH --- Telnyx SIP trunk --- PSTN
 ```
 
-Telnyx is the active signaling and media provider. Vocivo owns tenant identity, authorization, extensions, routing, call state, administration, messaging, billing, and product behavior. Internal extension calls are free to customer wallets, but their Telnyx media usage is a Vocivo platform expense.
+Telnyx is the default signaling and media provider (`VOCIVO_VOICE_EDGE=telnyx`). The self-hosted SIP edge keeps Telnyx as PSTN only. See [ADR 0003](docs/adr/0003-self-hosted-sip-edge.md). Vocivo owns tenant identity, authorization, extensions, routing, call state, administration, messaging, billing, and product behavior. Internal extension calls are free to customer wallets.
 
 ## Repository Map
 
@@ -24,7 +24,8 @@ Telnyx is the active signaling and media provider. Vocivo owns tenant identity, 
 - `src/screens/`: user-facing screens; no direct carrier or database access.
 - `src/context/`: React coordination for authentication, voice, business data, and messaging.
 - `src/voice/`: voice contracts and deterministic, framework-light helpers.
-- `src/lib/voipClient.ts`: the single native Telnyx SDK adapter.
+- `src/lib/voipClient.ts`: the default native Telnyx SDK adapter.
+- `src/lib/sipNative.ts` / `src/lib/voiceEdge.ts`: flagged Vocivo SIP + CallKit path with Telnyx fallback.
 - `src/lib/callLifecycle.ts`: authoritative lifecycle and termination locks.
 - `src/lib/voiceRecovery.ts`: ICE and media recovery.
 - `plugins/withTelnyxVoip.js`: Expo native configuration only.
@@ -44,6 +45,7 @@ Telnyx is the active signaling and media provider. Vocivo owns tenant identity, 
 ### `services/`
 
 - `tts/`: isolated Python/FastAPI text-to-speech service.
+- `sip/`: Kamailio, RTPEngine, and FreeSWITCH. Telnyx is only the PSTN trunk.
 
 ### `docs/`
 
@@ -81,7 +83,7 @@ IDLE -> CONNECTING -> RINGING -> ACTIVE -> HELD -> ACTIVE -> ENDED
 - Hangup, answer, bridge, and fork-winner operations are idempotent.
 - The first answered fork is claimed atomically; all losing forks are terminated.
 
-See [ADR 0001](docs/adr/0001-voice-state-authority.md) and [ADR 0002](docs/adr/0002-telnyx-pstn-edge.md).
+See [ADR 0001](docs/adr/0001-voice-state-authority.md), [ADR 0002](docs/adr/0002-telnyx-pstn-edge.md), and [ADR 0003](docs/adr/0003-self-hosted-sip-edge.md).
 
 ## Extension Call Flow
 
