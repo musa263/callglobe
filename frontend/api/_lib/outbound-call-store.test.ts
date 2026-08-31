@@ -21,6 +21,20 @@ test('live destination prefers the answered fork', () => {
   assert.equal(liveOutboundDestinationId(pair({ destinationCallControlId: '', selectedDestinationCallControlId: undefined })), '');
 });
 
+test('pair merges keep native bridge-on-answer after a stale fork write', () => {
+  const current = pair({
+    phase: 'ringing',
+    bridgeOnAnswer: true,
+  });
+  const merged = mergeOutboundCallPair(current, pair({
+    phase: 'ringing',
+    destinationCallControlId: 'second-fork',
+    bridgeOnAnswer: false,
+    updatedAt: new Date().toISOString(),
+  }));
+  assert.equal(merged.bridgeOnAnswer, true);
+});
+
 test('pair merges keep the winning destination after a stale fork write', () => {
   const current = pair({
     phase: 'connected',

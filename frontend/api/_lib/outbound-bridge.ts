@@ -13,6 +13,27 @@ function alreadyAnswered(error: unknown) {
   return /already answered|call has already been answered|not in a parked/i.test(message);
 }
 
+function alreadyBridged(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /already bridged|call is already bridged|prevent_double_bridge/i.test(message);
+}
+
+export async function prepareParkedCallerMedia(
+  clientCallControlId: string,
+  eventId: string,
+  action: BridgeAction = callAction,
+) {
+  try {
+    await action(clientCallControlId, 'answer', { command_id: `${eventId}-answer-parked` });
+  } catch (error) {
+    if (!alreadyAnswered(error) && !alreadyBridged(error)) throw error;
+  }
+  await action(clientCallControlId, 'playback_stop', {
+    stop: 'all',
+    command_id: `${eventId}-stop-ringback`,
+  }).catch(() => undefined);
+}
+
 export async function answerParkedCallerThenBridge(
   clientCallControlId: string,
   destinationCallControlId: string,
@@ -20,15 +41,7 @@ export async function answerParkedCallerThenBridge(
   action: BridgeAction = callAction,
   wait: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 ) {
-  try {
-    await action(clientCallControlId, 'answer', { command_id: `${eventId}-answer-parked` });
-  } catch (error) {
-    if (!alreadyAnswered(error)) throw error;
-  }
-  await action(clientCallControlId, 'playback_stop', {
-    stop: 'all',
-    command_id: `${eventId}-stop-ringback`,
-  }).catch(() => undefined);
+  await prepareParkedCallerMedia(clientCallControlId, eventId, action);
   await bridgeOutboundCalls(clientCallControlId, destinationCallControlId, eventId, action, wait);
 }
 
@@ -53,6 +66,7 @@ export async function bridgeOutboundCalls(
       return;
     } catch (error) {
       lastError = error;
+      if (alreadyBridged(error)) return;
       if (!retryable(error) || attempt === delays.length - 1) throw error;
     }
   }

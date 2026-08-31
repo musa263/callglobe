@@ -81,7 +81,7 @@ IDLE -> CONNECTING -> RINGING -> ACTIVE -> HELD -> ACTIVE -> ENDED
 - Hangup, answer, bridge, and fork-winner operations are idempotent.
 - The first answered fork is claimed atomically; all losing forks are terminated.
 
-See [ADR 0001](docs/adr/0001-voice-state-authority.md) for the decision and failure-handling rules.
+See [ADR 0001](docs/adr/0001-voice-state-authority.md) and [ADR 0002](docs/adr/0002-telnyx-pstn-edge.md).
 
 ## Extension Call Flow
 
@@ -91,8 +91,9 @@ See [ADR 0001](docs/adr/0001-voice-state-authority.md) for the decision and fail
 4. The Telnyx client creates a parked WebRTC leg containing the signed headers.
 5. `voice-webhook.ts` classifies the event and delegates it to `parked-client-handler.ts`.
 6. The handler validates the signed reservation, fans out to every active destination device, and stores the call pair.
-7. The first destination to answer is atomically claimed and bridged; losing device legs are ended.
-8. Hangup events terminate both legs and write one final route state.
+7. Internal destinations Dial with Telnyx `link_to` so the first answered device is bridged natively. PSTN destinations stay unanswered until they answer, then Vocivo answers the parked caller and bridges.
+8. The first destination to answer is atomically claimed; losing device legs are ended.
+9. Hangup events terminate both legs and write one final route state.
 
 ## Tenant Security
 

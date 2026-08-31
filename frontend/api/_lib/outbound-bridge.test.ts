@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { answerParkedCallerThenBridge, bridgeOutboundCalls } from './outbound-bridge.js';
+import { answerParkedCallerThenBridge, bridgeOutboundCalls, prepareParkedCallerMedia } from './outbound-bridge.js';
 import { TelnyxApiError } from './telnyx.js';
 
 test('retries a transient bridge race with a fresh command id', async () => {
@@ -44,6 +44,24 @@ test('stops after three transient bridge failures', async () => {
 
   await assert.rejects(() => bridgeOutboundCalls('client', 'destination', 'event', action, async () => undefined), /Temporarily unavailable/);
   assert.equal(attempts, 3);
+});
+
+test('treats an already-bridged destination as a successful bridge', async () => {
+  const action = async (_callId: string, command: string) => {
+    if (command === 'bridge') throw new TelnyxApiError(422, 'Call is already bridged');
+    return new Response('{}', { status: 200 });
+  };
+  await bridgeOutboundCalls('client', 'destination', 'event', action, async () => undefined);
+});
+
+test('prepares parked media without issuing a second Vocivo bridge', async () => {
+  const actions: string[] = [];
+  const action = async (_callId: string, command: string) => {
+    actions.push(command);
+    return new Response('{}', { status: 200 });
+  };
+  await prepareParkedCallerMedia('client', 'event', action);
+  assert.deepEqual(actions, ['answer', 'playback_stop']);
 });
 
 test('answers the parked caller only when the destination answers, then bridges', async () => {

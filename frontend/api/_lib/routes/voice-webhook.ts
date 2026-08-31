@@ -10,7 +10,8 @@ import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
 import { claimOutboundCallWinner, clearOutboundCallPair, liveOutboundDestinationId, readOutboundCallPairByClient, readOutboundCallPairByDestination, readOutboundCallPairByRoute, saveOutboundCallPair, updateOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundLegs, terminateOutboundPair, hangupConferenceParticipant } from '../outbound-cancel.js';
 import { isInboundCallAnswered, isInboundCallInitiated, isParkedClientCall, ivrMenuSelection, voiceRouteHangupOutcome } from '../voice-routing.js';
-import { answerParkedCallerThenBridge, bridgeOutboundCalls } from '../outbound-bridge.js';
+import { answerParkedCallerThenBridge, bridgeOutboundCalls, prepareParkedCallerMedia } from '../outbound-bridge.js';
+import { outboundUsesNativeBridgeOnAnswer } from '../outbound-native-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
@@ -509,7 +510,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         destination: payload?.to || existingPair?.destination || '',
         status: 'direct' as const,
         phase: 'ringing' as const,
-        bridgeOnAnswer: false,
+        bridgeOnAnswer: existingPair?.bridgeOnAnswer === true || state.bridgeOnAnswer === true,
         updatedAt: new Date().toISOString(),
       };
       await saveOutboundCallPair(pair);
@@ -553,6 +554,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const storedPair = outboundPair
           || await readOutboundCallPairByDestination(callControlId)
           || (connectedRouteId ? await readOutboundCallPairByRoute(connectedRouteId) : null);
+        const nativeBridge = outboundUsesNativeBridgeOnAnswer(storedPair, state);
         const candidatePair = storedPair || {
           clientCallControlId: parentCallControlId,
           destinationCallControlId: callControlId,
@@ -561,7 +563,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           destination: payload?.to || '',
           status: 'direct' as const,
           phase: 'ringing' as const,
-          bridgeOnAnswer: state?.flow === 'outbound_destination' && state.bridgeOnAnswer === true,
+          bridgeOnAnswer: nativeBridge,
           updatedAt: now,
         };
         try {
@@ -578,7 +580,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             await terminateOutboundPair(claim.pair, `${eventId}-terminal`);
             return res.status(200).json({ received: true });
           }
-          await answerParkedCallerThenBridge(parentCallControlId, callControlId, eventId);
+          if (outboundUsesNativeBridgeOnAnswer(claim.pair, state)) {
+            await prepareParkedCallerMedia(parentCallControlId, eventId);
+          } else {
+            await answerParkedCallerThenBridge(parentCallControlId, callControlId, eventId);
+          }
           const connectedAt = new Date().toISOString();
           await saveOutboundCallPair({
             ...claim.pair,

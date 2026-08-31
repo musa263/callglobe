@@ -4,6 +4,7 @@ import { accessForOrganization } from '../saas-access.js';
 import { destinationSipUrisForInternalDial, isAllowedInternalSipDestination, voiceDestinationsMatch } from '../internal-sip.js';
 import { saveOutboundCallPair } from '../outbound-call-store.js';
 import { terminateOutboundPair } from '../outbound-cancel.js';
+import { parkedDestinationDialInput, parkedFlowUsesNativeBridge } from '../parked-destination-dial.js';
 import { callAction, dialCall, dialCallLegs, primaryVoiceCallerId } from '../voice-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
@@ -117,23 +118,24 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
     const destinations = destinationSipUrisForInternalDial(sipUsers, sourceSipUsers, destination);
     if (!resolvedVoiceCallerId) throw new Error('The signed call route has no authorized caller identity.');
     if (reservation.flow === 'internal' && !destinations.length) throw new Error('The internal destination has no reachable SIP alias.');
-    destinationCall = await dialCall({
-      to: destinations.length > 1 ? destinations : destinations[0] || destination,
+    const destinationDial = parkedDestinationDialInput({
+      parkedCallControlId: callControlId,
+      destination,
+      destinations,
+      flow: reservation.flow,
       from: resolvedVoiceCallerId,
-      state: {
-        flow: 'outbound_destination',
-        parentCallControlId: callControlId,
-        organizationId: reservation.organizationId,
-        routeId,
-        sourceExtensionId: reservation.sourceExtensionId,
-        sourceExtension: reservation.callerExtension,
-        sourceName: reservation.callerName,
-        sourcePhotoUrl: reservation.callerPhotoUrl,
-        destinationExtensionId: reservation.destinationExtensionId,
-        destinationExtension: reservation.destinationExtension,
-        destinationName: reservation.destinationName,
-        bridgeOnAnswer: false,
-      },
+      organizationId: reservation.organizationId,
+      routeId,
+      sourceExtensionId: reservation.sourceExtensionId,
+      sourceExtension: reservation.callerExtension,
+      sourceName: reservation.callerName,
+      sourcePhotoUrl: reservation.callerPhotoUrl,
+      destinationExtensionId: reservation.destinationExtensionId,
+      destinationExtension: reservation.destinationExtension,
+      destinationName: reservation.destinationName,
+    });
+    destinationCall = await dialCall({
+      ...destinationDial,
       fromDisplayName: callerDisplay(reservation.flow === 'internal' && reservation.callerName
         ? `${reservation.callerName}${reservation.callerExtension ? ` - Ext ${reservation.callerExtension}` : ''}`
         : payload.caller_id_name || 'Vocivo'),
@@ -176,7 +178,7 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
     destination,
     status: 'direct' as const,
     phase: 'ringing' as const,
-    bridgeOnAnswer: false,
+    bridgeOnAnswer: parkedFlowUsesNativeBridge(reservation.flow),
     updatedAt: new Date().toISOString(),
   };
   await saveOutboundCallPair(pair);

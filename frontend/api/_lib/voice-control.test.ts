@@ -32,10 +32,10 @@ test('normalizes single and forked Telnyx Dial response legs', () => {
   assert.deepEqual(dialCallLegs({}), []);
 });
 
-test('keeps extension dialing separate from its acknowledged bridge transaction', () => {
+test('keeps PSTN destination Dial separate from its acknowledged bridge transaction', () => {
   process.env.TELNYX_CALL_CONTROL_APP_ID = 'call-control-app';
   const body = dialCallBody({
-    to: ['sip:device-a@sip.telnyx.com', 'sip:device-b@sip.telnyx.com'],
+    to: ['+15551234567'],
     from: '+18447161777',
     state: { flow: 'outbound_destination', bridgeOnAnswer: false },
   });
@@ -43,4 +43,18 @@ test('keeps extension dialing separate from its acknowledged bridge transaction'
   assert.equal('link_to' in body, false);
   assert.equal('bridge_intent' in body, false);
   assert.equal('bridge_on_answer' in body, false);
+});
+
+test('internal destination Dial links to the parked caller for Telnyx native bridge', () => {
+  process.env.TELNYX_CALL_CONTROL_APP_ID = 'call-control-app';
+  const body = dialCallBody({
+    to: ['sip:device-a@sip.telnyx.com', 'sip:device-b@sip.telnyx.com'],
+    from: '+18447161777',
+    linkTo: 'parked-caller',
+    state: { flow: 'outbound_destination', bridgeOnAnswer: true },
+  });
+  assert.equal(body.link_to, 'parked-caller');
+  assert.equal(body.bridge_intent, true);
+  assert.equal(body.bridge_on_answer, true);
+  assert.equal(body.prevent_double_bridge, true);
 });

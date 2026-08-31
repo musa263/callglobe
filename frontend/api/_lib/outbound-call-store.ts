@@ -101,6 +101,9 @@ export function mergeOutboundCallPair(current: OutboundCallPair | null, proposed
       current.destinationCallControlId,
       proposed.destinationCallControlId,
     ].filter(Boolean))],
+    // Native bridge-on-answer is sticky. A later fork-initiated webhook must
+    // not fall back to a second Vocivo bridge and hang up the winner.
+    bridgeOnAnswer: current.bridgeOnAnswer === true || proposed.bridgeOnAnswer === true,
     // The copy read inside this transaction is authoritative. A stale webhook
     // may add call metadata, but it cannot roll a recorded hangup outcome back.
     termination: { ...(proposed.termination || {}), ...(current.termination || {}) },
