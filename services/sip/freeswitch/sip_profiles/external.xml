@@ -24,6 +24,6 @@
     <param name="inbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="manage-presence" value="false"/>
-    <param name="sip-trace" value="yes"/>
+    <param name="sip-trace" value="no"/>
   </settings>
 </profile>

@@ -22,7 +22,7 @@ Registered web E.164 INVITEs are bridged to `sofia/gateway/telnyx/+E164`. FreeSW
 
 ## Telnyx trunk
 
-Outbound PSTN uses a Telnyx **credential** SIP connection (`TELNYX_SIP_USERNAME` / `TELNYX_SIP_PASSWORD`). Telnyx challenges INVITEs with 407; Sofia must answer with those credentials. An empty username becomes `FreeSWITCH` and Telnyx returns 403. Keep the DID on the Call Control application for inbound. Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`.
+Outbound PSTN uses a Telnyx **credential** SIP connection (`TELNYX_SIP_USERNAME` / `TELNYX_SIP_PASSWORD`). Telnyx challenges INVITEs with 407; Sofia must answer with those credentials. An empty username becomes `FreeSWITCH` and Telnyx returns 403. Keep the DID on the Call Control application for inbound IVR, queues, and voicemail. Extension and main-line DIDs can move onto this host after `VOCIVO_SIP_INBOUND=1`. Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`. Internal extension INVITEs stay in Kamailio usrloc and are never sent to Telnyx as SIP URIs.
 
 Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INBOUND=1` on both Vercel and this host. See [ADR 0003](../../docs/adr/0003-self-hosted-sip-edge.md).
 

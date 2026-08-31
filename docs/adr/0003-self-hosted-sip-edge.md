@@ -14,7 +14,7 @@ Inbound IVR, queues, voicemail, AI receptionist, and conferences already live in
 1. Ship `services/sip` as the Vocivo SIP edge. Internal AORs fork registered contacts. Outbound E.164 bridges to the Telnyx SIP gateway.
 2. Default `VOCIVO_VOICE_EDGE=telnyx`. Web SIP.js and iOS native SIP are used only when the flag is `sip`.
 3. iOS keeps the Telnyx SDK until a Vocivo SIP CallKit module is linked. PushKit tokens are also stored on Vocivo for Kamailio wakeup.
-4. Inbound DIDs stay on the Telnyx Call Control application until `VOCIVO_SIP_INBOUND=1`. FreeSWITCH then looks up `/api/voice/sip-inbound` and forks extension contacts. IVR/queue/voicemail are not reimplemented in this phase.
+4. Inbound DIDs stay on the Telnyx Call Control application until `VOCIVO_SIP_INBOUND=1` **and** the DID is assigned to the droplet IP connection. FreeSWITCH then looks up `/api/voice/sip-inbound` and forks extension contacts. IVR/queue/voicemail destination types stay on Call Control even when the flag is on.
 
 ## Consequences
 

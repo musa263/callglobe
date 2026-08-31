@@ -21,6 +21,8 @@ import { inviteHeader, visibleCallAddress } from '../voice/callIdentity';
 import { toLifecycleState, toUiCallPhase, waitForCallState } from '../voice/callState';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from '../voice/contracts';
 import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnection, waitForVoicePushToken } from '../voice/session';
+import { hangupSipSession, onSipReady, setSipIncomingHandler, sipDomain, sipInvite, sipSessionId, sipUserAgentReady, SessionState } from '../lib/sipJsClient';
+import type { Invitation, Session } from 'sip.js';
 import { useVoiceRegistration } from '../voice/useVoiceRegistration';
 import { useAuth } from './AuthContext';
 
@@ -36,6 +38,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pushRegistration, setPushRegistration] = useState<VoiceContextValue['pushRegistration']>('registering');
+  const [sipReady, setSipReady] = useState(sipUserAgentReady());
   const callRef = useRef<Call | null>(null);
   const callMetaRef = useRef(new Map<string, Partial<ActiveCall>>());
   const callRouteIdsRef = useRef(new Map<string, string>());
@@ -53,6 +56,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const routePhaseByCallRef = useRef(new Map<string, string>());
   const mediaConfirmInFlightRef = useRef(new Set<string>());
   const loginConfigRef = useRef<VoiceLoginConfig | null>(null);
+  const sipSessionRef = useRef<Session | Invitation | null>(null);
   const iceListenerCleanupRef = useRef(new Map<string, () => void>());
   const lastNetworkTypeRef = useRef<NetInfoStateType | null>(null);
   const networkMigrationGraceUntilRef = useRef(0);
@@ -60,6 +64,24 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const reportVoiceError = useCallback((operation: string, failure: unknown) => {
     const normalized = failure instanceof Error ? failure : new Error(String(failure));
     console.error(`[Vocivo Voice] ${operation} failed`, { message: normalized.message, stack: normalized.stack });
+  }, []);
+  const sipTargetUri = useCallback((destination: string) => {
+    const domain = sipDomain();
+    const value = String(destination || '').trim();
+    if (value.startsWith('+')) return `sip:${value}@${domain}`;
+    const user = value.replace(/^sip:/i, '').split('@')[0];
+    return `sip:${user}@${domain}`;
+  }, []);
+  const watchSipSession = useCallback((session: Session | Invitation, callId: string) => {
+    session.stateChange.addListener((next) => {
+      if (next === SessionState.Established) {
+        setActiveCall((current) => current?.id === callId ? { ...current, phase: 'active', connectedAt: current.connectedAt || Date.now() } : current);
+      }
+      if (next === SessionState.Terminated) {
+        if (sipSessionRef.current === session) sipSessionRef.current = null;
+        setActiveCall((current) => current?.id === callId ? null : current);
+      }
+    });
   }, []);
   const mediaRecoveryRef = useRef(new VoiceMediaRecoveryCoordinator(
     (operation, failure) => {
@@ -110,6 +132,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
 
   const terminateCall = useCallback((callId: string, routeId?: string) => lifecycleRef.current.terminate(callId, async () => {
+    const sipSession = sipSessionRef.current;
+    if (sipSession && sipSessionId(sipSession) === callId) {
+      await hangupSipSession(sipSession);
+      sipSessionRef.current = null;
+      await cancelRemoteRoute(routeId);
+      return;
+    }
     const call = voipClient.getCall(callId);
     const cancelRemote = cancelRemoteRoute(routeId);
     try {
@@ -487,6 +516,34 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     setPushRegistration,
   });
 
+  useEffect(() => {
+    setSipIncomingHandler((invitation) => {
+      sipSessionRef.current = invitation;
+      const callId = sipSessionId(invitation);
+      const remote = String(invitation.remoteIdentity?.uri || '');
+      watchSipSession(invitation, callId);
+      setActiveCall({
+        id: callId,
+        number: remote.replace(/^sip:/i, '').split('@')[0],
+        displayName: invitation.remoteIdentity?.displayName || 'Incoming call',
+        destinationCountry: 'Internal',
+        phase: 'ringing',
+        startedAt: Date.now(),
+        muted: false,
+        speaker: false,
+        onHold: false,
+      });
+    });
+    const offReady = onSipReady((ready) => {
+      setSipReady(ready);
+      if (ready) setConnection(TelnyxConnectionState.CONNECTED);
+    });
+    return () => {
+      setSipIncomingHandler(null);
+      offReady();
+    };
+  }, [watchSipSession]);
+
   const refreshIncomingCalls = useCallback(async () => {
     setPushRegistration('registering');
     let data = loginConfigRef.current;
@@ -601,6 +658,37 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         return;
       }
       startRingback();
+      if (sipUserAgentReady()) {
+        const session = await sipInvite(sipTargetUri(number), outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+        if (startAttemptRef.current !== attempt) {
+          await Promise.all([
+            hangupSipSession(session),
+            api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel rejected outbound route', failure)),
+          ]);
+          return;
+        }
+        const callId = sipSessionId(session) || routeId;
+        sipSessionRef.current = session;
+        callRouteIdsRef.current.set(callId, routeId);
+        callMetaRef.current.set(callId, { displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, startedAt, routeId, callerId: reservation.callerId });
+        watchSipSession(session, callId);
+        setActiveCall({
+          id: callId,
+          number,
+          displayName: displayName || rate.country_name,
+          destinationCountry: rate.country_name,
+          countryCode: rate.country_code,
+          ratePerMinute: rate.rate_per_min ?? undefined,
+          photoUrl,
+          phase: 'ringing',
+          startedAt,
+          muted: false,
+          speaker: false,
+          onHold: false,
+          routeId,
+        });
+        return;
+      }
       const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
       if (startAttemptRef.current !== attempt) {
         await Promise.all([
@@ -700,6 +788,38 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       startRingback();
       const remoteName = reservation.destinationName || displayName;
       const remoteExtension = reservation.destinationExtension || extension;
+      if (sipUserAgentReady()) {
+        const session = await sipInvite(
+          sipTargetUri(reservation.destination || sipUsername),
+          outboundHeaders(reservation.destination, undefined, 'internal', routeId, reservation.routeToken, { name: remoteName, extension: remoteExtension }),
+        );
+        if (startAttemptRef.current !== attempt) {
+          await Promise.all([
+            hangupSipSession(session),
+            api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel rejected internal route', failure)),
+          ]);
+          return;
+        }
+        const callId = sipSessionId(session) || routeId;
+        sipSessionRef.current = session;
+        callRouteIdsRef.current.set(callId, routeId);
+        callMetaRef.current.set(callId, { number: remoteExtension, displayName: remoteName, destinationCountry: 'Internal', photoUrl, startedAt, routeId });
+        watchSipSession(session, callId);
+        setActiveCall({
+          id: callId,
+          number: remoteExtension,
+          displayName: remoteName,
+          destinationCountry: 'Internal',
+          photoUrl,
+          phase: 'ringing',
+          startedAt,
+          muted: false,
+          speaker: false,
+          onHold: false,
+          routeId,
+        });
+        return;
+      }
       const call = await voipClient.newCall(
         reservation.destination,
         reservation.callerName || profile?.full_name || 'Vocivo',
@@ -930,6 +1050,16 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [activeCall?.id, activeCall?.routeId, attachCall, cancelRoutePolling, finalizeCall, reportVoiceError, stopRingback, terminateCall]);
 
   const answerCall = useCallback(async () => {
+    const sipIncoming = sipSessionRef.current as Invitation | null;
+    if (sipIncoming && typeof sipIncoming.accept === 'function') {
+      setError(null);
+      await ensureCallMicrophonePermission();
+      await sipIncoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
+      durationRef.current = 0;
+      setDuration(0);
+      setActiveCall((current) => current ? { ...current, phase: 'connecting' } : current);
+      return;
+    }
     const call = callRef.current;
     if (!call || !call.isIncoming) return;
     if (![TelnyxCallState.RINGING, TelnyxCallState.CONNECTING].includes(call.currentState)) return;
@@ -971,7 +1101,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
   const sendDtmf = useCallback(async (digit: string) => { if (callRef.current) await callRef.current.dtmf(digit); }, []);
 
-  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || connection === TelnyxConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
+  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || sipReady || connection === TelnyxConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, sipReady, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>;
 }

@@ -1,5 +1,6 @@
 import { TelnyxConnectionState } from '@telnyx/react-voice-commons-sdk';
 import { getVoicePushToken, voipClient } from '../lib/voipClient';
+import { sipUserAgentReady } from '../lib/sipJsClient';
 import type { VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 
 export function voiceLoginConfig(response: VoiceTokenResponse, ringtone: string): VoiceLoginConfig {
@@ -26,10 +27,12 @@ export function createRouteId() {
 }
 
 export async function waitForVoiceConnection(timeoutMs = 12_000) {
+  if (sipUserAgentReady()) return;
   const deadline = Date.now() + timeoutMs;
   while (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  if (sipUserAgentReady()) return;
   if (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED) {
     throw new Error('Calling service is reconnecting. Please try again in a moment.');
   }

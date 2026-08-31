@@ -12,3 +12,18 @@ test('keeps inbound DID lookup on Call Control until the SIP inbound flag is set
   assert.equal(lookup.reason, 'call_control');
   assert.equal(lookup.bridge, '');
 });
+
+test('IVR destinations stay on Call Control after SIP inbound is enabled', async () => {
+  const previous = process.env.VOCIVO_SIP_INBOUND;
+  process.env.VOCIVO_SIP_INBOUND = '1';
+  try {
+    const config = defaultPbxConfig();
+    config.numberAssignments['+15551212'] = { organizationId: 'primary', destinationType: 'ivr' };
+    const lookup = await lookupSipInbound('+15551212', config);
+    assert.equal(lookup.enabled, false);
+    assert.equal(lookup.reason, 'call_control_features');
+  } finally {
+    if (previous === undefined) delete process.env.VOCIVO_SIP_INBOUND;
+    else process.env.VOCIVO_SIP_INBOUND = previous;
+  }
+});

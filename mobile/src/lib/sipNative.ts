@@ -1,4 +1,5 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules } from 'react-native';
+import { startSipUserAgent, stopSipUserAgent } from './sipJsClient';
 
 type VocivoSipModule = {
   register(config: {
@@ -7,6 +8,7 @@ type VocivoSipModule = {
     domain: string;
     wsUri?: string;
     displayName?: string;
+    iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
   }): Promise<void>;
   unregister(): Promise<void>;
   invite(target: string, headers?: Array<{ name: string; value: string }>): Promise<string>;
@@ -20,10 +22,18 @@ export function vocivoSipModule(): VocivoSipModule | null {
 
 export async function registerVocivoSip(config: Parameters<VocivoSipModule['register']>[0]) {
   const native = vocivoSipModule();
-  if (!native) {
-    throw new Error(Platform.OS === 'ios'
-      ? 'Vocivo SIP CallKit is not linked in this build. Telnyx remains the voice client.'
-      : 'Vocivo SIP is not available on this platform.');
+  if (native) {
+    await native.register(config);
+    return;
   }
-  await native.register(config);
+  await startSipUserAgent(config);
+}
+
+export async function unregisterVocivoSip() {
+  const native = vocivoSipModule();
+  if (native) {
+    await native.unregister();
+    return;
+  }
+  await stopSipUserAgent();
 }

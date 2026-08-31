@@ -19,41 +19,17 @@ export function useVoice(token, enabled, identity = {}) {
     });
     return () => { cancelled = true; };
   }, [enabled, token]);
-  // TestFlight iOS is still Telnyx CallKit. The SIP trunk Telnyx answers OPTIONS
-  // on but rejects SIP-URI INVITEs (403 D30), so extension calls and iOS ringing
-  // stay on the Telnyx SDK even when the web PSTN path uses Kamailio.
-  const telnyx = useTelnyxVoice(token, enabled, identity);
+  const telnyx = useTelnyxVoice(token, enabled && edge !== 'sip', identity);
   const sip = useSipVoice(token, enabled && edge === 'sip', identity);
   if (edge !== 'sip') return telnyx;
 
-  const incomingCall = telnyx.incomingCall || sip.incomingCall;
-  const telnyxLive = Boolean(telnyx.call || telnyx.incomingCall || telnyx.active || telnyx.callStarting);
-  const ready = Boolean(sip.ready && telnyx.ready);
-  const statusLabel = !telnyx.ready ? telnyx.statusLabel : !sip.ready ? sip.statusLabel : 'Ready for calls';
-  const error = telnyx.error || sip.error;
-
-  if (telnyxLive) {
-    return {
-      ...telnyx,
-      ready: telnyx.ready || ready,
-      statusLabel: telnyx.ready ? (sip.ready ? 'Ready for calls' : sip.statusLabel) : telnyx.statusLabel,
-      error,
-      startCall: sip.startCall,
-      startInternalCall: telnyx.startInternalCall,
-    };
-  }
-
   return {
     ...sip,
-    ready,
-    statusLabel,
-    error,
-    startInternalCall: telnyx.startInternalCall,
-    startSecondInternalCall: telnyx.startSecondInternalCall,
-    incomingCall,
-    incoming: Boolean(incomingCall),
-    answer: telnyx.incomingCall ? telnyx.answer : sip.answer,
-    decline: telnyx.incomingCall ? telnyx.decline : sip.decline,
-    hangup: sip.call ? sip.hangup : telnyx.hangup,
+    ready: sip.ready,
+    statusLabel: sip.statusLabel,
+    error: sip.error,
+    startCall: sip.startCall,
+    startInternalCall: sip.startInternalCall,
+    startSecondInternalCall: sip.startSecondInternalCall,
   };
 }

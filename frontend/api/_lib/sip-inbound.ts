@@ -20,6 +20,10 @@ export async function lookupSipInbound(to: string, config: PbxConfig): Promise<S
   if (!assignment?.organizationId) {
     return { enabled: false, reason: 'unassigned', usernames: [], bridge: '' };
   }
+  const callControlFeatures = new Set(['ivr', 'queue', 'ai', 'voicemail', 'conference', 'configured_ivr', 'agent']);
+  if (assignment.destinationType && callControlFeatures.has(assignment.destinationType)) {
+    return { enabled: false, reason: 'call_control_features', usernames: [], bridge: '' };
+  }
   const directory = await listExtensions(assignment.organizationId);
   let usernames: string[] = [];
   if (assignment.destinationType === 'extension' && assignment.destinationId) {

@@ -73,11 +73,12 @@ export function useVoiceRegistration({
         }
         const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
         if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
-          const sip = await api.post<{
+        const sip = await api.post<{
             username: string;
             password: string;
             domain: string;
             wsUri?: string;
+            ice_servers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
           }>('/api/voice/sip-credentials', {});
           await registerVocivoSip({
             username: sip.username,
@@ -85,6 +86,7 @@ export function useVoiceRegistration({
             domain: sip.domain,
             wsUri: sip.wsUri,
             displayName: sip.username,
+            iceServers: sip.ice_servers,
           }).catch((failure) => reportVoiceError('register Vocivo SIP', failure));
         }
         let registeredToken = pushNotificationDeviceToken;

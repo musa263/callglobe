@@ -16,6 +16,6 @@ export function sipNativeAvailable(nativeModules: { VocivoSip?: unknown } | null
   return Boolean(nativeModules?.VocivoSip);
 }
 
-export function shouldUseSipNative(edge: VoiceEdge, nativeModules: { VocivoSip?: unknown } | null | undefined) {
-  return edge === 'sip' && sipNativeAvailable(nativeModules);
+export function shouldUseSipNative(edge: VoiceEdge, _nativeModules: { VocivoSip?: unknown } | null | undefined) {
+  return edge === 'sip';
 }

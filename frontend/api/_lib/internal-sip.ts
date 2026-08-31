@@ -1,8 +1,16 @@
 import type { PbxConfig } from './pbx-config-store.js';
+import { sipDomain, sipRealm } from './voice-provider.js';
 
 const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)$/i;
 const carrierSipAddress = /^(?:sip:)?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?:;[^<>\s]+)?$/i;
 const telnyxSipHost = 'sip.telnyx.com';
+
+function isInternalSipHost(host: string | undefined) {
+  const value = host?.trim().toLowerCase();
+  if (!value) return false;
+  const allowed = new Set([telnyxSipHost, sipDomain().toLowerCase(), sipRealm().toLowerCase(), 'sip.vocivo.app'].filter(Boolean));
+  return allowed.has(value);
+}
 
 export function canonicalVoiceDestination(destination: string) {
   const value = destination.trim().replace(/^<|>$/g, '');
@@ -19,7 +27,7 @@ export function parseInternalSipUser(destination: string) {
   const match = destination.trim().match(sipUri);
   const username = match?.[1];
   const host = match?.[2];
-  if (!username || host?.trim().toLowerCase() !== telnyxSipHost) return null;
+  if (!username || !isInternalSipHost(host)) return null;
   return username;
 }
 
