@@ -3,7 +3,16 @@ import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
 import { clientIceServers, sipIceServers, sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit, internalCallsUseTelnyxPark } from './voice-provider.js';
 
-const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND'] as const;
+const keys = [
+  'TELNYX_ICE_SERVERS_JSON',
+  'VOCIVO_VOICE_EDGE',
+  'VOCIVO_SIP_REALM',
+  'VOCIVO_SIP_INBOUND',
+  'VOCIVO_TURN_SECRET',
+  'VOCIVO_TURN_URLS',
+  'VOCIVO_TURN_TTL_SECONDS',
+  'VOCIVO_STUN_URLS',
+] as const;
 
 function withEnvironment(values: Partial<Record<(typeof keys)[number], string>>, run: () => void) {
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
