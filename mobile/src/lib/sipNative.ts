@@ -79,7 +79,7 @@ export function subscribeVocivoSipEvents(handlers: SipEventHandlers) {
   let emitter: Emitter;
   try {
     const { EventEmitter } = require('expo-modules-core') as typeof import('expo-modules-core');
-    emitter = new EventEmitter(native as object) as Emitter;
+    emitter = new EventEmitter(native as never) as Emitter;
   } catch {
     try {
       const { NativeEventEmitter } = require('react-native') as typeof import('react-native');

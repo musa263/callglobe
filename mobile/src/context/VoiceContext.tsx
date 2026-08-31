@@ -530,7 +530,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       watchSipSession(invitation, callId);
       setActiveCall({
         id: callId,
-        number: remote.replace(/^sip:/i, '').split('@')[0],
+        number: remote.replace(/^sip:/i, '').split('@')[0] || remote,
         displayName: invitation.remoteIdentity?.displayName || 'Incoming call',
         destinationCountry: 'Internal',
         phase: 'ringing',

@@ -1,4 +1,4 @@
-import { Inviter, Registerer, SessionState, UserAgent, type Invitation, type Session } from 'sip.js';
+import { Invitation, Inviter, Registerer, SessionState, UserAgent, type Session } from 'sip.js';
 import { registerGlobals } from 'react-native-webrtc';
 
 registerGlobals();
@@ -105,13 +105,20 @@ export async function sipInvite(targetUri: string, extraHeaders: Array<{ name: s
 }
 
 export async function hangupSipSession(session?: Session | null) {
-  try { await session?.cancel?.(); } catch { /* ringing outbound */ }
-  try { await session?.reject?.(); } catch { /* incoming */ }
-  try { await session?.bye?.(); } catch { /* established */ }
+  if (!session) return;
+  if (session instanceof Inviter) {
+    try { await session.cancel(); } catch { /* ringing outbound */ }
+  } else if (session instanceof Invitation) {
+    try { await session.reject(); } catch { /* incoming */ }
+  }
+  try { await session.bye(); } catch { /* established */ }
 }
 
 export function sipSessionId(session?: Session | null) {
-  return session?.id || session?.request?.callId || '';
+  if (!session) return '';
+  if (session instanceof Invitation) return session.id || session.request.callId || '';
+  if (session instanceof Inviter) return session.id || session.request?.callId || '';
+  return session.id || '';
 }
 
 export { SessionState };
