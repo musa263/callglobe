@@ -195,10 +195,8 @@ export async function setVocivoSipMuted(muted: boolean, session?: Session | null
     await native.setMuted(muted);
     return;
   }
-  const pc = session?.sessionDescriptionHandler?.peerConnection as {
-    getSenders?: () => Array<{ track?: { kind: string; enabled: boolean } }>;
-    getReceivers?: () => Array<{ track?: { kind: string; enabled: boolean } }>;
-  } | undefined;
+  const handler = session?.sessionDescriptionHandler as { peerConnection?: { getSenders?: () => Array<{ track?: { kind: string; enabled: boolean } }>; getReceivers?: () => Array<{ track?: { kind: string; enabled: boolean } }> } } | undefined;
+  const pc = handler?.peerConnection;
   pc?.getSenders?.()?.forEach((sender) => {
     if (sender.track?.kind === 'audio') sender.track.enabled = !muted;
   });
