@@ -341,6 +341,42 @@ export function retailRateFromWholesale(input: {
 }
 
 export const LAUNCH_CALLING_CREDIT_MINOR = 2500;
+export const launchCallingCreditKey = (organizationId: string) => `launch-calling-credit:${organizationId}`;
+
+async function applyLaunchCallingCreditIfEmpty(
+  transaction: TransactionSql,
+  organizationId: string,
+  wallet: Wallet,
+): Promise<Wallet> {
+  if (wallet.status !== 'active' || wallet.availableMinor > 0) return wallet;
+  const priorCredit = await transaction<Array<{ id: string }>>`
+    select id from vocivo_wallet_entries
+    where organization_id = ${organizationId} and direction = 'credit'
+    limit 1
+  `;
+  if (priorCredit[0]) return wallet;
+  const idempotencyKey = launchCallingCreditKey(organizationId);
+  const nextBalance = wallet.availableMinor + LAUNCH_CALLING_CREDIT_MINOR;
+  const updatedRows = await transaction<WalletRow[]>`
+    update vocivo_wallets
+    set available_minor = ${nextBalance}, version = version + 1, updated_at = now()
+    where organization_id = ${organizationId} and version = ${wallet.version}
+    returning *
+  `;
+  if (!updatedRows[0]) return wallet;
+  await transaction`
+    insert into vocivo_wallet_entries (
+      id, organization_id, entry_type, direction, amount_minor, currency,
+      balance_after_minor, reference, description, created_by, idempotency_key
+    ) values (
+      ${randomUUID()}, ${organizationId}, ${'promotion'}, ${'credit'}, ${LAUNCH_CALLING_CREDIT_MINOR},
+      ${updatedRows[0].currency}, ${nextBalance}, ${''}, ${'Launch calling credit'},
+      ${'vocivo-launch-credit'}, ${idempotencyKey}
+    )
+    on conflict (organization_id, idempotency_key) do nothing
+  `;
+  return walletFromRow(updatedRows[0]);
+}
 
 export function outboundWalletBlockReason(wallet: Pick<Wallet, 'status' | 'availableMinor'> | null | undefined) {
   if (!wallet) return 'Calling credit is not available.';
@@ -384,29 +420,19 @@ export async function readPlatformWalletState(organizations: Array<{ id: string;
 
 export async function readTenantWallet(organizationId: string, currency = 'USD') {
   if (!organizationId) throw new Error('Wallet tenant is required.');
-  const wallet = await withDatabaseRetry(async (sql) => {
+  return withDatabaseRetry(async (sql) => {
     await ensureWalletTables(sql);
     return sql.begin(async (transaction) => {
-      await setContext(transaction, organizationId, false);
+      await setContext(transaction, organizationId, true);
+      await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:wallet:${organizationId}`}))`;
       await ensureWallet(transaction, organizationId, currency);
       const rows = await transaction<WalletRow[]>`
         select * from vocivo_wallets where organization_id = ${organizationId} limit 1
       `;
       if (!rows[0]) throw new Error('Wallet not found.');
-      return walletFromRow(rows[0]);
+      return applyLaunchCallingCreditIfEmpty(transaction, organizationId, walletFromRow(rows[0]));
     });
   });
-  if (wallet.status !== 'active' || wallet.availableMinor > 0) return wallet;
-  const granted = await recordWalletAdjustment({
-    organizationId,
-    type: 'promotion',
-    direction: 'credit',
-    amountMinor: LAUNCH_CALLING_CREDIT_MINOR,
-    description: 'Launch calling credit',
-    createdBy: 'vocivo-launch-credit',
-    idempotencyKey: `launch-calling-credit:${organizationId}`,
-  });
-  return granted.duplicate ? wallet : granted.wallet;
 }
 
 export async function readRetailRateDirectory<T extends { country_code: string; rate_per_min: number }>(baseRates: T[]): Promise<T[]> {

@@ -253,10 +253,6 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
       setCallError('Choose a caller ID before placing an external call.');
       return;
     }
-    if (dialMode !== 'extension' && Number.isFinite(balance) && balance <= 0) {
-      setCallError('Calling credit is required before placing this call.');
-      return;
-    }
     setCallError('');
     try { await voice.startCall(fullNumber, selectedNumber?.phone_number); }
     catch (outboundError) { setCallError(outboundError.message || 'The call could not be started.'); }

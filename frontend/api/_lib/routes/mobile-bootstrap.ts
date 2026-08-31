@@ -22,11 +22,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const organizationId = sessionOrganizationId(session, config);
     const organization = access.organization;
     const canUseDirectory = organization.accountType === 'business' && organization.internalCallingEnabled && access.features.internalCalling;
-    const canViewWallet = organization.accountType === 'individual' || ['company_owner', 'company_admin'].includes(session.role || '');
     const [extensions, storedProfile, wallet, rates] = await Promise.all([
       canUseDirectory ? listExtensions(organizationId) : Promise.resolve([]),
       readUserProfile(session.sub || ''),
-      canViewWallet ? readTenantWallet(organizationId, access.subscription.currency) : Promise.resolve(null),
+      readTenantWallet(organizationId, access.subscription.currency),
       readRetailRateDirectory(mobileRates),
     ]);
     const profiles = canUseDirectory
