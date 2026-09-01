@@ -79,16 +79,14 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
     return;
   }
 
-  if (!signedReservation) {
-    try {
-      const access = await accessForOrganization(reservation.organizationId);
-      const feature = reservation.flow === 'internal' ? 'internalCalling' : 'outboundCalling';
-      if (!access.features[feature]) throw new Error('Feature not enabled');
-    } catch (error) {
-      logWebhookFailure('verify tenant outbound entitlement', error);
-      await rejectParkedCall(callControlId, eventId, 'service-unavailable', 'hang up unavailable service');
-      return;
-    }
+  try {
+    const access = await accessForOrganization(reservation.organizationId);
+    const feature = reservation.flow === 'internal' ? 'internalCalling' : 'outboundCalling';
+    if (!access.features[feature]) throw new Error('Feature not enabled');
+  } catch (error) {
+    logWebhookFailure('verify tenant outbound entitlement', error);
+    await rejectParkedCall(callControlId, eventId, 'service-unavailable', 'hang up unavailable service');
+    return;
   }
 
   const destinationPreparation = Promise.all([

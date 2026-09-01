@@ -75,6 +75,9 @@ export async function telnyx(path: string, init: RequestInit = {}) {
   let requestError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
+      // Clear the previous attempt's response: its body has already been
+      // drained, so a failed retry must not fall through to re-reading it.
+      response = undefined;
       response = await fetch(`https://api.telnyx.com/v2${path}`, {
         ...init,
         signal: init.signal ?? AbortSignal.timeout(requestTimeoutMs()),

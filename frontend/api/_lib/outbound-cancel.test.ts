@@ -33,6 +33,25 @@ test('conference participant teardown never hangs the surviving remote', () => {
   assert.deepEqual(applied.forkDestinationCallControlIds, []);
 });
 
+test('host hangup tears down every remaining conference leg', () => {
+  const host = {
+    clientCallControlId: 'client-a',
+    destinationCallControlId: 'destination-a',
+    selectedDestinationCallControlId: 'destination-a',
+    forkDestinationCallControlIds: ['destination-a', 'destination-c'],
+    peerClientCallControlId: 'client-b',
+    peerDestinationCallControlId: 'destination-b',
+    destination: '+15550000000',
+    status: 'conference' as const,
+    conferenceRole: 'host' as const,
+    updatedAt: new Date(0).toISOString(),
+  };
+  const plan = conferenceParticipantTeardown(host, 'client-a');
+  assert.deepEqual([...plan.hangIds].sort(), ['client-a', 'destination-a', 'destination-b', 'destination-c']);
+  assert.equal(plan.keepPair, null);
+  assert.equal(plan.peerAction, 'unlink');
+});
+
 test('merging teardown hangs only the failed pair and unlinks the peer', () => {
   const merging = {
     clientCallControlId: 'client-a',

@@ -68,18 +68,27 @@ const telnyxStorageKeys = [
 ];
 
 export async function signOutVoiceDevice() {
-  await setVoiceSignedIn(false);
-  try {
-    voipClient.disablePushNotifications();
-    // Let the SDK send the unregister command before closing its socket.
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  } catch (failure) {
-    const normalized = failure instanceof Error ? failure : new Error(String(failure));
-    console.error('[Vocivo Voice] failed to unregister push notifications', { message: normalized.message, stack: normalized.stack });
+  // Every cleanup step must run even when an earlier one fails, otherwise a
+  // single native or storage error would leave credentials and registrations behind.
+  const steps: Array<[string, () => Promise<unknown>]> = [
+    ['disable native voice sign-in flag', () => setVoiceSignedIn(false)],
+    ['unregister push notifications', async () => {
+      voipClient.disablePushNotifications();
+      // Let the SDK send the unregister command before closing its socket.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }],
+    ['clear voice storage', () => AsyncStorage.multiRemove(telnyxStorageKeys)],
+    ['delete stored voice session', () => SecureStore.deleteItemAsync(secureVoiceSessionKey)],
+    ['log out of the voice client', () => voipClient.logout()],
+  ];
+  for (const [step, run] of steps) {
+    try {
+      await run();
+    } catch (failure) {
+      const normalized = failure instanceof Error ? failure : new Error(String(failure));
+      console.warn(`[Vocivo Voice] sign-out step failed: ${step}`, { message: normalized.message, stack: normalized.stack });
+    }
   }
-  await AsyncStorage.multiRemove(telnyxStorageKeys);
-  await SecureStore.deleteItemAsync(secureVoiceSessionKey);
-  await voipClient.logout();
 }
 
 export async function setVoiceSignedIn(signedIn: boolean) {

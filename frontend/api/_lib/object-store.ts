@@ -813,7 +813,8 @@ export async function get(pathname: string, _options: { access?: 'public' | 'pri
 
 export async function list(options: ListOptions = {}) {
   const prefix = options.prefix || '';
-  const limit = Math.min(Math.max(Number(options.limit) || 1000, 1), 1000);
+  const requestedLimit = Number(options.limit);
+  const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 1000, 1), 1000);
   const offset = options.cursor ? Math.max(0, Number(Buffer.from(options.cursor, 'base64url').toString('utf8')) || 0) : 0;
   return withDatabaseRetry(async (sql) => {
     const rows = await sql<Array<StoredRow & { size: number }>>`

@@ -15,12 +15,15 @@ export default function AuthScreen({ auth }) {
 
   const handleSubmit = async () => {
     setLoading(true);
-    if (mode === 'login') {
-      await auth.signIn(email, password);
-    } else {
-      await auth.signUp(email, password, name);
+    try {
+      if (mode === 'login') {
+        await auth.signIn(email, password);
+      } else {
+        await auth.signUp(email, password, name);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

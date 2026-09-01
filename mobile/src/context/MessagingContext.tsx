@@ -37,12 +37,14 @@ export function MessagingProvider({ children }: { children: React.ReactNode }) {
   }, [isAuthenticated, profile?.id]);
 
   useEffect(() => {
+    let active = true;
     setMessages([]);
     setLoading(true);
-    if (!isAuthenticated || !profile?.id) { setLoading(false); return; }
+    if (!isAuthenticated || !profile?.id) { setLoading(false); return undefined; }
     AsyncStorage.getItem(storageKey(profile.id)).then((value) => {
-      if (value) setMessages((JSON.parse(value) as SmsMessage[]).map((message) => ({ ...message, direction: message.direction ?? 'outbound' })));
-    }).catch(() => undefined).finally(() => refreshMessages().catch(() => setLoading(false)));
+      if (value && active) setMessages((JSON.parse(value) as SmsMessage[]).map((message) => ({ ...message, direction: message.direction ?? 'outbound' })));
+    }).catch(() => undefined).finally(() => { if (active) refreshMessages().catch(() => setLoading(false)); });
+    return () => { active = false; };
   }, [isAuthenticated, profile?.id, refreshMessages]);
 
   useEffect(() => {
@@ -68,7 +70,7 @@ export function MessagingProvider({ children }: { children: React.ReactNode }) {
     if (transport === 'internal' && !/^\d{2,5}$/.test(normalized)) throw new Error('Use a valid company extension.');
     if (!body) throw new Error('Write a message before sending.');
     if (body.length > 1600) throw new Error('Messages can contain up to 1,600 characters.');
-    const localId = `local-${Date.now()}`;
+    const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const destination = transport === 'internal' ? `extension:${normalized}` : normalized;
     const draft: SmsMessage = { id: localId, to: destination, contactName, text: body, status: 'sending', direction: 'outbound', transport, createdAt: new Date().toISOString() };
     persist((current) => [draft, ...current]);

@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, put } from './object-store.js';
+import { del, put, transactObjectGroup } from './object-store.js';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
@@ -11,6 +11,7 @@ export type QueueCall = {
   kind: 'ring_group' | 'queue';
   status: 'waiting' | 'dialing' | 'connecting' | 'connected';
   agentCallControlIds: string[];
+  bridgedAgentCallControlId?: string;
   updatedAt: string;
 };
 
@@ -41,4 +42,24 @@ export async function readQueueCall(queueName: string) {
 
 export async function clearQueueCall(queueName: string) {
   await del(pathname(queueName));
+}
+
+export async function claimQueueCallStatus(
+  queueName: string,
+  expected: Array<QueueCall['status']>,
+  next: QueueCall['status'],
+  patch: Partial<QueueCall> = {},
+) {
+  const path = pathname(queueName);
+  return transactObjectGroup<{ claimed: boolean; queue: QueueCall | null }>(`vocivo:queue-call:${id(queueName)}`, [path], (objects) => {
+    const stored = objects.get(path)?.body;
+    let current: QueueCall | null = null;
+    try { current = stored ? decrypt(stored) : null; } catch { current = null; }
+    if (!current || !expected.includes(current.status)) return { result: { claimed: false, queue: current } };
+    const updated = { ...current, ...patch, status: next, updatedAt: new Date().toISOString() };
+    return {
+      puts: [{ pathname: path, value: encrypt(updated), options: { access: 'private' as const, contentType: 'application/octet-stream' } }],
+      result: { claimed: true, queue: updated },
+    };
+  });
 }

@@ -41,7 +41,5 @@ export function writeAuthError(res: VercelResponse, error: unknown) {
 
 export function publicError(error: unknown) {
   console.error(error);
-  return error instanceof Error && error.message.startsWith('Missing server configuration:')
-    ? error.message
-    : 'The service is temporarily unavailable.';
+  return 'The service is temporarily unavailable.';
 }

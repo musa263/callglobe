@@ -24,7 +24,7 @@ export async function sendIncomingCallWebPush(input: {
   const extensionIds = [...new Set(input.extensionIds.filter(Boolean))];
   const records = (await Promise.all(extensionIds.map((extensionId) => listWebPushSubscriptions(input.organizationId, extensionId)))).flat();
   let sent = 0;
-  await Promise.allSettled(records.map(async (record) => {
+  const results = await Promise.allSettled(records.map(async (record) => {
     try {
       await webpush.sendNotification({ endpoint: record.endpoint, expirationTime: record.expirationTime, keys: record.keys }, JSON.stringify({
         type: 'vocivo.incoming_call',
@@ -43,5 +43,10 @@ export async function sendIncomingCallWebPush(input: {
       throw error;
     }
   }));
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      console.error('Vocivo web push send failed', { endpoint: records[index].endpoint, error: result.reason });
+    }
+  });
   return { sent, unavailable: false };
 }

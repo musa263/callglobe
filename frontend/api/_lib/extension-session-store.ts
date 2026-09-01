@@ -14,7 +14,7 @@ export async function revokeExtensionSessions(extensionId: string) {
 
 export async function isExtensionSessionRevoked(extensionId: string, issuedAtSeconds: number) {
   const cached = cache.get(extensionId);
-  if (cached && Date.now() - cached.checkedAt < 15_000) return cached.revokedAt > issuedAtSeconds * 1000;
+  if (cached && Date.now() - cached.checkedAt < 5_000) return cached.revokedAt > issuedAtSeconds * 1000;
   try {
     const value = await readStoredObject(pathname(extensionId));
     const revokedAt = value ? Number(value.toString('utf8')) || 0 : 0;

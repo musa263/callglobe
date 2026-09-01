@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { put } from './object-store.js';
+import { transactObject } from './object-store.js';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
 
@@ -62,6 +62,15 @@ export function normalizeTrunkPolicy(id: string, input: Partial<TrunkPolicy>, cu
   };
 }
 
+function decodeTrunkPolicies(value: Buffer | null): Record<string, TrunkPolicy> {
+  if (!value) return {};
+  try {
+    return decrypt(value);
+  } catch {
+    return {};
+  }
+}
+
 export async function readTrunkPolicies() {
   try {
     const value = await readStoredObject(pathname);
@@ -71,20 +80,20 @@ export async function readTrunkPolicies() {
   }
 }
 
-async function writeTrunkPolicies(value: Record<string, TrunkPolicy>) {
-  await put(pathname, encrypt(value), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
-}
-
 export async function saveTrunkPolicy(id: string, input: Partial<TrunkPolicy>) {
-  const policies = await readTrunkPolicies();
-  const policy = normalizeTrunkPolicy(id, input, policies[id]);
-  await writeTrunkPolicies({ ...policies, [id]: policy });
-  return policy;
+  let policy: TrunkPolicy | undefined;
+  await transactObject(pathname, (current) => {
+    const policies = decodeTrunkPolicies(current);
+    policy = normalizeTrunkPolicy(id, input, policies[id]);
+    return encrypt({ ...policies, [id]: policy });
+  }, { access: 'private', contentType: 'application/octet-stream' });
+  return policy!;
 }
 
 export async function deleteTrunkPolicy(id: string) {
-  const policies = await readTrunkPolicies();
-  if (!(id in policies)) return;
-  delete policies[id];
-  await writeTrunkPolicies(policies);
+  await transactObject(pathname, (current) => {
+    const policies = decodeTrunkPolicies(current);
+    delete policies[id];
+    return encrypt(policies);
+  }, { access: 'private', contentType: 'application/octet-stream' });
 }

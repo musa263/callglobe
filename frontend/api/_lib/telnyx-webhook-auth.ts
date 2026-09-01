@@ -16,16 +16,32 @@ async function rawBody(req: VercelRequest, maximum = 1024 * 1024) {
     const serialized = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
     return Buffer.byteLength(serialized) <= maximum ? Buffer.from(serialized) : null;
   };
-  if (!(Symbol.asyncIterator in req)) return parsedBody();
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += value.length;
-    if (size > maximum) return null;
-    chunks.push(value);
-  }
-  return chunks.length ? Buffer.concat(chunks) : parsedBody();
+  if (typeof (req as { on?: unknown }).on !== 'function') return parsedBody();
+  // The Vercel Node runtime buffers the body and replays the exact raw bytes only through
+  // req.on('data'/'end') and req.read() (its restoreBody helper); async iteration bypasses
+  // that replay and yields nothing, so the event API is the one reliable raw-byte path.
+  const streamed = await new Promise<Buffer | null | undefined>((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (value: Buffer | null | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(undefined), 2000);
+    req.on('data', (chunk: Buffer | string) => {
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += value.length;
+      if (size > maximum) return finish(null);
+      chunks.push(value);
+    });
+    req.on('end', () => finish(chunks.length ? Buffer.concat(chunks) : undefined));
+    req.on('error', () => finish(undefined));
+  });
+  if (streamed === null) return null;
+  return streamed ?? parsedBody();
 }
 
 function ed25519Key(value: string) {

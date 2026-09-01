@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireSession, createTenantAdminSession, createSession } from '../auth.js';
+import { requireSession, createTenantAdminSession, createSession, invalidateOwnerSessions } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { changePassword } from '../number-config.js';
 import { readPbxConfig } from '../pbx-config-store.js';
@@ -19,6 +19,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? await changeTenantAdminPassword(session.accountId, session.organizationId || '', currentPassword, newPassword, await readPbxConfig())
         : false;
     if (!changed) return res.status(400).json({ error: 'Current password is incorrect.' });
+    // Revoke existing owner tokens before minting the replacement so its iat
+    // is not older than the invalidation marker.
+    if (session.sub === 'vocivo-owner') await invalidateOwnerSessions();
     const token = session.sub === 'vocivo-owner'
       ? await createSession(session.email || '')
       : session.accountId && session.organizationId

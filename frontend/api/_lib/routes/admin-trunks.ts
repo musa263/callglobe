@@ -51,6 +51,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await deleteTrunkPolicy(id);
       return res.status(200).json({ success: true });
     }
+    if (req.method === 'POST' && id) return res.status(400).json({ error: 'Use PATCH to update an existing SIP trunk.' });
+    if (req.method === 'PATCH' && !id) return res.status(400).json({ error: 'Trunk ID is required.' });
     const name = text(req.body?.name, 80);
     const proxy = text(req.body?.proxy, 200);
     const username = text(req.body?.username, 100);

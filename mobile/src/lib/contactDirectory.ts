@@ -25,9 +25,16 @@ async function loadDirectory() {
 export async function findPhoneContact(number: string): Promise<ContactIdentity | null> {
   const target = digits(number);
   if (target.length < 7) return null;
-  directoryPromise ||= loadDirectory().finally(() => {
-    setTimeout(() => { directoryPromise = null; }, 60_000);
-  });
+  if (!directoryPromise) {
+    const pending = loadDirectory();
+    directoryPromise = pending;
+    pending.then(() => {
+      setTimeout(() => { directoryPromise = null; }, 60_000);
+    }, () => {
+      // Retry on the next lookup instead of caching the failure for a minute.
+      if (directoryPromise === pending) directoryPromise = null;
+    });
+  }
   const entries = await directoryPromise;
   const exact = entries.find((entry) => entry.digits === target);
   if (exact) return exact.identity;

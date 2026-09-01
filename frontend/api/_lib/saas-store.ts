@@ -331,7 +331,8 @@ export async function saveSaasSubscription(organizationId: string, subscription:
   if (subscription.organizationId !== organizationId || !config.organizations.some((organization) => organization.id === organizationId)) throw new Error('Subscription organization was not found.');
   const state = await readTenantSaasState(organizationId, config);
   if (!state.plans.some((plan) => plan.id === subscription.planId && plan.active)) throw new Error('Choose an active subscription plan.');
-  await upsertTenantSaasRow(organizationId, tenantRow(subscription, state.featureOverrides[organizationId]));
+  const sanitized = createSubscription(organizationId, subscription.planId, state, subscription);
+  await upsertTenantSaasRow(organizationId, tenantRow(sanitized, state.featureOverrides[organizationId]));
 }
 
 export async function saveSaasFeatureOverrides(organizationId: string, overrides: Partial<FeatureSet>, config: PbxConfig) {
@@ -347,6 +348,7 @@ export async function saveSaasPlan(plan: SaasPlan, config?: PbxConfig) {
 export function effectiveEntitlements(state: SaasState, organizationId: string, accountType: 'business' | 'individual' = 'business') {
   const subscription = state.subscriptions[organizationId] || defaultSubscription(organizationId, accountType);
   const plan = state.plans.find((item) => item.id === subscription.planId) || state.plans[0] || defaultPlans()[0];
+  if (plan.id !== subscription.planId) console.warn(`[saas-store] Unknown plan "${subscription.planId}" for organization "${organizationId}"; falling back to plan "${plan.id}".`);
   const serviceActive = ['active', 'trialing'].includes(subscription.status);
   const features = Object.fromEntries(featureKeys.map((feature) => [feature, serviceActive && Boolean(state.featureOverrides[organizationId]?.[feature] ?? plan.features[feature])])) as FeatureSet;
   if (accountType === 'individual') features.internalCalling = false;
@@ -402,9 +404,9 @@ export async function saveTenantAdmin(input: Partial<TenantAdminAccount> & { pas
     organizationId,
     email,
     name,
-    role: input.role === 'company_admin' ? 'company_admin' : 'company_owner',
+    role: input.role === 'company_admin' || input.role === 'company_owner' ? input.role : existing?.role || 'company_owner',
     passwordHash: input.password ? await bcrypt.hash(input.password, 12) : existing?.passwordHash || '',
-    status: input.status === 'suspended' ? 'suspended' : 'active',
+    status: input.status === 'suspended' || input.status === 'active' ? input.status : existing?.status || 'active',
     forcePasswordChange: input.password ? input.forcePasswordChange !== false : existing?.forcePasswordChange ?? true,
     extensionId: input.extensionId || existing?.extensionId,
     extension: input.extension || existing?.extension,
@@ -434,7 +436,11 @@ export async function activeTenantAdmin(accountId: string, organizationId: strin
 }
 
 export async function removeTenantAdminForExtension(extensionId: string, organizationId: string, config: PbxConfig) {
-  await readTenantSaasState(organizationId, config);
+  const state = await readTenantSaasState(organizationId, config);
+  const removing = state.tenantAdmins.some((item) => item.extensionId === extensionId);
+  const remaining = state.tenantAdmins.filter((item) => item.extensionId !== extensionId);
+  const organization = config.organizations.find((item) => item.id === organizationId);
+  if (removing && organization?.accountType === 'business' && !remaining.some((item) => item.organizationId === organizationId && item.status === 'active')) throw new Error('Business customers require at least one active company administrator.');
   await deleteTenantSaasAdminsForExtension(organizationId, extensionId);
 }
 
@@ -447,6 +453,9 @@ export async function removeTenantAdmin(accountId: string, organizationId: strin
   const state = await readTenantSaasState(organizationId, config);
   const account = state.tenantAdmins.find((item) => item.id === accountId);
   if (!account) return false;
+  const remaining = state.tenantAdmins.filter((item) => item.id !== accountId);
+  const organization = config.organizations.find((item) => item.id === organizationId);
+  if (organization?.accountType === 'business' && !remaining.some((item) => item.organizationId === organizationId && item.status === 'active')) throw new Error('Business customers require at least one active company administrator.');
   return deleteTenantSaasAdmin(organizationId, accountId);
 }
 

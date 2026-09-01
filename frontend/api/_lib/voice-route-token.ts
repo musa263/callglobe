@@ -50,7 +50,7 @@ export function verifyVoiceRouteToken(token: string): VoiceRouteAuthorization | 
     const supplied = Buffer.from(suppliedSignature);
     if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) return null;
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
-    if (typeof decoded.r !== 'string' || typeof decoded.o !== 'string' || typeof decoded.d !== 'string'
+    if (typeof decoded.r !== 'string' || typeof decoded.o !== 'string' || typeof decoded.d !== 'string' || !decoded.d
       || !['outbound', 'internal'].includes(String(decoded.f)) || typeof decoded.e !== 'number'
       || decoded.e < Math.floor(Date.now() / 1000)) return null;
     const authorization: VoiceRouteAuthorization = {

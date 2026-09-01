@@ -33,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (toExtension) {
       await requireFeature(session, 'internalCalling', config);
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal messaging.' });
-      const [source, directory] = await Promise.all([getExtension(session.extensionId), listExtensions(organizationId)]);
+      const [source, directory] = await Promise.all([getExtension(session.extensionId, organizationId), listExtensions(organizationId)]);
       const recipient = directory.find((item) => item.extension === toExtension && item.status === 'active');
       if (!recipient || recipient.id === source.id) return res.status(404).json({ error: 'Choose another active extension in your organization.' });
       const id = `internal-${randomUUID()}`;

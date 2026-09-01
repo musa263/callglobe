@@ -8,7 +8,10 @@ function path(jti: string) {
 export async function consumeEnrollment(jti: string) {
   try {
     await put(path(jti), 'consumed', { access: 'private', contentType: 'text/plain', allowOverwrite: false });
-  } catch {
-    throw new Error('This enrollment code has already been used.');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Stored object already exists.') {
+      throw new Error('This enrollment code has already been used.');
+    }
+    throw error;
   }
 }

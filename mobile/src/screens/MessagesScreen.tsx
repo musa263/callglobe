@@ -41,6 +41,8 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
     setRecipient(number);
     setActivePeer(nextTransport === 'internal' ? `extension:${number}` : number);
     setContactName(target.name ?? '');
+    setBody('');
+    setSuggestions([]);
     setError('');
   }, [target]);
 
@@ -97,6 +99,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
     setRecipient('');
     setContactName('');
     setBody('');
+    setSuggestions([]);
     setError('');
     setTransport(profile?.account_type === 'business' ? 'internal' : 'sms');
   };

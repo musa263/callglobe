@@ -71,7 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!preferredCallerId) return res.status(409).json({ error: 'No caller ID is assigned to this account. Ask your administrator to assign a phone number or verified caller ID.' });
       const [resolvedCallerId, extension] = await Promise.all([
         assertCallerIdForSession(session, preferredCallerId),
-        session.extensionId ? getExtension(session.extensionId) : Promise.resolve(undefined),
+        session.extensionId ? getExtension(session.extensionId, organizationId) : Promise.resolve(undefined),
       ]);
       callerId = resolvedCallerId;
       authorizeOutboundCall(tenant, {

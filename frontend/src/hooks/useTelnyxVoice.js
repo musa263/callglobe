@@ -19,6 +19,8 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const clientListenerCleanupRef = useRef(null);
   const iceServersRef = useRef(undefined);
   const tokenRefreshRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const socketRetryRef = useRef(0);
   const callRef = useRef(null);
   const endedIdRef = useRef(null);
   const routeIdRef = useRef(null);
@@ -52,7 +54,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   const [loginGeneration, setLoginGeneration] = useState(0);
   const [callStarting, setCallStarting] = useState(false);
   const [mediaReady, setMediaReady] = useState(false);
+  const dialedNumberRef = useRef('');
   useEffect(() => { routePhaseRef.current = routePhase; }, [routePhase]);
+  useEffect(() => { dialedNumberRef.current = dialedNumber; }, [dialedNumber]);
 
   const resumeAudio = useCallback(async () => {
     const media = document.getElementById('remoteMedia');
@@ -153,6 +157,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       clearTimeout(tokenRefreshRef.current);
       tokenRefreshRef.current = null;
     }
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     const routeId = routeIdRef.current;
     const extraRoutes = [heldCallRef.current?.routeId, ...(conferenceRef.current?.participants || []).map((item) => item.routeId)].filter(Boolean);
     [...new Set([routeId, ...extraRoutes].filter(Boolean))].forEach((id) => api('/api/voice/cancel', { method: 'POST', body: { routeId: id } }).catch((failure) => reportWebVoiceError('cancel route during disconnect', failure)));
@@ -223,6 +231,11 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
       };
       on('telnyx.ready', () => {
         if (cancelled) return;
+        socketRetryRef.current = 0;
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
         setError('');
         setReady(true);
         setStatusLabel('Ready for calls');
@@ -292,6 +305,16 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         setAudioBlocked(false);
         setReady(false);
         setStatusLabel('Reconnecting...');
+        if (socketRetryRef.current < 5) {
+          socketRetryRef.current += 1;
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null;
+            if (!cancelled) setLoginGeneration((generation) => generation + 1);
+          }, Math.min(30_000, 10_000 * socketRetryRef.current));
+        } else {
+          setStatusLabel('Connection lost');
+        }
       });
       on('telnyx.notification', (notification) => {
         if (cancelled || notification?.type !== 'callUpdate' || !notification.call) return;
@@ -347,7 +370,7 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         if (activeId && activeId !== callId && !TERMINAL_STATES.has(nextState)) return;
         callRef.current = updatedCall;
         setCall(updatedCall);
-        setRemoteIdentity(callIdentityRef.current.get(callId) || describeRemote(updatedCall, dialedNumber));
+        setRemoteIdentity(callIdentityRef.current.get(callId) || describeRemote(updatedCall, dialedNumberRef.current));
         setState(nextState);
         if (direction === 'inbound' && ['new', 'ringing', 'early', 'requesting'].includes(nextState)) {
           incomingCallRef.current = updatedCall;

@@ -1,6 +1,6 @@
 import type { PbxConfig } from './pbx-config-store.js';
 
-const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)$/i;
+const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?::\d{1,5})?$/i;
 const carrierSipAddress = /^(?:sip:)?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?:;[^<>\s]+)?$/i;
 const telnyxSipHost = 'sip.telnyx.com';
 

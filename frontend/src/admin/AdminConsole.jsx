@@ -290,7 +290,7 @@ export default function AdminConsole({ profile }) {
       const activeCustomer = s.organizations?.find((item) => item.id === p.config.activeOrganizationId) || s.organizations?.[0];
       const features = activeCustomer?.entitlements || {};
       const allowed = (feature) => isSuperadmin || Boolean(features[feature]);
-      setConfig(p.config); setSaas(s); setExtensions(u.extensions || []); setBusy(false);
+      setConfig(p.config); setSaas(s); setExtensions(u.extensions || []);
       if (isSuperadmin) setWalletData(await safe(api('/api/admin/wallets'), null));
       const o = await safe(api('/api/admin/overview'), null); setOverview(o);
       const t = allowed('sipTrunks') ? await safe(api('/api/admin/trunks'), null) : null; setTrunks(t);

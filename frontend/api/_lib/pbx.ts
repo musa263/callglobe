@@ -1,5 +1,5 @@
 import { requiredEnv } from './http.js';
-import { telnyx } from './telnyx.js';
+import { telnyx, TelnyxApiError } from './telnyx.js';
 import { readPbxConfig } from './pbx-config-store.js';
 import { revokeExtensionSessions } from './extension-session-store.js';
 import { extensionSipUsernames } from './internal-sip.js';
@@ -138,7 +138,7 @@ export async function listExtensions(organizationId?: string): Promise<Extension
         const response = await telnyx(`/telephony_credentials?${query}`);
         const payload = await response.json() as { data?: CredentialResource[] };
         value = (payload.data ?? []).map(parseCredential).filter((item): item is ExtensionUser => Boolean(item)).sort((a, b) => Number(a.extension) - Number(b.extension));
-        await saveExtensionDirectory(value);
+        value = await saveExtensionDirectory(value);
       }
       value = await ensureTelnyxDirectory(value);
       extensionCache = { expiresAt: Date.now() + extensionCacheTtlMs, value };
@@ -214,6 +214,7 @@ export async function createExtension(input: Partial<ExtensionUser>) {
     await Promise.all([
       telnyx(`/telephony_credentials/${encodeURIComponent(data.id)}`, { method: 'DELETE' }).catch(() => undefined),
       deleteExtensionCredential(extension.id).catch(() => undefined),
+      replaceStoredExtension(null, extension.id).catch(() => undefined),
     ]);
     throw error;
   }
@@ -262,14 +263,24 @@ async function requireManagedCredential(id: string) { return (await requireManag
 async function ensureTelnyxDirectory(extensions: ExtensionUser[]) {
   const normalized: ExtensionUser[] = [];
   for (const extension of extensions) {
-    normalized.push(await requireManagedCredential(extension.id));
+    try {
+      normalized.push(await requireManagedCredential(extension.id));
+    } catch (error) {
+      console.error(`Vocivo could not refresh extension ${extension.extension} (${extension.id}); skipping it in the shared directory`, error);
+    }
   }
   return normalized.sort((a, b) => Number(a.extension) - Number(b.extension));
 }
 
-export async function getExtension(id: string) {
+function assertExtensionOrganization(extension: ExtensionUser, expectedOrganizationId?: string) {
+  if (expectedOrganizationId && extension.organizationId !== expectedOrganizationId) throw new Error('Extension not found.');
+}
+
+export async function getExtension(id: string, expectedOrganizationId?: string) {
   await listExtensions();
-  return requireManagedCredential(id);
+  const extension = await requireManagedCredential(id);
+  assertExtensionOrganization(extension, expectedOrganizationId);
+  return extension;
 }
 
 export async function listExtensionSipUsernames(id: string) {
@@ -283,14 +294,15 @@ export async function listExtensionSipUsernames(id: string) {
   }
 }
 
-export async function getExtensionCredentials(id: string) {
+export async function getExtensionCredentials(id: string, expectedOrganizationId?: string) {
   const { parsed: extension, data } = await requireManagedCredentialResource(id);
+  assertExtensionOrganization(extension, expectedOrganizationId);
   if (!data?.sip_username || !data.sip_password) throw new Error('Telnyx did not return extension credentials.');
   return { extension: { ...extension, sipProvider: 'telnyx' as const }, sipUsername: data.sip_username, sipPassword: data.sip_password, sipDomain: 'sip.telnyx.com', provider: 'telnyx' as const, credentialId: data.id };
 }
 
-export async function updateExtension(id: string, input: Partial<ExtensionUser>) {
-  const existing = await getExtension(id);
+export async function updateExtension(id: string, input: Partial<ExtensionUser>, expectedOrganizationId?: string) {
+  const existing = await getExtension(id, expectedOrganizationId);
   const value = validateExtensionInput({ ...existing, ...input }, clean(input.extension, 5) || existing.extension);
   const config = await readPbxConfig();
   const organization = config.organizations.find((item) => item.id === value.organizationId && item.status === 'active');
@@ -335,11 +347,16 @@ function dataFor(extension: ExtensionUser, id: string): CredentialResource {
   };
 }
 
-export async function deleteExtension(id: string) {
+export async function deleteExtension(id: string, expectedOrganizationId?: string) {
   const stored = await readExtensionCredential(id);
   const managed = stored ? null : await requireManagedCredentialResource(id);
+  assertExtensionOrganization(stored ? stored.extension : managed!.parsed, expectedOrganizationId);
   await revokeExtensionSessions(id);
-  await telnyx(`/telephony_credentials/${encodeURIComponent(stored?.carrierCredentialId || managed?.data.id || id)}`, { method: 'DELETE' });
+  try {
+    await telnyx(`/telephony_credentials/${encodeURIComponent(stored?.carrierCredentialId || managed?.data.id || id)}`, { method: 'DELETE' });
+  } catch (error) {
+    if (!(error instanceof TelnyxApiError) || error.status !== 404) throw error;
+  }
   credentialCache.delete(id);
   await Promise.all([replaceStoredExtension(null, id), deleteExtensionCredential(id)]);
 }

@@ -66,7 +66,7 @@ function voicemailDelay(value: unknown) {
 function departments(value: unknown, legacyOne?: unknown, legacyTwo?: unknown) {
   const source = Array.isArray(value) ? value : [legacyOne, legacyTwo];
   const normalized = source.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim().slice(0, 40)).slice(0, 5);
-  return normalized.length >= 2 ? normalized : defaults.departments;
+  return normalized.length >= 1 ? normalized : defaults.departments;
 }
 
 async function readTaggedBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
@@ -115,10 +115,15 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
     backgroundImageUrl: typeof input.backgroundImageUrl === 'string' && /^https:\/\//.test(input.backgroundImageUrl) ? input.backgroundImageUrl.slice(0, 500) : '',
   };
   const pbx = await savePbxConfig((current) => ({ businessVoiceConfigs: { ...current.businessVoiceConfigs, [organizationId]: config } }));
-  const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
-  const payload = await response.json() as { data?: Array<{ id: string; phone_number: string; connection_id?: string | null }> };
+  const numbers: Array<{ id: string; phone_number: string; connection_id?: string | null }> = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const response = await telnyx(`/phone_numbers?page[size]=250&filter[status]=active&page[number]=${page}`);
+    const payload = await response.json() as { data?: Array<{ id: string; phone_number: string; connection_id?: string | null }>; meta?: { total_pages?: number } };
+    numbers.push(...(payload.data ?? []));
+    if (!payload.data?.length || page >= (payload.meta?.total_pages || 1)) break;
+  }
   const callControlId = telnyxPstnConnectionId();
-  await Promise.all((payload.data ?? [])
+  await Promise.all(numbers
     .filter((item) => numberOrganizationId(item.phone_number, pbx) === organizationId && item.connection_id !== callControlId)
     .map((item) => telnyx(`/phone_numbers/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ connection_id: callControlId }) })));
   return config;

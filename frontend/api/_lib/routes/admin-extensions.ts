@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         try {
           await saveTenantAdmin({ organizationId, email: created.extension.email, name: created.extension.name, role: created.extension.role as 'company_owner' | 'company_admin', password, extensionId: created.extension.id, extension: created.extension.extension, status: 'active', forcePasswordChange: true }, config);
         } catch (adminError) {
-          await deleteExtension(created.extension.id).catch(() => undefined);
+          await deleteExtension(created.extension.id, organizationId).catch(() => undefined);
           throw adminError;
         }
       }
@@ -77,7 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const remainingAdmins = state.tenantAdmins.filter((account) => account.organizationId === organizationId && account.status === 'active' && account.id !== linkedAdmin?.id);
         if (linkedAdmin && organization.accountType === 'business' && !remainingAdmins.length) return res.status(409).json({ error: 'Assign another company administrator before removing this administrator role.' });
       }
-      const extension = await updateExtension(id, { ...(req.body ?? {}), organizationId });
+      const extension = await updateExtension(id, { ...(req.body ?? {}), organizationId }, organizationId);
       if (extension && ['company_owner', 'company_admin'].includes(extension.role)) {
         if (!extension.email) return res.status(400).json({ error: 'Company administrators require an email address.' });
         const existingAdmin = await findTenantAdminForExtension(id, organizationId, config);
@@ -93,7 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const linkedAdmin = state.tenantAdmins.find((account) => account.extensionId === id);
     const remainingAdmins = state.tenantAdmins.filter((account) => account.organizationId === organizationId && account.status === 'active' && account.id !== linkedAdmin?.id);
     if (linkedAdmin && organization.accountType === 'business' && !remainingAdmins.length) return res.status(409).json({ error: 'Assign another company administrator before deleting this user.' });
-    await deleteExtension(id);
+    await deleteExtension(id, organizationId);
     await removeTenantAdminForExtension(id, organizationId, config);
     return res.status(200).json({ success: true });
   } catch (error) {

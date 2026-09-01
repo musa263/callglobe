@@ -79,7 +79,9 @@ async function readEvents(prefix: string, limit: number) {
 export async function listCallEvents(limit = 100, organizationId?: string) {
   if (organizationId) {
     await migrateCallEvents(organizationId);
-    return readEvents(`vocivo/call-events/v3/${tenantStorageKey(organizationId)}/`, limit);
+    const events = await readEvents(`vocivo/call-events/v3/${tenantStorageKey(organizationId)}/`, limit);
+    return [...new Map(events.map((event) => [event.id, event])).values()]
+      .sort((a, b) => b.event_timestamp.localeCompare(a.event_timestamp)).slice(0, limit);
   }
   const [current, legacy] = await Promise.all([
     readEvents('vocivo/call-events/v3/', limit),

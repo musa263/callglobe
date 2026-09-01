@@ -19,6 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       calls: callHistoryFromEvents(events, organizationId, 100, {
         extensionId: session.extensionId,
         extension: session.extension,
+        viewAll: ['owner', 'admin', 'superadmin', 'company_owner', 'company_admin'].includes(session.role || ''),
         directory: directory.map(({ id, extension, name, sipUsername }) => ({ id, extension, name, sipUsername })),
       }),
     });

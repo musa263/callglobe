@@ -171,7 +171,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const destinationId = text(req.body?.destinationId, 80);
     if (organizationId && destinationType !== 'main' && !destinationId) return res.status(400).json({ error: 'Choose an inbound destination.' });
     if (organizationId && destinationType === 'extension') {
-      const extension = await getExtension(destinationId).catch(() => null);
+      const extension = await getExtension(destinationId, organizationId).catch(() => null);
       if (!extension || extension.status !== 'active' || extension.organizationId !== organizationId) return res.status(400).json({ error: 'Choose an active extension in this organization.' });
     }
     if (organizationId && ['ring_group', 'queue', 'ivr'].includes(destinationType)) {

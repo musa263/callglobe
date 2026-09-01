@@ -58,7 +58,8 @@ export async function readExtensionDirectory() {
 }
 
 export async function saveExtensionDirectory(extensions: ExtensionUser[]) {
-  await updateExtensionDirectory(() => extensions);
+  // Seed-only write: never overwrite a directory that concurrent writers already populated.
+  return updateExtensionDirectory((current) => (current.length ? current : extensions));
 }
 
 export async function updateExtensionDirectory(update: (extensions: ExtensionUser[]) => ExtensionUser[] | Promise<ExtensionUser[]>) {

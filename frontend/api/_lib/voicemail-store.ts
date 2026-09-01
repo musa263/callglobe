@@ -45,6 +45,9 @@ export async function storeVoicemail(voicemail: StoredVoicemail) {
   });
 }
 
+// Trust boundary: sourceUrl must only ever come from a Telnyx webhook payload
+// that verifyTelnyxWebhook has already signature-verified (see voice-webhook.ts).
+// Never pass a user-supplied URL here - this performs a server-side fetch.
 export async function storeVoicemailAudio(id: string, sourceUrl: string) {
   const response = await fetch(sourceUrl);
   if (!response.ok) throw new Error('Unable to download the Telnyx voicemail recording.');

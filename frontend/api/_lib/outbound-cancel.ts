@@ -27,6 +27,18 @@ export function conferenceParticipantTeardown(pair: OutboundCallPair, hangingCal
     return { hangIds: [...new Set(hangIds.filter(Boolean))], keepPair: null as OutboundCallPair | null, peerAction: 'unlink' as const };
   }
   const hangingRemote = hangingCallControlId === liveOutboundDestinationId(pair) || hangingCallControlId === pair.destinationCallControlId;
+  if (pair.conferenceRole === 'host' && hangingCallControlId === pair.clientCallControlId) {
+    // The host left. Hang every remaining leg so no participant is stranded on
+    // an untracked carrier call; the peer pair handles its own client leg when
+    // its destination hangup webhook arrives.
+    hangIds.push(
+      liveOutboundDestinationId(pair),
+      pair.destinationCallControlId,
+      ...(pair.forkDestinationCallControlIds || []),
+      pair.peerDestinationCallControlId || '',
+    );
+    return { hangIds: [...new Set(hangIds.filter(Boolean))], keepPair: null as OutboundCallPair | null, peerAction: 'unlink' as const };
+  }
   if (pair.conferenceRole === 'host' && hangingCallControlId === pair.peerDestinationCallControlId) {
     return {
       hangIds: [...new Set(hangIds.filter(Boolean))],
@@ -163,9 +175,14 @@ export async function hangupConferenceParticipant(pair: OutboundCallPair, hangin
     }
   }
   if (plan.keepPair) {
+    const keep = plan.keepPair;
     await updateOutboundCallPair(pair, (current) => ({
-      ...plan.keepPair!,
-      termination: current.termination,
+      ...current,
+      destinationCallControlId: keep.destinationCallControlId,
+      selectedDestinationCallControlId: keep.selectedDestinationCallControlId,
+      peerClientCallControlId: keep.peerClientCallControlId,
+      peerDestinationCallControlId: keep.peerDestinationCallControlId,
+      forkDestinationCallControlIds: keep.forkDestinationCallControlIds,
       updatedAt: new Date().toISOString(),
     }));
   } else {
@@ -174,12 +191,15 @@ export async function hangupConferenceParticipant(pair: OutboundCallPair, hangin
 }
 
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {
-  const ids = outboundCallControlIds(pair);
+  // Re-read the pair first so legs added by concurrent webhooks (forks, peers)
+  // are part of the hangup set before tracking is cleared.
+  const fresh = await updateOutboundCallPair(pair, (current) => current);
+  const ids = outboundCallControlIds(fresh);
   // Hanging up a Call Control leg stops its playback. Sending playback_stop as
   // a separate command doubled carrier traffic and made concurrent cancel
   // webhooks wait on already-ended calls.
-  const updated = await terminateOutboundLegs(pair, ids, commandPrefix);
-  const complete = ids.every((id) => updated.termination?.[id]?.status === 'terminated');
+  const updated = await terminateOutboundLegs(fresh, ids, commandPrefix);
+  const complete = outboundCallControlIds(updated).every((id) => updated.termination?.[id]?.status === 'terminated');
   if (complete) {
     await clearOutboundCallPair(updated);
   } else {

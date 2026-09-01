@@ -53,7 +53,6 @@ export async function bridgeOutboundCalls(
   wait: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 ) {
   const delays = [0, 250, 650];
-  let lastError: unknown;
 
   for (let attempt = 0; attempt < delays.length; attempt += 1) {
     if (delays[attempt]) await wait(delays[attempt]);
@@ -65,11 +64,9 @@ export async function bridgeOutboundCalls(
       });
       return;
     } catch (error) {
-      lastError = error;
       if (alreadyBridged(error)) return;
+      // The final attempt always rethrows here, so the loop is the only exit.
       if (!retryable(error) || attempt === delays.length - 1) throw error;
     }
   }
-
-  throw lastError;
 }

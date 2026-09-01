@@ -156,6 +156,7 @@ export function pbxForOrganization(config: PbxConfig, organizationId: string): P
     company: { ...isolated.company, name: organization?.name || isolated.company.name },
     ai: { ...isolated.ai, enabled: false, assistantId: '' },
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
+    numberAssignments: Object.fromEntries(Object.entries(config.numberAssignments).filter(([, assignment]) => assignment.organizationId === organizationId)),
     activeOrganizationId: organizationId,
   };
 }

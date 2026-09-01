@@ -19,7 +19,7 @@ import { normalizeE164, organizationForNumber } from '../tenancy.js';
 import { verifyTelnyxWebhook } from '../telnyx-webhook-auth.js';
 import { quarantineSecurityEvent } from '../security-quarantine.js';
 import { storeCallEvent } from '../call-event-store.js';
-import { clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
+import { claimQueueCallStatus, clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
 import { clearConferenceCall, isConferenceEnded, markConferenceEnded, readConferenceCall, saveConferenceCall } from '../conference-call-store.js';
 import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
@@ -64,6 +64,7 @@ type AgentRouteOptions = {
 };
 
 async function routeToAgent(callControlId: string, department: string, waitingMessage: string, voice: string, eventId: string, destination: string | string[], targetExtensionId?: string, timeoutSeconds = 45, callerNumber?: string, callerName?: string, organizationId?: string, options: AgentRouteOptions = {}) {
+  try {
   if (options.announceWaiting !== false) {
     await speakPrompt(callControlId, { payload: waitingMessage, voice, command_id: `${eventId}-wait` });
   } else {
@@ -99,6 +100,10 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
     commandId: `${eventId}-agent`,
     timeoutSeconds,
   });
+  } catch (error) {
+    logWebhookFailure('route caller to agent', error);
+    await failCallerAfterRoutingError(callControlId, eventId, organizationId, callerNumber, callerName, options.voicemailEnabled);
+  }
 }
 
 async function routeToAvailableAgent(input: {
@@ -148,7 +153,7 @@ async function resolveOrganizationDestination(organizationId: string, inboundNum
   const assignment = pbx.numberAssignments[normalizeE164(inboundNumber)];
   if (assignment?.organizationId === organizationId && assignment.destinationType === 'main') return null;
   if (assignment?.organizationId === organizationId && assignment.destinationType === 'extension' && assignment.destinationId) {
-    const extension = await getExtension(assignment.destinationId).catch(() => null);
+    const extension = await getExtension(assignment.destinationId, organizationId).catch(() => null);
     if (extension?.status === 'active' && extension.organizationId === organizationId) return extension;
   }
   if (preferMain) return null;
@@ -167,6 +172,16 @@ async function routeUnavailable(callControlId: string, organizationId: string, e
     client_state: encodeVoiceState({ flow, callerNumber, callerName, organizationId }),
     command_id: `${eventId}-unavailable`,
   });
+}
+
+async function failCallerAfterRoutingError(callControlId: string, eventId: string, organizationId?: string, callerNumber?: string, callerName?: string, voicemailEnabled?: boolean) {
+  try {
+    if (!organizationId) throw new Error('No tenant is available for the routing failure prompt.');
+    await routeUnavailable(callControlId, organizationId, eventId, callerNumber, callerName, voicemailEnabled);
+  } catch (fallbackError) {
+    logWebhookFailure('route caller after routing failure', fallbackError);
+    await callAction(callControlId, 'hangup', { command_id: `${eventId}-routing-failed` }).catch((hangupError) => logWebhookFailure('end caller after routing failure', hangupError));
+  }
 }
 
 async function routeToExtension(input: {
@@ -330,16 +345,23 @@ async function routeToCallGroup(input: {
     agentCallControlIds: [],
     updatedAt: new Date().toISOString(),
   });
-  await callAction(input.callControlId, 'enqueue', {
-    queue_name: queueName,
-    max_wait_time_secs: maxWaitSeconds,
-    max_size: 100,
-    client_state: encodeVoiceState({
-      flow: 'queue_wait', queueName, handlingId: group.id, organizationId: input.organizationId,
-      targetExtensionIds: members.map((member) => member.id), inboundNumber: input.inboundNumber, callerNumber: input.callerNumber, callerName: input.callerName,
-    }),
-    command_id: `${input.eventId}-enqueue`,
-  });
+  try {
+    await callAction(input.callControlId, 'enqueue', {
+      queue_name: queueName,
+      max_wait_time_secs: maxWaitSeconds,
+      max_size: 100,
+      client_state: encodeVoiceState({
+        flow: 'queue_wait', queueName, handlingId: group.id, organizationId: input.organizationId,
+        targetExtensionIds: members.map((member) => member.id), inboundNumber: input.inboundNumber, callerNumber: input.callerNumber, callerName: input.callerName,
+      }),
+      command_id: `${input.eventId}-enqueue`,
+    });
+  } catch (enqueueError) {
+    logWebhookFailure('enqueue caller', enqueueError);
+    await clearQueueCall(queueName).catch((error) => logWebhookFailure('clear failed queue call', error));
+    await failCallerAfterRoutingError(input.callControlId, input.eventId, input.organizationId, input.callerNumber, input.callerName);
+    return;
+  }
   // Dialing begins from call.enqueued so the waiting leg is ready before an agent answers.
 }
 
@@ -407,7 +429,7 @@ async function routeToConfiguredTarget(input: { callControlId: string; eventId: 
     await routeToCallGroup({ ...input, inboundNumber: input.inboundNumber, handlingId: id, kind: type });
     return;
   }
-  const extension = type === 'extension' ? await getExtension(id).catch(() => null) : null;
+  const extension = type === 'extension' ? await getExtension(id, input.organizationId).catch(() => null) : null;
   if (extension?.status === 'active' && extension.organizationId === input.organizationId) {
     await routeToExtension({ ...input, inboundNumber: input.inboundNumber || '', extension, announceWaiting: false });
     return;
@@ -566,8 +588,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           bridgeOnAnswer: nativeBridge,
           updatedAt: now,
         };
+        let cleanupPair = candidatePair;
         try {
           const claim = await claimOutboundCallWinner(candidatePair, callControlId);
+          cleanupPair = claim.pair;
           if (!claim.won) {
             background('reject losing answered fork', terminateOutboundLegs(claim.pair, [callControlId], `${eventId}-losing-fork`));
             return res.status(200).json({ received: true });
@@ -599,7 +623,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           console.error('Vocivo outbound bridge failed', { eventId, routeId: connectedRouteId, error: publicError(error) });
           if (connectedRouteId) await updateVoiceRoute(connectedRouteId, { phase: 'failed', failureCause: 'bridge_failed' })
             .catch((routeError) => console.error('Vocivo could not record failed route', publicError(routeError)));
-          await terminateOutboundPair(candidatePair, `${eventId}-bridge-failed`);
+          await terminateOutboundPair(cleanupPair, `${eventId}-bridge-failed`);
         }
         return res.status(200).json({ received: true });
       }
@@ -758,7 +782,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    if (eventType === 'call.answered' && (state?.flow === 'agent' || state?.flow === 'queue_agent') && state.parentCallControlId) {
+    if (eventType === 'call.answered' && state?.flow === 'agent' && state.parentCallControlId) {
       const targetExtensionId = await extensionForAgentState(state, payload?.to);
       if (state.flow === 'agent') {
         const storedPair = await readOutboundCallPairByDestination(callControlId)
@@ -850,6 +874,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventType === 'call.enqueued' && state?.flow === 'queue_wait' && state.queueName && state.organizationId && state.targetExtensionIds?.length) {
       const queue = await readQueueCall(state.queueName);
       if (!queue || queue.status !== 'waiting') return res.status(200).json({ received: true });
+      const queueDialKey = `queue-dial:${state.queueName}`;
+      if (!await claimReplayKey(queueDialKey, new Date(Date.now() + 4 * 60 * 60 * 1000))) {
+        return res.status(200).json({ received: true, ignored: 'duplicate_queue_dial' });
+      }
+      try {
       const organizationId = state.organizationId;
       const pbx = await readPbxConfig();
       const [config, extensions] = await Promise.all([readBusinessVoiceConfig(organizationId), listExtensions(organizationId)]);
@@ -875,25 +904,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const agentCallControlIds = dialCallLegs(agentCall)
         .map((leg) => leg.call_control_id)
         .filter((id): id is string => Boolean(id));
-      await saveQueueCall({ ...queue, status: 'dialing', agentCallControlIds, updatedAt: new Date().toISOString() });
+      await claimQueueCallStatus(state.queueName, ['dialing'], 'dialing', { agentCallControlIds }).catch((error) => logWebhookFailure('record queue agent legs', error));
+      } catch (queueDialError) {
+        await releaseReplayKey(queueDialKey).catch((releaseError) => logWebhookFailure('release failed queue dial claim', releaseError));
+        throw queueDialError;
+      }
       return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.answered' && state?.flow === 'queue_agent' && state.queueName && state.parentCallControlId) {
-      const queue = await readQueueCall(state.queueName);
-      if (!queue || queue.status === 'connected' || queue.status === 'connecting') {
+      const claim = await claimQueueCallStatus(state.queueName, ['waiting', 'dialing'], 'connecting', { bridgedAgentCallControlId: callControlId });
+      if (!claim.claimed) {
+        if (claim.queue?.bridgedAgentCallControlId === callControlId) return res.status(200).json({ received: true, ignored: 'duplicate_queue_bridge' });
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-duplicate-agent` }).catch((error) => logWebhookFailure('hang up duplicate agent', error));
         return res.status(200).json({ received: true });
       }
-      await saveQueueCall({ ...queue, status: 'connecting', updatedAt: new Date().toISOString() });
       try {
         await callAction(callControlId, 'bridge', { queue: state.queueName, command_id: `${eventId}-bridge-queue` });
       } catch (bridgeError) {
-        await saveQueueCall({ ...queue, status: 'dialing', updatedAt: new Date().toISOString() }).catch((error) => logWebhookFailure('restore queue after failed bridge', error));
+        await claimQueueCallStatus(state.queueName, ['connecting'], 'dialing', { bridgedAgentCallControlId: undefined }).catch((error) => logWebhookFailure('restore queue after failed bridge', error));
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-queue-bridge-failed` }).catch((error) => logWebhookFailure('hang up failed queue bridge', error));
         throw bridgeError;
       }
-      await saveQueueCall({ ...queue, status: 'connected', updatedAt: new Date().toISOString() });
+      await claimQueueCallStatus(state.queueName, ['connecting'], 'connected').catch((error) => logWebhookFailure('record connected queue bridge', error));
+      await callAction(state.parentCallControlId, 'playback_stop', { stop: 'all', command_id: `${eventId}-stop-waiting` }).catch((error) => logWebhookFailure('stop waiting playback', error));
+      const targetExtensionId = await extensionForAgentState(state, payload?.to);
+      if (targetExtensionId) {
+        await saveActiveCallRoute({ extensionId: targetExtensionId, parentCallControlId: state.parentCallControlId, agentCallControlId: callControlId, updatedAt: new Date().toISOString() });
+      }
       return res.status(200).json({ received: true });
     }
 
@@ -925,6 +963,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         client_state: encodeVoiceState({ flow: 'voicemail_recording', callerNumber: state.callerNumber, callerName: state.callerName, organizationId: state.organizationId }),
         command_id: `${eventId}-voicemail-record`,
       });
+      return res.status(200).json({ received: true });
     }
 
     if (['call.speak.ended', 'call.playback.ended'].includes(eventType) && state?.flow === 'unavailable_prompt') {
@@ -952,6 +991,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
       await callAction(callControlId, 'hangup', { command_id: `${eventId}-voicemail-finish` }).catch((error) => logWebhookFailure('finish voicemail call', error));
+      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.initiated' && isInboundInitiated) {
@@ -967,16 +1007,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await callAction(callControlId, 'answer', {
         client_state: encodeVoiceState({ flow: 'inbound_root', organizationId: inboundOrganizationId, inboundNumber: payload?.to, callerNumber: payload?.from, callerName: payload?.caller_id_name }),
         command_id: `${eventId}-answer`,
-      });
+      }).catch((error) => logWebhookFailure('answer inbound call', error));
+      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.answered' && state?.flow === 'conference_host') {
-      const conferenceResponse = await telnyx('/conferences', {
-        method: 'POST',
-        body: JSON.stringify({ call_control_id: callControlId, name: state.room, beep_enabled: 'on_enter', max_participants: 6, comfort_noise: true, command_id: `${eventId}-conference` }),
-      });
-      const conferencePayload = await conferenceResponse.json() as { data?: { id?: string } };
-      const conferenceId = conferencePayload.data?.id;
+      let conferenceId: string | undefined;
+      try {
+        const conferenceResponse = await telnyx('/conferences', {
+          method: 'POST',
+          body: JSON.stringify({ call_control_id: callControlId, name: state.room, beep_enabled: 'on_enter', max_participants: 6, comfort_noise: true, command_id: `${eventId}-conference` }),
+        });
+        const conferencePayload = await conferenceResponse.json() as { data?: { id?: string } };
+        conferenceId = conferencePayload.data?.id;
+      } catch (conferenceError) {
+        logWebhookFailure('create conference', conferenceError);
+      }
       if (!conferenceId) {
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-conference-create-failed` }).catch((error) => logWebhookFailure('end failed conference host', error));
         return res.status(200).json({ received: true });
@@ -1031,6 +1077,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
       }
+      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.answered' && state?.flow === 'conference_guest' && state.conferenceId) {
@@ -1043,6 +1090,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         logWebhookFailure('join conference guest', joinError);
         await callAction(callControlId, 'hangup', { command_id: `${eventId}-end-failed-guest` }).catch((error) => logWebhookFailure('hang up failed conference guest', error));
       }
+      return res.status(200).json({ received: true });
     }
 
     if (isInboundAnswered) {
@@ -1136,6 +1184,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (eventType === 'call.gather.ended' && state?.flow === 'ivr' && state.organizationId) {
+      const gatherKey = `gather-ended:${eventId}`;
+      if (!await claimReplayKey(gatherKey, new Date(Date.now() + 4 * 60 * 60 * 1000))) {
+        return res.status(200).json({ received: true, ignored: 'duplicate_gather' });
+      }
+      try {
       const config = await readBusinessVoiceConfig(state.organizationId);
       const hasExtensions = (await listExtensions(state.organizationId)).length > 0;
       const rawDigit = String(payload?.digits || payload?.result || '').trim();
@@ -1163,9 +1216,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ received: true });
       }
       await routeToAvailableAgent({ callControlId, department, eventId, organizationId: state.organizationId, inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
+      } catch (gatherError) {
+        await releaseReplayKey(gatherKey).catch((releaseError) => logWebhookFailure('release failed gather claim', releaseError));
+        throw gatherError;
+      }
+      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.gather.ended' && state?.flow === 'extension' && state.organizationId) {
+      const gatherKey = `gather-ended:${eventId}`;
+      if (!await claimReplayKey(gatherKey, new Date(Date.now() + 4 * 60 * 60 * 1000))) {
+        return res.status(200).json({ received: true, ignored: 'duplicate_gather' });
+      }
+      try {
       const config = await readBusinessVoiceConfig(state.organizationId);
       const extensionNumber = String(payload?.digits || payload?.result || '').replace(/\D/g, '');
       const extension = await findExtension(extensionNumber, state.organizationId);
@@ -1175,9 +1238,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await speakPrompt(callControlId, { payload: 'That extension is not available. We will connect you to the main line.', voice: config.voice, command_id: `${eventId}-extension-missing` });
         await routeToAvailableAgent({ callControlId, department: config.companyName, eventId, organizationId: state.organizationId, inboundNumber: state.inboundNumber || '', callerNumber: state.callerNumber, callerName: state.callerName });
       }
+      } catch (gatherError) {
+        await releaseReplayKey(gatherKey).catch((releaseError) => logWebhookFailure('release failed gather claim', releaseError));
+        throw gatherError;
+      }
+      return res.status(200).json({ received: true });
     }
 
     if (eventType === 'call.gather.ended' && state?.flow === 'configured_ivr' && state.handlingId && state.organizationId) {
+      const gatherKey = `gather-ended:${eventId}`;
+      if (!await claimReplayKey(gatherKey, new Date(Date.now() + 4 * 60 * 60 * 1000))) {
+        return res.status(200).json({ received: true, ignored: 'duplicate_gather' });
+      }
+      try {
       const pbx = pbxForOrganization(await readPbxConfig(), state.organizationId);
       const ivr = pbx.callHandling.ivrs.find((item) => item.id === state.handlingId);
       const digit = String(payload?.digits || payload?.result || '').replace(/\D/g, '').slice(0, 1);
@@ -1187,6 +1260,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else {
         await routeUnavailable(callControlId, state.organizationId, eventId, state.callerNumber, state.callerName);
       }
+      } catch (gatherError) {
+        await releaseReplayKey(gatherKey).catch((releaseError) => logWebhookFailure('release failed gather claim', releaseError));
+        throw gatherError;
+      }
+      return res.status(200).json({ received: true });
     }
 
     return res.status(200).json({ received: true });

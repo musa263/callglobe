@@ -51,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const expectedEmail = requiredEnv('APP_ADMIN_EMAIL').trim().toLowerCase();
     if (email === expectedEmail) {
       const passwordHash = await readPasswordHash().catch(() => requiredEnv('APP_PASSWORD_HASH'));
-      const valid = password.length >= 8 && await bcrypt.compare(password, passwordHash);
+      const valid = await bcrypt.compare(password, passwordHash);
       if (!valid) return reject();
       await clearAccountLoginFailures(email, ip);
       const token = await createSession(email);
@@ -66,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const config = await readPbxConfig();
-    const account = password.length >= 8 ? await authenticateTenantAdmin(email, password, config) : null;
+    const account = await authenticateTenantAdmin(email, password, config);
     const organization = account ? config.organizations.find((item) => item.id === account.organizationId && item.status === 'active') : undefined;
     if (!account || !organization) return reject();
     const access = effectiveEntitlements(await readTenantSaasState(organization.id, config), organization.id, organization.accountType);

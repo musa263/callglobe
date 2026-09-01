@@ -14,7 +14,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'DELETE') {
       const id = typeof req.query.id === 'string' ? req.query.id : '';
       if (!id) return res.status(400).json({ error: 'Voicemail id is required.' });
-      return res.status((await deleteVoicemail(id, organizationId)) ? 200 : 404).json({ success: true });
+      if (!await deleteVoicemail(id, organizationId)) return res.status(404).json({ error: 'Voicemail not found.' });
+      return res.status(200).json({ success: true });
     }
     if (req.query.audio === '1') {
       const id = typeof req.query.id === 'string' ? req.query.id : '';

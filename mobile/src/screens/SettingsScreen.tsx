@@ -19,6 +19,7 @@ function Row({ icon: Icon, title, subtitle, danger, onPress }: { icon: React.Ele
 
 const Label = ({ children }: { children: React.ReactNode }) => <Text style={styles.fieldLabel}>{children}</Text>;
 type VoiceOption = { id: string; name: string; gender: string; language: string; accent: string; provider: string };
+const adminRoles = ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'];
 const fallbackVoices: VoiceOption[] = [
   { id: 'AWS.Polly.Joanna-Neural', name: 'Joanna', gender: 'female', language: 'English', accent: 'American', provider: 'carrier' },
   { id: 'AWS.Polly.Matthew-Neural', name: 'Matthew', gender: 'male', language: 'English', accent: 'American', provider: 'carrier' },
@@ -61,7 +62,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   useEffect(() => { loadIncomingRingtone().then(setRingtone).catch(() => undefined); }, []);
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-  const canManagePhoneSystem = isPreview || ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(profile?.role || '');
+  const canManagePhoneSystem = isPreview || adminRoles.includes(profile?.role || '');
   const businessAccount = isPreview || profile?.account_type === 'business';
   useEffect(() => {
     if (!canManagePhoneSystem || isPreview) return;
@@ -171,7 +172,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
         <Row icon={Radio} title="Travel data eSIM" subtitle={network?.isConnected ? `${network.type === 'cellular' ? 'Using cellular data' : 'Connected by Wi-Fi'} · carrier activation` : 'No internet connection · carrier coverage required'} onPress={() => setShowEsim(true)} />
         <Row icon={Settings2} title="iPhone permissions" subtitle="Contacts, microphone and notifications" onPress={() => Linking.openSettings()} />
       </View>
-      {['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(profile?.role || '') && <><Text style={styles.sectionLabel}>SECURITY</Text>
+      {adminRoles.includes(profile?.role || '') && <><Text style={styles.sectionLabel}>SECURITY</Text>
       <View style={styles.group}><Row icon={KeyRound} title="Reset password" subtitle="Change your Vocivo sign-in password" onPress={() => { setError(''); setShowPassword(true); }} /></View></>}
       <View style={styles.group}><Row icon={LogOut} title={isPreview ? 'Exit preview' : 'Sign out'} danger onPress={signOut} /></View>
       <Text style={styles.version}>Vocivo 1.0.0 · Build {Constants.nativeBuildVersion || 'development'}</Text>

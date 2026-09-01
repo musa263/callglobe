@@ -108,7 +108,7 @@ export function mergeOutboundCallPair(current: OutboundCallPair | null, proposed
     // may add call metadata, but it cannot roll a recorded hangup outcome back.
     termination: { ...(proposed.termination || {}), ...(current.termination || {}) },
     version: (current.version || 0) + 1,
-    updatedAt: proposed.updatedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 }
 

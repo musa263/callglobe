@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const extension = await getExtension(session.extensionId);
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
-    const credential = await getExtensionCredentials(session.extensionId);
+    const credential = await getExtensionCredentials(session.extensionId, sessionOrganizationId(session, config));
     if (credential.provider !== 'telnyx' || !credential.credentialId) return res.status(409).json({ error: 'Telnyx calling is not enabled for this extension.' });
     const response = await telnyx(`/telephony_credentials/${encodeURIComponent(credential.credentialId)}/token`, { method: 'POST' });
     const token = normalizeToken(await response.text());

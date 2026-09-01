@@ -41,7 +41,7 @@ export function verifyAiTransferToken(token: string): AiTransferAuthorization | 
     const value = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
     if (typeof value.c !== 'string' || !value.c
       || typeof value.o !== 'string' || !value.o
-      || typeof value.i !== 'string'
+      || typeof value.i !== 'string' || !value.i
       || typeof value.a !== 'string' || !value.a
       || typeof value.e !== 'number'
       || value.e < Math.floor(Date.now() / 1000)) return null;

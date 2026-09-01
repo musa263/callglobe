@@ -45,9 +45,9 @@ function headersValue(value: string | string[] | undefined) {
 }
 
 export function requestIp(req: VercelRequest) {
+  // Only trust the platform-set header; x-forwarded-for and x-real-ip are
+  // client-controllable and would let an attacker rotate rate-limit buckets.
   const forwarded = headersValue(req.headers['x-vercel-forwarded-for'])
-    || headersValue(req.headers['x-forwarded-for'])
-    || headersValue(req.headers['x-real-ip'])
     || req.socket?.remoteAddress
     || 'unknown';
   return forwarded.split(',')[0].trim().slice(0, 100) || 'unknown';
@@ -102,8 +102,10 @@ export async function recordLoginFailure(email: string, ip: string): Promise<Log
 
 export async function clearAccountLoginFailures(email: string, ip: string) {
   const value = context(email, ip);
-  await transactObjectGroup(`auth-login-success:${value.accountHash}:${value.ipHash}`, [value.accountPath, value.ipPath], () => ({
-    deletes: [value.accountPath, value.ipPath],
+  // Clear only the account-scoped bucket. The IP bucket is shared across every
+  // account attempted from that IP, so one successful login must not reset it.
+  await transactObjectGroup(`auth-login-success:${value.accountHash}`, [value.accountPath], () => ({
+    deletes: [value.accountPath],
     result: undefined,
   }));
 }

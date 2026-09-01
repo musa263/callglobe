@@ -8,7 +8,9 @@ let tokenRequest: Promise<string | null> | null = null;
 export const isApiConfigured = Boolean(baseUrl);
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = await getSessionToken();
+  // A keychain read failure must not fail the request outright; treat it like a
+  // missing token so the server response drives the retry and error handling.
+  const token = await getSessionToken().catch(() => null);
   const method = String(init.method || 'GET').toUpperCase();
   const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
   const attempts = ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
@@ -34,7 +36,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
         continue;
       }
-      if (!response.ok) throw new Error(body?.error || 'The Vocivo service is unavailable.');
+      if (!response.ok) {
+        const failure = new Error(body?.error || 'The Vocivo service is unavailable.') as Error & { status?: number };
+        failure.status = response.status;
+        throw failure;
+      }
       return body as T;
     } catch (error) {
       lastError = error;

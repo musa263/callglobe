@@ -14,7 +14,7 @@ export type ServerCallHistory = {
 };
 
 export type HistoryDirectoryEntry = { id: string; extension: string; name: string; sipUsername: string };
-export type HistoryViewer = { extensionId?: string; extension?: string; directory?: HistoryDirectoryEntry[] };
+export type HistoryViewer = { extensionId?: string; extension?: string; directory?: HistoryDirectoryEntry[]; viewAll?: boolean };
 
 const internalAgentFlows = new Set(['agent', 'queue_agent', 'queue_wait', 'conference_host', 'conference_guest']);
 
@@ -86,11 +86,23 @@ function internalHistory(id: string, values: StoredCallEvent[], viewer: HistoryV
 
 export function callHistoryFromEvents(events: StoredCallEvent[], organizationId: string, limit = 100, viewer: HistoryViewer = {}) {
   const sessions = new Map<string, StoredCallEvent[]>();
+  const sessionByLeg = new Map<string, string>();
+  for (const event of events) {
+    if (event.organizationId !== organizationId || !event.call_session_id) continue;
+    if (event.call_leg_id) sessionByLeg.set(event.call_leg_id, event.call_session_id);
+    if (event.call_control_id) sessionByLeg.set(event.call_control_id, event.call_session_id);
+  }
   for (const event of events) {
     if (event.organizationId !== organizationId) continue;
-    const id = event.call_session_id || event.call_leg_id || event.call_control_id;
+    const id = event.call_session_id
+      || (event.call_leg_id && sessionByLeg.get(event.call_leg_id))
+      || (event.call_control_id && sessionByLeg.get(event.call_control_id))
+      || event.call_leg_id
+      || event.call_control_id;
     if (!id) continue;
-    sessions.set(id, [...(sessions.get(id) || []), event]);
+    const bucket = sessions.get(id);
+    if (bucket) bucket.push(event);
+    else sessions.set(id, [event]);
   }
 
   const calls: ServerCallHistory[] = [];
@@ -106,6 +118,14 @@ export function callHistoryFromEvents(events: StoredCallEvent[], organizationId:
     const inbound = ordered.find((event) => event.direction === 'incoming' && !internalAgentFlows.has(event.flow || ''));
     const anchor = outbound || inbound;
     if (!anchor) continue;
+    if (!viewer.viewAll && (viewer.extensionId || viewer.extension)) {
+      const viewerSip = viewer.directory?.find((entry) => entry.id === viewer.extensionId || entry.extension === viewer.extension)?.sipUsername || '';
+      const participated = ordered.some((event) =>
+        Boolean(viewer.extensionId && (event.sourceExtensionId === viewer.extensionId || event.destinationExtensionId === viewer.extensionId))
+        || Boolean(viewer.extension && (event.sourceExtension === viewer.extension || event.destinationExtension === viewer.extension))
+        || Boolean(viewerSip && (sipUsername(event.from) === viewerSip || sipUsername(event.to) === viewerSip)));
+      if (!participated) continue;
+    }
     const direction = outbound ? 'outgoing' as const : 'incoming' as const;
     const number = direction === 'outgoing' ? anchor.to : anchor.from;
     if (!number || /^sip:/i.test(number)) continue;

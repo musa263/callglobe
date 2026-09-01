@@ -58,9 +58,11 @@ export function useVoiceRegistration({
           : null;
         const initialSession = pushBootstrap
           || voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone);
+        if (canceled) return;
         loginConfigRef.current = initialSession;
         await persistVoiceSession(initialSession);
         const pushNotificationDeviceToken = await getVoicePushToken();
+        if (canceled) return;
         let registeredToken = pushNotificationDeviceToken;
         let registrationBusy = false;
         let sessionRefreshBusy = false;
@@ -90,7 +92,10 @@ export function useVoiceRegistration({
 
         const scheduleSessionRefresh = (session: VoiceLoginConfig) => {
           if (sessionRefreshTimer) clearTimeout(sessionRefreshTimer);
-          const delay = Math.max(60_000, session.expiresAt - Date.now() - 120_000);
+          // Refresh two minutes ahead of expiry; short-lived tokens refresh at
+          // half-life, never sooner than 15 seconds out to avoid a hot loop.
+          const untilExpiry = session.expiresAt - Date.now();
+          const delay = Math.max(15_000, untilExpiry - 120_000, untilExpiry / 2);
           sessionRefreshTimer = setTimeout(() => {
             refreshSession().catch((failure) => reportVoiceError('scheduled session refresh', failure));
           }, delay);
@@ -99,6 +104,7 @@ export function useVoiceRegistration({
         const refreshSession = async () => {
           if (canceled || sessionRefreshBusy) return;
           if (activeCallRef.current) {
+            if (sessionRefreshTimer) clearTimeout(sessionRefreshTimer);
             sessionRefreshTimer = setTimeout(() => {
               refreshSession().catch((failure) => reportVoiceError('deferred session refresh', failure));
             }, 60_000);
@@ -117,6 +123,7 @@ export function useVoiceRegistration({
           } catch (refreshError) {
             if (!canceled) setError(refreshError instanceof Error ? refreshError.message : 'Calling session refresh failed.');
             if (!canceled) {
+              if (sessionRefreshTimer) clearTimeout(sessionRefreshTimer);
               sessionRefreshTimer = setTimeout(() => {
                 refreshSession().catch((failure) => reportVoiceError('session refresh retry', failure));
               }, 60_000);
@@ -145,6 +152,7 @@ export function useVoiceRegistration({
         };
 
         if (!launchedFromPush) await login(pushNotificationDeviceToken);
+        if (canceled) return;
         scheduleSessionRefresh(initialSession);
         setPushRegistration(pushNotificationDeviceToken ? 'registered' : 'registering');
         if (!pushNotificationDeviceToken) {

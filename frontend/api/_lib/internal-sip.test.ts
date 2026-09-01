@@ -5,6 +5,7 @@ import { activeOrganizationExtensionTargets, canonicalVoiceDestination, destinat
 
 test('Telnyx SIP URIs are recognized as internal destinations', () => {
   assert.equal(parseInternalSipUser('sip:2000@sip.telnyx.com'), '2000');
+  assert.equal(parseInternalSipUser('sip:2000@sip.telnyx.com:5060'), '2000');
   assert.equal(isAllowedInternalSipDestination('sip:employee@sip.telnyx.com'), true);
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownLeft, ArrowUpRight, ArrowLeftRight, AlertTriangle, BellRing, CreditCard, Delete, Check, ChevronDown, CircleDollarSign,
   Clock3, ContactRound, Globe2, Headphones, History, LogOut, Mic, MicOff, Pause,
@@ -232,8 +232,21 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
   const callerCountry = selectedNumber?.country_code || parsePhoneNumberFromString(selectedNumber?.phone_number || '')?.country;
   const routeRisk = selectedNumber?.source === 'verified' && callerCountry === destinationCountry && !['US', 'CA'].includes(destinationCountry || '');
   const ownedFallback = numbers.find((item) => item.source === 'owned' && item.phone_number !== selectedNumber?.phone_number);
-  function pressKey(value, secondary) {
-    if (value === '0' && secondary === '+' && number === '') setNumber('+'); else setNumber((current) => `${current}${value}`.slice(0, 22));
+  const zeroHoldRef = useRef({ timer: null, fired: false });
+  function startZeroHold() {
+    zeroHoldRef.current.fired = false;
+    zeroHoldRef.current.timer = window.setTimeout(() => {
+      zeroHoldRef.current.fired = true;
+      setNumber((current) => `${current}+`.slice(0, 22));
+    }, 550);
+  }
+  function endZeroHold() {
+    window.clearTimeout(zeroHoldRef.current.timer);
+    zeroHoldRef.current.timer = null;
+  }
+  function pressKey(value) {
+    if (value === '0' && zeroHoldRef.current.fired) { zeroHoldRef.current.fired = false; return; }
+    setNumber((current) => `${current}${value}`.slice(0, 22));
   }
   async function call() {
     if (!number || voice.callStarting) return;
@@ -277,7 +290,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
             ))}</div></div>}
           </div>
           {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See live rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
-          <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key, letters)}><strong>{key}</strong><small>{letters}</small></button>)}</div>
+          <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key)} onPointerDown={key === '0' ? startZeroHold : undefined} onPointerUp={key === '0' ? endZeroHold : undefined} onPointerLeave={key === '0' ? endZeroHold : undefined}><strong>{key}</strong><small>{letters}</small></button>)}</div>
           {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
           <button className={`call-button ${voice.callStarting ? 'starting' : ''}`} onClick={call} disabled={voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !preview && !selectedNumber?.phone_number) || (!preview && !voice.ready)}><Phone size={22} /> {voice.callStarting ? 'Starting call...' : voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
         </div>
@@ -407,8 +420,8 @@ export default function App() {
         setNumbers(owned);
         setVerifiedNumbers(verified);
         setSelectedNumber(owned[0] || verified[0] || null);
-      } catch {
-        clearSession();
+      } catch (sessionError) {
+        if ([401, 403].includes(sessionError?.status)) clearSession();
         if (active) setSession(null);
       } finally {
         if (active) setLoading(false);

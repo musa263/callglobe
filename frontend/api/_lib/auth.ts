@@ -2,6 +2,8 @@ import type { VercelRequest } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
 import { jwtVerify, SignJWT, type JWTPayload } from 'jose';
 import { requiredEnv } from './http.js';
+import { put } from './object-store.js';
+import { readStoredObject } from './stored-object-read.js';
 import { isExtensionSessionRevoked } from './extension-session-store.js';
 import { activeTenantAdmin, type TenantAdminAccount } from './saas-store.js';
 import { readPbxConfig } from './pbx-config-store.js';
@@ -101,7 +103,35 @@ function requestPath(req: VercelRequest) {
 
 function allowsForcedPasswordChange(req: VercelRequest) {
   const path = requestPath(req);
-  return path.endsWith('/api/auth/session') || path.endsWith('/api/auth/password');
+  return path === '/api/auth/session' || path === '/api/auth/password';
+}
+
+const ownerInvalidationPath = 'vocivo/auth/owner-sessions-invalidated-at';
+let ownerInvalidationCache: { checkedAt: number; invalidatedAtSeconds: number } | undefined;
+
+export async function invalidateOwnerSessions() {
+  await put(ownerInvalidationPath, new Date().toISOString(), { access: 'private', contentType: 'text/plain', allowOverwrite: true });
+  ownerInvalidationCache = undefined;
+}
+
+async function ownerSessionsInvalidatedAtSeconds() {
+  if (ownerInvalidationCache && Date.now() - ownerInvalidationCache.checkedAt < 15_000) return ownerInvalidationCache.invalidatedAtSeconds;
+  try {
+    const value = await readStoredObject(ownerInvalidationPath);
+    const invalidatedAt = value ? Date.parse(value.toString('utf8').trim()) : Number.NaN;
+    const invalidatedAtSeconds = Number.isFinite(invalidatedAt) ? Math.floor(invalidatedAt / 1000) : 0;
+    ownerInvalidationCache = { checkedAt: Date.now(), invalidatedAtSeconds };
+    return invalidatedAtSeconds;
+  } catch (error) {
+    // Fail open only on a transient storage error so the owner is not locked out.
+    console.error('Unable to read the owner session invalidation marker.', error);
+    return 0;
+  }
+}
+
+async function assertOwnerSessionCurrent(payload: JWTPayload) {
+  const invalidatedAtSeconds = await ownerSessionsInvalidatedAtSeconds();
+  if (invalidatedAtSeconds && (typeof payload.iat !== 'number' || payload.iat < invalidatedAtSeconds)) throw new Error('Unauthorized');
 }
 
 export async function requireSession(req: VercelRequest) {
@@ -133,19 +163,21 @@ export async function requireSession(req: VercelRequest) {
     if (session.forcePasswordChange && !allowsForcedPasswordChange(req)) throw new Error('Password change required');
     return session;
   }
+  if (payload.sub === 'vocivo-owner') await assertOwnerSessionCurrent(payload);
   return payload as VocivoSession;
 }
 
 export async function requireOwner(req: VercelRequest) {
   const payload = await verifySessionToken(req) as VocivoSession;
   if (payload.sub !== 'vocivo-owner' || !['owner', 'superadmin'].includes(payload.role || '')) throw new Error('Forbidden');
+  await assertOwnerSessionCurrent(payload);
   return payload;
 }
 
 export async function requireAdmin(req: VercelRequest) {
   const session = await requireSession(req);
   const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
-  const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['admin', 'company_owner', 'company_admin'].includes(session.role || ''));
+  const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['company_owner', 'company_admin'].includes(session.role || ''));
   if (!superadmin && !companyAdmin) throw new Error('Forbidden');
   return { session, superadmin, organizationId: superadmin ? undefined : session.organizationId };
 }

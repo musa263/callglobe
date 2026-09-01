@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!targetId || targetId === session.extensionId) return res.status(400).json({ error: 'Choose another colleague.' });
     const [route, target] = await Promise.all([
       readActiveCallRoute(session.extensionId),
-      getExtension(targetId).catch((error) => {
+      getExtension(targetId, session.organizationId).catch((error) => {
         if (error instanceof Error && error.message === 'Extension not found.') return null;
         throw error;
       }),

@@ -19,7 +19,10 @@ export async function readPlatformKeys() {
   try {
     const value = await readStoredObject(pathname);
     return value ? decrypt(value) : [] as PlatformKey[];
-  } catch { return []; }
+  } catch (error) {
+    console.error('Vocivo could not read the platform API key store', error);
+    return [];
+  }
 }
 
 async function writePlatformKeys(value: PlatformKey[]) { await put(pathname, encrypt(value), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true }); }

@@ -188,8 +188,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(initialProfile(session.profile));
         setAuthenticated(true);
         void loadAccount(session.profile).catch(() => undefined);
-      } catch {
-        await api.clearSessionToken();
+      } catch (restoreError) {
+        // Only discard the stored token when the server rejected it; a network
+        // or server outage at launch must not sign the user out.
+        const status = (restoreError as { status?: number } | null)?.status;
+        if (status === 401 || status === 403) await api.clearSessionToken();
         setAuthenticated(false);
         setProfile(null);
       } finally {

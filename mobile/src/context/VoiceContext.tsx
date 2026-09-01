@@ -325,6 +325,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           clearCallSubscriptions(call.callId);
           const releaseTimer = setTimeout(() => lifecycleRef.current.release(call.callId), 60_000);
           const resumeTimer = setTimeout(() => {
+            // A newer call (optimistic or attached) now owns the UI; this ended call's teardown must not clear it.
+            if (activeCallRef.current && activeCallRef.current.id !== call.callId) return;
             const remaining = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
             if (!remaining) {
               attachCall(null);
@@ -337,8 +339,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           attachTimersRef.current.set(call.callId, [releaseTimer, resumeTimer]);
         }
       }),
-      call.isMuted$.subscribe((muted) => setActiveCall((current) => current ? { ...current, muted } : current)),
-      call.isHeld$.subscribe((onHold) => setActiveCall((current) => current ? { ...current, onHold } : current)),
+      call.isMuted$.subscribe((muted) => setActiveCall((current) => current?.id === call.callId ? { ...current, muted } : current)),
+      call.isHeld$.subscribe((onHold) => setActiveCall((current) => current?.id === call.callId ? { ...current, onHold } : current)),
     ];
     callSubscriptions.current.set(call.callId, subscriptions);
   }, [cancelRoutePolling, clearCallSubscriptions, confirmMediaConnected, describeCall, finalizeCall, reportVoiceError, stopRingback]);
@@ -366,6 +368,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const calls = voipClient.currentCalls.filter((call) => ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState));
     if (activeCallRef.current) finalizeCall('failed', activeCallRef.current.id);
     if (heldCall) finalizeCall('failed', heldCall.id);
+    calls.forEach((call) => {
+      if (call.callId !== activeCallRef.current?.id && call.callId !== heldCall?.id) finalizeCall('failed', call.callId);
+    });
     if (!calls.length && !activeCallRef.current) return;
     cancelRoutePolling();
     stopRingback();
@@ -562,15 +567,21 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 1700);
       return;
     }
-    await ensureCallMicrophonePermission();
-    await waitForVoiceConnection();
+    startingCallRef.current = true;
+    const guardAttempt = startAttemptRef.current;
+    try {
+      await ensureCallMicrophonePermission();
+      await waitForVoiceConnection();
+    } catch (setupError) {
+      if (startAttemptRef.current === guardAttempt) startingCallRef.current = false;
+      throw setupError;
+    }
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
     const startedAt = Date.now();
     const optimisticCall: ActiveCall = { number, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, phase: 'connecting', startedAt, muted: false, speaker: false, onHold: false, routeId };
     activeCallRef.current = optimisticCall;
     setActiveCall(optimisticCall);
-    startingCallRef.current = true;
     try {
       const reservation = await api.post<{ routeId: string; routeToken: string; callerId?: string }>('/api/voice/route', { routeId, destination: number, callerId: callerNumber?.phone_number, flow: 'outbound' });
       if (startAttemptRef.current !== attempt) {
@@ -601,7 +612,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     } finally {
       if (startAttemptRef.current === attempt) startingCallRef.current = false;
     }
-  }, [attachCall, connection, followRoute, isPreview, profile?.full_name, startRingback, stopRingback]);
+  }, [attachCall, followRoute, isPreview, profile?.full_name, startRingback, stopRingback]);
 
   const startSecondCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => {
     if (isPreview) throw new Error('Add call requires a live calling connection.');
@@ -658,8 +669,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 900);
       return;
     }
-    await ensureCallMicrophonePermission();
-    await waitForVoiceConnection();
+    startingCallRef.current = true;
+    const guardAttempt = startAttemptRef.current;
+    try {
+      await ensureCallMicrophonePermission();
+      await waitForVoiceConnection();
+    } catch (setupError) {
+      if (startAttemptRef.current === guardAttempt) startingCallRef.current = false;
+      throw setupError;
+    }
     const destination = `sip:${sipUsername}@sip.telnyx.com`;
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
@@ -667,7 +685,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const optimisticCall: ActiveCall = { number: extension, displayName, destinationCountry: 'Internal', photoUrl, phase: 'connecting', startedAt, muted: false, speaker: false, onHold: false, routeId };
     activeCallRef.current = optimisticCall;
     setActiveCall(optimisticCall);
-    startingCallRef.current = true;
     try {
       const reservation = await api.post<{ routeToken: string; callerName: string; callerExtension: string; destinationName?: string; destinationExtension?: string; destination: string }>('/api/voice/route', { routeId, destination, targetExtension: extension, flow: 'internal' });
       if (startAttemptRef.current !== attempt) {
@@ -705,7 +722,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     } finally {
       if (startAttemptRef.current === attempt) startingCallRef.current = false;
     }
-  }, [attachCall, connection, followRoute, isPreview, profile?.extension, profile?.full_name, startRingback, stopRingback]);
+  }, [attachCall, followRoute, isPreview, profile?.extension, profile?.full_name, startRingback, stopRingback]);
 
   const transferCall = useCallback(async (targetExtensionId: string) => {
     if (isPreview) throw new Error('Transfer requires a live routed business call.');
@@ -926,12 +943,20 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
   }, []);
   const toggleMute = useCallback(async () => {
-    if (callRef.current) await callRef.current.toggleMute();
-    else setActiveCall((current) => current ? { ...current, muted: !current.muted } : current);
+    try {
+      if (callRef.current) await callRef.current.toggleMute();
+      else setActiveCall((current) => current ? { ...current, muted: !current.muted } : current);
+    } catch (failure) {
+      console.warn('[Vocivo Voice] toggle mute failed', failure);
+    }
   }, []);
   const toggleHold = useCallback(async () => {
-    if (callRef.current) callRef.current.currentIsHeld ? await callRef.current.resume() : await callRef.current.hold();
-    else setActiveCall((current) => current ? { ...current, onHold: !current.onHold } : current);
+    try {
+      if (callRef.current) callRef.current.currentIsHeld ? await callRef.current.resume() : await callRef.current.hold();
+      else setActiveCall((current) => current ? { ...current, onHold: !current.onHold } : current);
+    } catch (failure) {
+      console.warn('[Vocivo Voice] toggle hold failed', failure);
+    }
   }, []);
   const toggleSpeaker = useCallback(async () => {
     try {
@@ -939,7 +964,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setActiveCall((current) => current ? { ...current, speaker } : current);
     } catch (failure) {
       reportVoiceError('toggle speaker', failure);
-      throw failure;
     }
   }, [reportVoiceError]);
   const sendDtmf = useCallback(async (digit: string) => { if (callRef.current) await callRef.current.dtmf(digit); }, []);

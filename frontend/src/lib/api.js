@@ -36,7 +36,11 @@ export async function api(path, options = {}) {
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
         continue;
       }
-      if (!response.ok) throw new Error(payload.error || 'The request could not be completed.');
+      if (!response.ok) {
+        const requestError = new Error(payload.error || 'The request could not be completed.');
+        requestError.status = response.status;
+        throw requestError;
+      }
       return payload;
     } catch (error) {
       lastError = error;

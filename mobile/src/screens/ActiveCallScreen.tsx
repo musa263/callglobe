@@ -95,7 +95,9 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
         return match ? { name: match.name, photoUrl: match.photoUrl } : null;
       })
       : findPhoneContact(activeCall.number);
-    lookup.then((identity) => setRemotePhoto(identity?.photoUrl)).catch(() => setRemotePhoto(undefined));
+    let stale = false;
+    lookup.then((identity) => { if (!stale) setRemotePhoto(identity?.photoUrl); }).catch(() => { if (!stale) setRemotePhoto(undefined); });
+    return () => { stale = true; };
   }, [activeCall?.displayName, activeCall?.number, activeCall?.photoUrl]);
   if (!activeCall) return null;
   const incomingPending = Boolean(activeCall.isIncoming && ['ringing', 'connecting'].includes(activeCall.phase));

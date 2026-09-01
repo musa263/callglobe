@@ -267,24 +267,40 @@ async function ensureWalletTables(sql: Sql) {
         updated_at timestamptz not null default now()
       )
     `;
-    await sql`alter table vocivo_wallets enable row level security`;
-    await sql`alter table vocivo_wallets force row level security`;
-    await sql`alter table vocivo_wallet_entries enable row level security`;
-    await sql`alter table vocivo_wallet_entries force row level security`;
-    await sql.unsafe(`
-      do $$ begin
-        if not exists (select 1 from pg_policies where schemaname = current_schema() and tablename = 'vocivo_wallets' and policyname = 'vocivo_wallet_tenant_isolation') then
-          create policy vocivo_wallet_tenant_isolation on vocivo_wallets
-          using (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true))
-          with check (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true));
-        end if;
-        if not exists (select 1 from pg_policies where schemaname = current_schema() and tablename = 'vocivo_wallet_entries' and policyname = 'vocivo_wallet_entry_tenant_isolation') then
-          create policy vocivo_wallet_entry_tenant_isolation on vocivo_wallet_entries
-          using (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true))
-          with check (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true));
-        end if;
-      end $$;
-    `);
+    await sql`
+      create table if not exists vocivo_schema_migrations (
+        migration_id text primary key,
+        applied_at timestamptz not null default now()
+      )
+    `;
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext('vocivo:schema:wallet-rls-v1'))`;
+      const applied = await transaction<Array<{ migration_id: string }>>`
+        insert into vocivo_schema_migrations (migration_id)
+        values ('wallet-rls-v1')
+        on conflict (migration_id) do nothing
+        returning migration_id
+      `;
+      if (!applied.length) return;
+      await transaction`alter table vocivo_wallets enable row level security`;
+      await transaction`alter table vocivo_wallets force row level security`;
+      await transaction`alter table vocivo_wallet_entries enable row level security`;
+      await transaction`alter table vocivo_wallet_entries force row level security`;
+      await transaction.unsafe(`
+        do $$ begin
+          if not exists (select 1 from pg_policies where schemaname = current_schema() and tablename = 'vocivo_wallets' and policyname = 'vocivo_wallet_tenant_isolation') then
+            create policy vocivo_wallet_tenant_isolation on vocivo_wallets
+            using (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true))
+            with check (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true));
+          end if;
+          if not exists (select 1 from pg_policies where schemaname = current_schema() and tablename = 'vocivo_wallet_entries' and policyname = 'vocivo_wallet_entry_tenant_isolation') then
+            create policy vocivo_wallet_entry_tenant_isolation on vocivo_wallet_entries
+            using (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true))
+            with check (current_setting('app.platform_access', true) = 'true' or organization_id = current_setting('app.organization_id', true));
+          end if;
+        end $$;
+      `);
+    });
     walletTablesReady = true;
   })().finally(() => { walletTablesRequest = null; });
   await walletTablesRequest;
@@ -350,6 +366,7 @@ export function outboundWalletBlockReason(wallet: Pick<Wallet, 'status' | 'avail
 export function walletBalanceAfter(currentMinor: number, direction: 'credit' | 'debit', amountMinor: number) {
   if (!Number.isSafeInteger(currentMinor) || currentMinor < 0) throw new Error('Current wallet balance is invalid.');
   if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new Error('Wallet adjustment amount is invalid.');
+  if (direction !== 'credit' && direction !== 'debit') throw new Error('Wallet adjustment direction is invalid.');
   const next = currentMinor + (direction === 'credit' ? amountMinor : -amountMinor);
   if (next < 0) throw new Error('This debit exceeds the customer wallet balance.');
   return next;
@@ -437,6 +454,9 @@ export async function recordWalletAdjustment(input: {
 }) {
   if (!input.organizationId) throw new Error('Customer is required.');
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0 || input.amountMinor > 100_000_000) throw new Error('Adjustment amount is invalid.');
+  if (input.direction !== 'credit' && input.direction !== 'debit') throw new Error('Adjustment direction is invalid.');
+  if (!(['topup', 'manual_credit', 'manual_debit', 'refund', 'chargeback', 'promotion'] satisfies WalletEntryType[]).includes(input.type)) throw new Error('Adjustment type is invalid.');
+  if (typeof input.createdBy !== 'string' || !input.createdBy.trim()) throw new Error('Adjustment author is required.');
   if (!input.idempotencyKey || input.idempotencyKey.length > 120) throw new Error('Adjustment idempotency key is invalid.');
   return withDatabaseRetry(async (sql) => {
     await ensureWalletTables(sql);
@@ -450,8 +470,12 @@ export async function recordWalletAdjustment(input: {
         limit 1
       `;
       if (duplicate[0]) {
+        const entry = entryFromRow(duplicate[0]);
+        if (entry.amountMinor !== input.amountMinor || entry.direction !== input.direction || entry.type !== input.type) {
+          throw new Error('This idempotency key was already used for a different adjustment.');
+        }
         const wallets = await transaction<WalletRow[]>`select * from vocivo_wallets where organization_id = ${input.organizationId} limit 1`;
-        return { wallet: walletFromRow(wallets[0]), entry: entryFromRow(duplicate[0]), duplicate: true };
+        return { wallet: walletFromRow(wallets[0]), entry, duplicate: true };
       }
       const wallets = await transaction<WalletRow[]>`
         select * from vocivo_wallets where organization_id = ${input.organizationId} for update

@@ -148,8 +148,8 @@ export async function waitForBidirectionalMedia(call: Call, timeoutMs = 8_000) {
 }
 
 export class VoiceMediaRecoveryCoordinator {
-  private operation: Promise<void> | null = null;
-  private lastAttemptAt = 0;
+  private operations = new Map<string, Promise<void>>();
+  private lastAttemptAt = new Map<string, number>();
 
   constructor(
     private readonly reportError: (operation: string, error: unknown) => void,
@@ -158,11 +158,13 @@ export class VoiceMediaRecoveryCoordinator {
 
   recover(call: Call | null, reason: string) {
     if (!call) return Promise.resolve();
-    if (this.operation) return this.operation;
+    const callId = call.callId;
+    const inFlight = this.operations.get(callId);
+    if (inFlight) return inFlight;
     const now = Date.now();
-    if (now - this.lastAttemptAt < 1_000) return Promise.resolve();
-    this.lastAttemptAt = now;
-    this.operation = (async () => {
+    if (now - (this.lastAttemptAt.get(callId) ?? 0) < 1_000) return Promise.resolve();
+    this.lastAttemptAt.set(callId, now);
+    const operation = (async () => {
       const peer = peerConnectionForCall(call);
       const nativeCall = call.telnyxCall as unknown as NativeCallLike;
       if (!peer?.restartIce) throw new Error('The active call does not expose ICE restart support.');
@@ -172,11 +174,9 @@ export class VoiceMediaRecoveryCoordinator {
         if (nativeCall.restartMedia) {
           await nativeCall.restartMedia();
         } else {
-          peer.restartIce();
-          const offer = await peer.createOffer?.({ iceRestart: true, offerToReceiveAudio: true, offerToReceiveVideo: false });
-          if (!offer || !peer.setLocalDescription) throw new Error('Telnyx media renegotiation is unavailable.');
-          await peer.setLocalDescription(offer);
-          throw new Error('A new ICE offer was created but the SDK cannot transmit a media re-INVITE.');
+          // Without the patched restartMedia there is no supported way to send
+          // the re-INVITE; fail before touching the peer connection's SDP.
+          throw new Error('Telnyx media renegotiation is unavailable: the SDK cannot transmit a media re-INVITE.');
         }
       } catch (error) {
         this.reportError(`${reason}:media-renegotiation`, error);
@@ -188,7 +188,8 @@ export class VoiceMediaRecoveryCoordinator {
       const pending = new Error(`ICE remained ${iceState || 'unknown'} after restart`);
       this.reportError(`${reason}:ice-pending`, pending);
       throw pending;
-    })().finally(() => { this.operation = null; });
-    return this.operation;
+    })().finally(() => { this.operations.delete(callId); });
+    this.operations.set(callId, operation);
+    return operation;
   }
 }

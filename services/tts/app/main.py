@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import io
 import os
 from pathlib import Path
@@ -35,7 +36,11 @@ class SpeechRequest(BaseModel):
 
 
 def authorize(authorization: str | None = Header(default=None)) -> None:
-    if service_secret and authorization != f"Bearer {service_secret}":
+    # Fail closed: an unset TTS_SERVICE_SECRET must never mean an open service.
+    if not service_secret:
+        raise HTTPException(status_code=503, detail="TTS_SERVICE_SECRET is not configured")
+    expected = f"Bearer {service_secret}"
+    if authorization is None or not hmac.compare_digest(authorization, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -83,7 +88,10 @@ def render(request: SpeechRequest, _: None = Depends(authorize)) -> dict:
     key = cache_key(request)
     path = cache_dir / f"{key}.wav"
     if not path.exists():
-        path.write_bytes(synthesize(request))
+        audio_bytes = synthesize(request)
+        temp_path = path.with_name(f".{key}.{os.urandom(4).hex()}.tmp")
+        temp_path.write_bytes(audio_bytes)
+        os.replace(temp_path, path)  # atomic publish: readers never see a partial file
     return {"id": key, "audio_url": f"{public_base_url}/v1/audio/{key}.wav", "cached": True}
 
 
