@@ -1,0 +1,17 @@
+{
+  "name": "vocivo-sip",
+  "version": "1.0.0",
+  "description": "Native Vocivo SIP + CallKit client. Inbound DIDs stay on Telnyx Call Control.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "license": "UNLICENSED",
+  "author": "Vocivo",
+  "homepage": "https://vocivo.app",
+  "keywords": ["react-native", "expo", "sip", "callkit"],
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

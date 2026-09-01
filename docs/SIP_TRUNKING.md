@@ -10,7 +10,9 @@ Every active company extension owns a tenant-bound Telnyx telephony credential. 
 
 ## External Trunks
 
-Customer trunk settings are control-plane records and do not make Vocivo a carrier. Public numbers and PSTN routes must remain attached to a licensed provider such as Telnyx or an approved regional carrier. Carrier credentials must stay server-side and tenant-scoped.
+Customer trunk settings are control-plane records. Companies bring a DID from any SIP provider, assign it as a Vocivo `sip_trunk` number, and send inbound INVITEs to `sip.vocivo.app`. Incoming calls are free on the Vocivo wallet. IVR, queues, and the DTMF receptionist run on the Vocivo SIP edge. Outbound PSTN still uses a licensed trunk (Telnyx or the customer’s own outbound carrier) and is the only voice usage billed to calling credit.
+
+Do not attach customer inbound to Telnyx Call Control if the goal is zero inbound platform fees.
 
 ## Deployment
 

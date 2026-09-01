@@ -3,7 +3,7 @@ import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
 import { findExtension, getExtension, listExtensions, listExtensionSipUsernames } from '../pbx.js';
 import { telnyx, TelnyxApiError } from '../telnyx.js';
-import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState } from '../voice-control.js';
+import { callAction, decodeVoiceState, dialCall, dialCallLegs, encodeVoiceState, primaryVoiceCallerId } from '../voice-control.js';
 import { clearActiveCallRouteIfMatches, saveActiveCallRoute } from '../call-route-store.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { storeVoicemail, storeVoicemailAudio } from '../voicemail-store.js';
@@ -14,6 +14,7 @@ import { answerParkedCallerThenBridge, bridgeOutboundCalls, prepareParkedCallerM
 import { outboundUsesNativeBridgeOnAnswer } from '../outbound-native-bridge.js';
 import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
+import { maybeChargeOutboundHangup } from '../outbound-pstn-charge.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
 import { normalizeE164, organizationForNumber } from '../tenancy.js';
 import { verifyTelnyxWebhook } from '../telnyx-webhook-auth.js';
@@ -24,7 +25,8 @@ import { clearConferenceCall, isConferenceEnded, markConferenceEnded, readConfer
 import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
-import { activeOrganizationExtensionTargets, extensionSipUri, organizationExtensionSipUri } from '../internal-sip.js';
+import { activeOrganizationExtensionTargets, clientExtensionSipUri, organizationExtensionSipUri } from '../internal-sip.js';
+import { wakeupSipDestinations } from '../sip-ring-devices.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
 import { claimReplayKey, releaseReplayKey } from '../object-store.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools, inboundAiCommandId, inboundAiRoutingKey } from '../ai-transfer.js';
@@ -83,8 +85,15 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
     }));
   }
   const remoteIdentity = callerName || callerNumber;
-  const dialFrom = [options.dialFrom, options.inboundNumber, callerNumber].find((value) => value && e164.test(value));
+  const dialFrom = [options.dialFrom, options.inboundNumber, callerNumber].find((value) => value && e164.test(value))
+    || await primaryVoiceCallerId().catch(() => '');
   if (!dialFrom) throw new Error('No explicit inbound caller identity is available for the agent leg.');
+  await wakeupSipDestinations({
+    destinations: destination,
+    callId: callControlId,
+    callerName: callerName || '',
+    from: callerNumber || dialFrom,
+  }).catch((error) => logWebhookFailure('SIP edge wakeup before agent dial', error));
   await dialCall({
     to: destination,
     state: {
@@ -195,14 +204,14 @@ async function routeToExtension(input: {
   }
 
   const primarySipUsers = await listExtensionSipUsernames(input.extension.id);
-  const destinations = (primarySipUsers.length ? primarySipUsers : [input.extension.sipUsername]).map(extensionSipUri);
+  const destinations = (primarySipUsers.length ? primarySipUsers : [input.extension.sipUsername]).map(clientExtensionSipUri);
   const targetExtensionIds = [input.extension.id];
   let dialFrom: string | undefined;
   const simultaneous = profile?.simultaneousRing?.trim() || '';
   const simultaneousExtension = extensions.find((item) => item.extension === simultaneous && item.id !== input.extension.id && item.status === 'active' && item.sipUsername);
   if (simultaneousExtension) {
     const simultaneousSipUsers = await listExtensionSipUsernames(simultaneousExtension.id);
-    destinations.push(...(simultaneousSipUsers.length ? simultaneousSipUsers : [simultaneousExtension.sipUsername]).map(extensionSipUri));
+    destinations.push(...(simultaneousSipUsers.length ? simultaneousSipUsers : [simultaneousExtension.sipUsername]).map(clientExtensionSipUri));
     targetExtensionIds.push(simultaneousExtension.id);
   } else {
     const simultaneousNumber = normalizeE164(simultaneous);
@@ -698,7 +707,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(200).json({ received: true });
         }
         const outcome = voiceRouteHangupOutcome({ hangupCause: payload?.hangup_cause, telnyxError: payload?.telnyx_error });
-        if (state.routeId) await updateVoiceRoute(state.routeId, outcome);
+        if (state.routeId) {
+          await updateVoiceRoute(state.routeId, outcome);
+          if (outcome.phase === 'ended') {
+            await maybeChargeOutboundHangup(state.routeId, eventId).catch((error) => logWebhookFailure('debit outbound PSTN', error));
+          }
+        }
         if (pair && (pair.status === 'conference' || pair.status === 'merging')) {
           await hangupConferenceParticipant(pair, callControlId, `${eventId}-destination-hangup`);
         } else if (pair) {
@@ -869,10 +883,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       await saveQueueCall({ ...queue, status: 'dialing', updatedAt: new Date().toISOString() });
       await speakPrompt(callControlId, { payload: config.waitingMessage, voice: config.voice, command_id: `${eventId}-queue-waiting` }).catch((error) => logWebhookFailure('speak queue waiting prompt', error));
-      const queueFrom = [state.inboundNumber, state.callerNumber].find((value) => value && e164.test(value));
+      const queueFrom = [state.inboundNumber, state.callerNumber].find((value) => value && e164.test(value))
+        || await primaryVoiceCallerId().catch(() => '');
       if (!queueFrom) throw new Error('No explicit inbound caller identity is available for the queue leg.');
+      const queueDestinations = members.map((member) => organizationExtensionSipUri(pbx, organizationId, member.sipUsername));
+      await wakeupSipDestinations({
+        destinations: queueDestinations,
+        callId: callControlId,
+        callerName: state.callerName || '',
+        from: state.callerNumber || queueFrom,
+      }).catch((error) => logWebhookFailure('SIP edge wakeup before queue dial', error));
       const agentCall = await dialCall({
-        to: members.map((member) => organizationExtensionSipUri(pbx, organizationId, member.sipUsername)),
+        to: queueDestinations,
         from: queueFrom,
         fromDisplayName: queue.kind === 'queue' ? 'Queued business call' : 'Business group call',
         state: { flow: 'queue_agent', queueName: state.queueName, handlingId: state.handlingId, parentCallControlId: callControlId, organizationId, targetExtensionIds: members.map((member) => member.id), callerNumber: state.callerNumber, callerName: state.callerName },

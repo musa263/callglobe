@@ -104,6 +104,33 @@ jest.mock('../../src/lib/voipClient', () => {
   };
 });
 
+jest.mock('../../src/lib/sipJsClient', () => ({
+  setSipIncomingHandler: jest.fn(),
+  sipSessionId: jest.fn(() => ''),
+  SessionState: { Initial: 'Initial', Establishing: 'Establishing', Established: 'Established', Terminating: 'Terminating', Terminated: 'Terminated' },
+}));
+
+jest.mock('../../src/lib/sipNative', () => ({
+  answerVocivoSip: jest.fn(),
+  hangupVocivoSip: jest.fn(),
+  inviteVocivoSip: jest.fn(),
+  mergeVocivoSip: jest.fn(),
+  onVocivoSipReady: jest.fn(() => () => undefined),
+  registerVocivoSip: jest.fn(async () => undefined),
+  unregisterVocivoSip: jest.fn(async () => undefined),
+  setPreferredVoiceEdge: jest.fn(),
+  preferredVoiceEdge: jest.fn(() => 'telnyx'),
+  referVocivoSip: jest.fn(),
+  sendVocivoSipDtmf: jest.fn(),
+  setVocivoSipHeld: jest.fn(),
+  setVocivoSipMuted: jest.fn(),
+  sipClientReady: jest.fn(() => false),
+  sipDomain: jest.fn(() => ''),
+  sipEdgeInternalCallsOnly: jest.fn(() => false),
+  subscribeVocivoSipEvents: jest.fn(() => () => undefined),
+  swapVocivoSip: jest.fn(),
+}));
+
 import { TelnyxConnectionState, TelnyxVoipClient, VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
 import NetInfo from '@react-native-community/netinfo';
 import { VoiceProvider, VoiceRoot, useVoice } from '../../src/context/VoiceContext';

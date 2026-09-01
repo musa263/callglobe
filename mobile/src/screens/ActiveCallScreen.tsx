@@ -26,14 +26,33 @@ function Control({ label, active, disabled, onPress, children }: { label: string
 
 const sanitize = (value: string) => value.replace(/\D/g, '').slice(0, 18);
 
-function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: boolean; rates: CallRate[]; caller?: CallerNumber; onClose: () => void; onStart: (number: string, rate: CallRate, caller?: CallerNumber) => Promise<void> }) {
+function AddCallModal({
+  visible, rates, caller, profileId, onClose, onStartExternal, onStartInternal,
+}: {
+  visible: boolean;
+  rates: CallRate[];
+  caller?: CallerNumber;
+  profileId?: string;
+  onClose: () => void;
+  onStartExternal: (number: string, rate: CallRate, caller?: CallerNumber) => Promise<void>;
+  onStartInternal: (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<'external' | 'extension'>('extension');
   const [selected, setSelected] = useState(() => rates.find((rate) => rate.country_code === 'SA') ?? rates[0]!);
   const [number, setNumber] = useState('');
   const [showRates, setShowRates] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [team, setTeam] = useState<Array<{ id: string; sipUsername?: string; extension: string; name: string; photoUrl?: string }>>([]);
 
-  const start = async () => {
+  useEffect(() => {
+    if (!visible || mode !== 'extension') return;
+    api.get<{ users: Array<{ id: string; sipUsername?: string; extension: string; name: string; photoUrl?: string }> }>('/api/voice/directory')
+      .then((result) => setTeam((result.users || []).filter((user) => user.id !== profileId)))
+      .catch(() => setTeam([]));
+  }, [mode, profileId, visible]);
+
+  const startExternal = async () => {
     if (number.length < 4 || busy) return;
     if (!caller?.phone_number) {
       setError('Choose a caller ID before adding an external caller.');
@@ -42,7 +61,32 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
     setBusy(true);
     setError('');
     try {
-      await onStart(`${selected.dial_code}${number}`, selected, caller);
+      await onStartExternal(`${selected.dial_code}${number}`, selected, caller);
+      setNumber('');
+      onClose();
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : 'The second call could not be started.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startInternal = async (member?: { sipUsername?: string; extension: string; name: string; photoUrl?: string }) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (member) {
+        if (!member.sipUsername) throw new Error('That colleague is not registered on Vocivo SIP.');
+        await onStartInternal(member.sipUsername, member.extension, member.name, member.photoUrl);
+      } else {
+        const extension = number.replace(/\D/g, '').slice(0, 5);
+        if (extension.length < 2) throw new Error('Enter a company extension.');
+        const result = await api.get<{ users: Array<{ sipUsername?: string; extension: string; name: string; photoUrl?: string }> }>(`/api/voice/directory?extension=${encodeURIComponent(extension)}`);
+        const colleague = result.users?.[0];
+        if (!colleague?.sipUsername) throw new Error('That extension is not available.');
+        await onStartInternal(colleague.sipUsername, colleague.extension, colleague.name, colleague.photoUrl);
+      }
       setNumber('');
       onClose();
     } catch (startError) {
@@ -56,12 +100,21 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={styles.addModal}>
         <View style={styles.addHeader}><View><Text style={styles.addEyebrow}>MULTI-CALL</Text><Text style={styles.addTitle}>Add another caller</Text></View><Pressable accessibilityLabel="Close add call" onPress={onClose} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View>
-        <Pressable onPress={() => setShowRates(true)} style={styles.addCountry}><Text style={styles.addFlag}>{flagFromCode(selected.country_code)}</Text><Text style={styles.addCountryName}>{selected.country_name}</Text><ChevronDown size={18} color={colors.textMuted} /></Pressable>
-        <View style={styles.addNumber}><Text style={styles.addCode}>{selected.dial_code}</Text><Text numberOfLines={1} adjustsFontSizeToFit style={[styles.addDigits, !number && styles.addPlaceholder]}>{number.replace(/(.{3})/g, '$1 ').trim() || 'Phone number'}</Text><Pressable onPress={() => setNumber((value) => value.slice(0, -1))} onLongPress={() => setNumber('')} style={styles.addDelete}><Delete size={21} color={colors.textMuted} /></Pressable></View>
-        <Text style={styles.addRate}>{selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)} per minute estimated` : 'Live carrier rate applies'}</Text>
+        <View style={styles.addSegments}>
+          <Pressable onPress={() => { setMode('extension'); setNumber(''); setError(''); }} style={[styles.addSegment, mode === 'extension' && styles.addSegmentActive]}><Text style={[styles.addSegmentText, mode === 'extension' && styles.addSegmentTextActive]}>Extension</Text></Pressable>
+          <Pressable onPress={() => { setMode('external'); setNumber(''); setError(''); }} style={[styles.addSegment, mode === 'external' && styles.addSegmentActive]}><Text style={[styles.addSegmentText, mode === 'external' && styles.addSegmentTextActive]}>External</Text></Pressable>
+        </View>
+        {mode === 'external' ? <>
+          <Pressable onPress={() => setShowRates(true)} style={styles.addCountry}><Text style={styles.addFlag}>{flagFromCode(selected.country_code)}</Text><Text style={styles.addCountryName}>{selected.country_name}</Text><ChevronDown size={18} color={colors.textMuted} /></Pressable>
+          <View style={styles.addNumber}><Text style={styles.addCode}>{selected.dial_code}</Text><Text numberOfLines={1} adjustsFontSizeToFit style={[styles.addDigits, !number && styles.addPlaceholder]}>{number.replace(/(.{3})/g, '$1 ').trim() || 'Phone number'}</Text><Pressable onPress={() => setNumber((value) => value.slice(0, -1))} onLongPress={() => setNumber('')} style={styles.addDelete}><Delete size={21} color={colors.textMuted} /></Pressable></View>
+          <Text style={styles.addRate}>{selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)} per minute estimated` : 'Live carrier rate applies'}</Text>
+        </> : <>
+          <View style={styles.addNumber}><Text style={styles.addCode}>EXT</Text><Text numberOfLines={1} adjustsFontSizeToFit style={[styles.addDigits, !number && styles.addPlaceholder]}>{number || 'Company extension'}</Text><Pressable onPress={() => setNumber((value) => value.slice(0, -1))} onLongPress={() => setNumber('')} style={styles.addDelete}><Delete size={21} color={colors.textMuted} /></Pressable></View>
+          <ScrollView style={styles.addTeam}>{team.map((member) => <Pressable key={member.id} disabled={busy} onPress={() => startInternal(member)} style={styles.transferRow}><View style={styles.transferAvatar}><Text style={styles.transferInitial}>{member.name.charAt(0).toUpperCase()}</Text></View><View style={styles.transferCopy}><Text style={styles.transferName}>{member.name}</Text><Text style={styles.transferMeta}>Extension {member.extension}</Text></View></Pressable>)}</ScrollView>
+        </>}
         {!!error && <Text style={styles.addError}>{error}</Text>}
-        <View style={styles.addKeypad}><Keypad onPress={(digit) => setNumber((value) => sanitize(value + digit))} /></View>
-        <Pressable disabled={number.length < 4 || busy} onPress={start} style={[styles.addButton, (number.length < 4 || busy) && styles.addButtonDisabled]}>{busy ? <Text style={styles.addButtonText}>Calling...</Text> : <><Phone size={21} color={colors.ink} fill={colors.ink} /><Text style={styles.addButtonText}>Hold and call</Text></>}</Pressable>
+        {mode === 'external' ? <View style={styles.addKeypad}><Keypad onPress={(digit) => setNumber((value) => sanitize(value + digit))} /></View> : <View style={styles.addKeypad}><Keypad onPress={(digit) => setNumber((value) => sanitize(value + digit).slice(0, 5))} /></View>}
+        <Pressable disabled={(mode === 'external' ? number.length < 4 : number.length < 2) || busy} onPress={() => { void (mode === 'external' ? startExternal() : startInternal()); }} style={[styles.addButton, ((mode === 'external' ? number.length < 4 : number.length < 2) || busy) && styles.addButtonDisabled]}>{busy ? <Text style={styles.addButtonText}>Calling...</Text> : <><Phone size={21} color={colors.ink} fill={colors.ink} /><Text style={styles.addButtonText}>Hold and call</Text></>}</Pressable>
         <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={setSelected} onClose={() => setShowRates(false)} />
       </View>
     </Modal>
@@ -71,7 +124,7 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
 export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const insets = useSafeAreaInsets();
   const { rates, callerNumbers, profile } = useAuth();
-  const { activeCall, waitingCall, heldCall, conference, duration, error: voiceError, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant } = useVoice();
+  const { activeCall, waitingCall, heldCall, conference, duration, error: voiceError, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf, startSecondCall, startSecondInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant } = useVoice();
   const [showKeypad, setShowKeypad] = useState(false);
   const [showAddCall, setShowAddCall] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -110,7 +163,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           : 'Calling';
   const extensionNumber = activeCall.number.replace(/\D/g, '');
   const visibleNumber = activeCall.destinationCountry === 'Internal' ? (extensionNumber ? `Extension ${extensionNumber}` : 'Internal call') : activeCall.number;
-  const transferEnabled = Boolean(profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
+  const transferEnabled = Boolean(profile?.extension && activeCall.phase === 'active' && !conference);
   const selectedCaller = callerNumbers.find((number) => number.phone_number === activeCall.callerId)
     ?? callerNumbers.find((number) => number.source === 'owned' && number.status === 'active')
     ?? callerNumbers[0];
@@ -196,7 +249,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <Control label="Add caller" disabled={Boolean(conference) || Boolean(heldCall) || activeCall.phase !== 'active'} onPress={() => setShowAddCall(true)}><UserPlus size={24} color={conference || heldCall || activeCall.phase !== 'active' ? colors.textFaint : colors.text} /></Control>
           <Control label={activeCall.onHold ? 'Resume' : 'Hold'} active={activeCall.onHold} disabled={Boolean(conference)} onPress={toggleHold}>{activeCall.onHold ? <Play size={24} color={colors.ink} fill={colors.ink} /> : <Pause size={24} color={conference ? colors.textFaint : colors.text} />}</Control>
           <Control label={swapBusy ? 'Swapping' : 'Swap'} active={!!heldCall && activeCall.phase === 'active'} disabled={!heldCall || activeCall.phase !== 'active' || Boolean(conference) || swapBusy} onPress={swap}>{swapBusy ? <ActivityIndicator size="small" color={colors.text} /> : <ArrowLeftRight size={24} color={heldCall && activeCall.phase === 'active' ? colors.ink : colors.textFaint} />}</Control>
-          <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall?.routeId || !activeCall.routeId || activeCall.phase !== 'active' || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall?.routeId && activeCall.routeId && activeCall.phase === 'active' ? colors.text : colors.textFaint} />}</Control>
+          <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall || activeCall.phase !== 'active' || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall && activeCall.phase === 'active' ? colors.text : colors.textFaint} />}</Control>
           <Control label="Transfer" disabled={!transferEnabled} onPress={openTransfer}><PhoneForwarded size={24} color={transferEnabled ? colors.text : colors.textFaint} /></Control>
         </View>
         <Pressable accessibilityLabel="End call" disabled={endingCall} onPress={hangup} style={({ pressed }) => [styles.end, pressed && styles.endPressed]}>{endingCall ? <ActivityIndicator color={colors.white} /> : <PhoneOff size={30} color={colors.white} strokeWidth={2.4} />}</Pressable>
@@ -209,7 +262,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <View style={styles.keypadBody}><Keypad compact onPress={sendDtmf} /></View>
         </View>
       </Modal>
-      <AddCallModal visible={showAddCall} rates={rates} caller={selectedCaller} onClose={() => setShowAddCall(false)} onStart={startSecondCall} />
+      <AddCallModal visible={showAddCall} rates={rates} caller={selectedCaller} profileId={profile?.id} onClose={() => setShowAddCall(false)} onStartExternal={startSecondCall} onStartInternal={startSecondInternalCall} />
       <Modal visible={showTransfer} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowTransfer(false)}>
         <View style={styles.transferPage}><View style={styles.addHeader}><View><Text style={styles.addEyebrow}>BUSINESS CALL</Text><Text style={styles.addTitle}>Transfer to colleague</Text></View><Pressable accessibilityLabel="Close transfer" onPress={() => setShowTransfer(false)} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View><Text style={styles.transferHelp}>The caller will be connected directly to the selected extension.</Text>{!!transferError && <Text style={styles.transferError}>{transferError}</Text>}<ScrollView style={styles.transferList}>{team.map((member) => <Pressable key={member.id} disabled={!!transferBusy} onPress={() => sendTransfer(member)} style={({ pressed }) => [styles.transferRow, pressed && styles.pressed]}>{member.photoUrl ? <Image source={{ uri: member.photoUrl }} style={styles.transferPhoto} /> : <View style={styles.transferAvatar}><Text style={styles.transferInitial}>{member.name.charAt(0).toUpperCase()}</Text></View>}<View style={styles.transferCopy}><Text style={styles.transferName}>{member.name}</Text><Text style={styles.transferMeta}>Extension {member.extension} · {member.department}</Text></View>{transferBusy === member.id ? <ActivityIndicator color={colors.mint} /> : <PhoneForwarded size={19} color={colors.mint} />}</Pressable>)}</ScrollView></View>
       </Modal>
@@ -289,6 +342,12 @@ const styles = StyleSheet.create({
   addEyebrow: { color: colors.mint, fontSize: 10, fontWeight: '900' },
   addTitle: { color: colors.text, fontSize: 23, fontWeight: '800', marginTop: 4 },
   addClose: { width: 42, height: 42, borderRadius: 8, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center' },
+  addSegments: { height: 42, marginTop: 8, flexDirection: 'row', borderRadius: 8, backgroundColor: colors.panel, padding: 3, gap: 4 },
+  addSegment: { flex: 1, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  addSegmentActive: { backgroundColor: colors.mint },
+  addSegmentText: { color: colors.textMuted, fontSize: 12, fontWeight: '800' },
+  addSegmentTextActive: { color: colors.ink },
+  addTeam: { flex: 1, marginTop: 8 },
   addCountry: { height: 50, marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   addFlag: { fontSize: 23 },
   addCountryName: { color: colors.text, fontSize: 15, fontWeight: '800' },

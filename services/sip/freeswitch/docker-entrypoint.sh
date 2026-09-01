@@ -11,7 +11,7 @@ cp /opt/vocivo-fs/sip_profiles/internal.xml /etc/freeswitch/sip_profiles/interna
 cp /opt/vocivo-fs/dialplan/public.xml /etc/freeswitch/dialplan/public.xml
 cp /opt/vocivo-fs/dialplan/default.xml /etc/freeswitch/dialplan/default.xml
 cp /opt/vocivo-fs/directory/default.xml /etc/freeswitch/directory/default.xml
-PUBLIC_IP_REGEX=$(printf '%s' "${PUBLIC_IP:-127.0.0.1}" | sed 's/\./\\./g')
+PUBLIC_IP_REGEX=$(printf '%s' "${PUBLIC_IP:-127.0.0.1}" | sed 's/\./[.]/g')
 sed -i \
   -e 's#$${TELNYX_SIP_HOST}#'"${TELNYX_SIP_HOST:-sip.telnyx.com}"'#g' \
   -e 's#$${TELNYX_SIP_REALM}#'"${TELNYX_SIP_REALM:-sip.telnyx.com}"'#g' \
@@ -19,5 +19,10 @@ sed -i \
   -e 's#$${TELNYX_SIP_PASSWORD}#'"${TELNYX_SIP_PASSWORD:-}"'#g' \
   -e 's#$${PUBLIC_IP}#'"${PUBLIC_IP:-127.0.0.1}"'#g' \
   /etc/freeswitch/sip_profiles/external.xml
-sed -i -e 's#PUBLIC_IP_REGEX#'"${PUBLIC_IP_REGEX}"'#g' /etc/freeswitch/dialplan/public.xml
+sed -i \
+  -e 's#PUBLIC_IP_REGEX#'"${PUBLIC_IP_REGEX}"'#g' \
+  -e 's#$${TELNYX_SIP_AUTH_TOKEN}#'"${TELNYX_SIP_AUTH_TOKEN:-}"'#g' \
+  -e 's#$${VOCIVO_API_URL}#'"${VOCIVO_API_URL:-https://vocivo.app}"'#g' \
+  -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET:-}"'#g' \
+  /etc/freeswitch/dialplan/public.xml
 exec /usr/bin/freeswitch -nc -nf -nonat

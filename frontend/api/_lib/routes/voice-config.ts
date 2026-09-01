@@ -4,7 +4,8 @@ import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../h
 import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
-import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../voice-provider.js';
+import { apnsConfigured } from '../apns-voip.js';
+import { clientIceServers, sipDomain, sipRealm, sipWsUri, voiceEdge } from '../voice-provider.js';
 import { sessionOrganizationId } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -34,7 +35,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sip_domain: edge === 'sip' ? sipDomain() : 'sip.telnyx.com',
       sip_realm: edge === 'sip' ? sipRealm() : 'sip.telnyx.com',
       sip_ws_uri: edge === 'sip' ? sipWsUri() : '',
-      ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
+      ice_servers: clientIceServers(edge, `${extension.organizationId}:${extension.id}`),
+      voip_wakeup: edge === 'sip' ? apnsConfigured() : true,
       extension: extension.extension,
       organization_id: extension.organizationId,
     });

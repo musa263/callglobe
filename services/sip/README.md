@@ -16,17 +16,19 @@ cp .env.example .env
 docker compose up -d
 ```
 
-`SIP_EDGE_SECRET` must match Vercel. Kamailio authenticates REGISTER against `POST /api/voice/sip-auth`. Missed contacts call `POST /api/voice/sip-wakeup`.
+`SIP_EDGE_SECRET` must match Vercel. Kamailio authenticates REGISTER against `POST /api/voice/sip-auth`. Missed contacts call `POST /api/voice/sip-wakeup` (APNs VoIP + web push), then wait for REGISTER before 480.
 
 Registered web E.164 INVITEs are bridged to `sofia/gateway/telnyx/+E164`. FreeSWITCH `public` treats numbers from this host as outbound origination; numbers arriving from Telnyx stay on the inbound DID path.
 
 ## Telnyx trunk
 
-Create an FQDN or IP connection in Mission Control pointing at this host. Put the SIP username/password (or IP ACL) in `.env`. Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`.
+Companies add their own SIP numbers in Admin → Phone numbers. Those DIDs inbound on this host (`source: sip_trunk`) with **no Vocivo wallet charge**. Point the carrier at `sip.vocivo.app:5060` (UDP/TCP). Vocivo IVR, queues, and the DTMF receptionist run in FreeSWITCH. Telnyx Call Control remains only for Vocivo-purchased numbers that have not been moved with `VOCIVO_SIP_INBOUND=1`.
 
-Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INBOUND=1` on both Vercel and this host. See [ADR 0003](../../docs/adr/0003-self-hosted-sip-edge.md).
+Keep `VOCIVO_SIP_INBOUND=0` unless you also move a Telnyx-owned DID onto this IP connection.
+
+Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`. Internal extension INVITEs stay in Kamailio usrloc.
 
 ## Clients
 
 - Web: SIP.js over `VOCIVO_SIP_WSS_URI` when `VOCIVO_VOICE_EDGE=sip`.
-- iOS: Telnyx SDK remains the default. Vocivo SIP + CallKit is used only when the native module is linked.
+- iOS: Vocivo native SIP + CallKit over the same WSS URI. `location /ws` must echo `Sec-WebSocket-Protocol` (see `nginx/sip-websocket.conf`). If the native module is missing, the app still REGISTERs with SIP.js instead of falling through to Telnyx.

@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const cfg = fs.readFileSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../services/sip/kamailio/kamailio.cfg'),
+  'utf8',
+);
+
+test('Kamailio wakes the phone then forks live contacts without blocking WebSocket REGISTER', () => {
+  assert.match(cfg, /ICE=force DTLS=passive SDES-off RTCP-MUX RTP\/SAVPF/);
+  assert.match(cfg, /async", "workers", 16/);
+  assert.match(cfg, /cors_mode", 2/);
+  assert.match(cfg, /\$Rp != 8080 && \$fU =~ "\^\[0-9\]\{1,8\}\$"/);
+  assert.match(cfg, /reject untrusted internal INVITE/);
+  assert.doesNotMatch(cfg, /\$rU =~ "\^\[0-9\]\{1,8\}\$"/);
+  assert.match(cfg, /WAKEUP_NOW/);
+  assert.match(cfg, /if \(lookup\("location"\)\)/);
+  assert.match(cfg, /async_route\("WAIT_REGISTER", "8"\)/);
+  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "2"\)/);
+  assert.doesNotMatch(cfg, /\$avp\(tries\)/);
+  assert.match(cfg, /public wakeup then one wait/);
+  assert.match(cfg, /\$Rp != 8080/);
+  assert.match(cfg, /reject unauthenticated E.164 INVITE/);
+  assert.match(cfg, /\$du = "sip:127.0.0.1:5080;transport=udp"/);
+  assert.match(cfg, /\$var\(rto\) = \$\(hdr\(Refer-To\)\{nameaddr.uri\}\{uri.user\}\)/);
+  assert.match(cfg, /has_totag\(\) && loose_route\(\)/);
+  assert.doesNotMatch(cfg, /listen=tcp:0.0.0.0:7443/);
+  assert.match(cfg, /autodrop", 0/);
+  assert.match(cfg, /\$Rp != 8080 && !sanity_check/);
+  assert.match(cfg, /route\(CHALLENGE\)/);
+  assert.match(cfg, /db_sqlite.so/);
+  assert.match(cfg, /REGISTER ok \$fU/);
+  assert.match(cfg, /route\(REFER\)/);
+  assert.match(cfg, /\$rU =~ "\^conf-"/);
+});

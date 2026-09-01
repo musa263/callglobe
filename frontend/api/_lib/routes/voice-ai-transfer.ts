@@ -6,7 +6,7 @@ import { claimReplayKey, releaseReplayKey } from '../object-store.js';
 import { findExtension, listExtensionSipUsernames } from '../pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { readBusinessVoiceConfig } from '../number-config.js';
-import { extensionSipUri } from '../internal-sip.js';
+import { clientExtensionSipUri } from '../internal-sip.js';
 import { callAction, dialCall, encodeVoiceState, primaryVoiceCallerId } from '../voice-control.js';
 import { normalizeE164 } from '../tenancy.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
@@ -66,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!claimed) return res.status(200).json({ accepted: true, duplicate: true, extension: requestedExtension });
 
     const sipUsers = await listExtensionSipUsernames(extension.id);
-    const destinations = [...new Set((sipUsers.length ? sipUsers : [extension.sipUsername]).map(extensionSipUri))];
+    const destinations = [...new Set((sipUsers.length ? sipUsers : [extension.sipUsername]).map(clientExtensionSipUri))];
     if (!destinations.length) throw new Error(`Extension ${requestedExtension} has no active device credentials.`);
     const inboundIdentity = normalizeE164(authorization.inboundNumber);
     const from = e164.test(inboundIdentity) ? inboundIdentity : await primaryVoiceCallerId();

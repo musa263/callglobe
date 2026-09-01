@@ -64,11 +64,13 @@ let primaryVoiceNumberCache: { value: string; expiresAt: number } | null = null;
 export async function primaryVoiceCallerId() {
   const configured = process.env.TELNYX_VOICE_FROM?.trim();
   if (configured && e164.test(configured)) return configured;
+  const numberId = process.env.TELNYX_PHONE_NUMBER_ID?.trim();
+  if (!numberId) throw new Error('Set TELNYX_VOICE_FROM to an E.164 caller identity for outbound PSTN.');
   if (primaryVoiceNumberCache && primaryVoiceNumberCache.expiresAt > Date.now()) return primaryVoiceNumberCache.value;
-  const response = await telnyx(`/phone_numbers/${encodeURIComponent(requiredEnv('TELNYX_PHONE_NUMBER_ID'))}`);
+  const response = await telnyx(`/phone_numbers/${encodeURIComponent(numberId)}`);
   const payload = await response.json() as { data?: { phone_number?: string } };
   const value = payload.data?.phone_number?.trim() || '';
-  if (!e164.test(value)) throw new Error('The primary Telnyx voice number is not a valid E.164 caller identity.');
+  if (!e164.test(value)) throw new Error('TELNYX_PHONE_NUMBER_ID is not a valid E.164 caller identity. Set TELNYX_VOICE_FROM instead.');
   primaryVoiceNumberCache = { value, expiresAt: Date.now() + 5 * 60 * 1000 };
   return value;
 }

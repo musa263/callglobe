@@ -11,7 +11,7 @@ import { isVoiceRouteId } from '../voice-route-id.js';
 import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
-import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
+import { clientExtensionSipUri, parseInternalSipUser } from '../internal-sip.js';
 import { voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
 import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
 import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
@@ -43,17 +43,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (requestedFlow === 'internal') {
       const organization = config.organizations.find((item) => item.id === organizationId);
       const sipUser = organization ? parseInternalSipUser(destination) : null;
-      if ((!sipUser && !/^\d{2,5}$/.test(targetExtension)) || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
+      const extensionHint = targetExtension || (/^\d{2,5}$/.test(destination) ? destination : '');
+      if ((!sipUser && !/^\d{2,5}$/.test(extensionHint)) || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
       const [directory, profile] = await Promise.all([
         listExtensions(organizationId),
         readUserProfile(`vocivo-extension:${session.extensionId}`),
       ]);
       const source = directory.find((item) => item.id === session.extensionId);
-      const target = directory.find((item) => item.status === 'active' && (targetExtension ? item.extension === targetExtension : item.sipUsername === sipUser));
+      const target = directory.find((item) => item.status === 'active' && (extensionHint ? item.extension === extensionHint : item.sipUsername === sipUser));
       if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
       if (!source || source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
-      destination = extensionSipUri(target.sipUsername);
+      destination = clientExtensionSipUri(target.sipUsername);
       callerName = (profile?.fullName || source.name).replace(/[\r\n|]/g, ' ').trim().slice(0, 80);
       callerPhotoUrl = profile?.photoUrl && /^https:\/\//i.test(profile.photoUrl) ? profile.photoUrl.slice(0, 500) : undefined;
       callerExtension = source.extension;
@@ -85,6 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // carrier wallet. SIP-edge internal calls fork locally and must not wait on /balance.
     if (voiceRouteNeedsTelnyxCredit(requestedFlow)) await assertTelnyxVoiceReady();
     if (requestedFlow !== 'internal') {
+      // Incoming PSTN is never billed to the tenant wallet. This route is outbound or internal only.
       const wallet = await readTenantWallet(organizationId);
       const blocked = outboundWalletBlockReason(wallet);
       if (blocked) return res.status(402).json({ error: blocked });

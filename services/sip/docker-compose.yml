@@ -29,6 +29,10 @@ services:
     volumes:
       - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
       - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro
+      - ./kamailio/usrloc-init.sql:/etc/kamailio/usrloc-init.sql:ro
+      - ./kamailio/docker-entrypoint.sh:/entrypoint.sh:ro
+      - kamailio-usrloc:/var/lib/kamailio
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
   freeswitch:
     image: safarov/freeswitch:latest
@@ -40,6 +44,7 @@ services:
       TELNYX_SIP_HOST: ${TELNYX_SIP_HOST:-sip.telnyx.com}
       TELNYX_SIP_USERNAME: ${TELNYX_SIP_USERNAME:-}
       TELNYX_SIP_PASSWORD: ${TELNYX_SIP_PASSWORD:-}
+      TELNYX_SIP_AUTH_TOKEN: ${TELNYX_SIP_AUTH_TOKEN:-}
       TELNYX_SIP_REALM: ${TELNYX_SIP_REALM:-sip.telnyx.com}
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       VOCIVO_SIP_INBOUND: ${VOCIVO_SIP_INBOUND:-0}
@@ -48,5 +53,30 @@ services:
       - ./freeswitch:/opt/vocivo-fs:ro
     entrypoint: ["/bin/sh", "/opt/vocivo-fs/docker-entrypoint.sh"]
 
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --log-file=stdout
+      - --listening-port=3478
+      - --external-ip=${PUBLIC_IP:-127.0.0.1}
+      - --realm=${VOCIVO_SIP_REALM:-sip.vocivo.app}
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SECRET:-changeme}
+      - --fingerprint
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --min-port=49152
+      - --max-port=49200
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+
 volumes:
   freeswitch-etc:
+  kamailio-usrloc:

@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
-import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
+import { digestMatches, parseDigestAuthorization, consumeDigestReplayDurable, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredential } from '../sip-credential-store.js';
-import { sipEdgeAuthorized } from '../sip-edge-auth.js';
+import { sipEdgeAuthorized, verifySipNonce } from '../sip-edge-auth.js';
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -30,7 +30,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const stored = await readSipCredential(challenge.username);
     if (!stored || stored.realm !== challenge.realm) return res.status(403).json({ ok: false });
+    const fromUser = text(req.body?.fromUser, 80);
+    const toUser = text(req.body?.toUser, 80);
+    if (fromUser && fromUser !== challenge.username) {
+      return res.status(403).json({ ok: false, error: 'Digest username must match the SIP From user.' });
+    }
+    if (challenge.method === 'REGISTER' && toUser && toUser !== challenge.username) {
+      return res.status(403).json({ ok: false, error: 'Digest username must match the SIP AOR.' });
+    }
     const ok = digestMatches(stored.ha1, challenge);
+    if (!ok) return res.status(403).json({ ok: false });
+    if (!verifySipNonce(challenge.username, challenge.nonce)) {
+      return res.status(403).json({ ok: false, error: 'Digest nonce is invalid or expired.' });
+    }
+    if (!await consumeDigestReplayDurable(challenge.username, challenge.nonce, challenge.nc)) {
+      return res.status(403).json({ ok: false, error: 'Digest nonce was already used.' });
+    }
     return res.status(ok ? 200 : 403).json({
       ok,
       extensionId: ok ? stored.extensionId : undefined,

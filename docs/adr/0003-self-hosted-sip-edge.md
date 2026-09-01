@@ -13,12 +13,13 @@ Inbound IVR, queues, voicemail, AI receptionist, and conferences already live in
 
 1. Ship `services/sip` as the Vocivo SIP edge. Internal AORs fork registered contacts. Outbound E.164 bridges to the Telnyx SIP gateway.
 2. Default `VOCIVO_VOICE_EDGE=telnyx`. Web SIP.js and iOS native SIP are used only when the flag is `sip`.
-3. iOS keeps the Telnyx SDK until a Vocivo SIP CallKit module is linked. PushKit tokens are also stored on Vocivo for Kamailio wakeup.
-4. Inbound DIDs stay on the Telnyx Call Control application until `VOCIVO_SIP_INBOUND=1`. FreeSWITCH then looks up `/api/voice/sip-inbound` and forks extension contacts. IVR/queue/voicemail are not reimplemented in this phase.
+3. iOS uses one `PKPushRegistry` (the existing Telnyx registry). Vocivo VoIP payloads (`vocivo: sip`) report CallKit immediately, then the native SIP stack REGISTERs and answers the INVITE with the same UUID. Telnyx payloads still go to the Telnyx SDK.
+4. **Bring-your-own SIP numbers** (`source: sip_trunk`) inbound on Kamailio/FreeSWITCH with **no tenant wallet charge**. Companies point any carrier DID at `sip.vocivo.app`. Vocivo owns IVR, queues, and the DTMF AI receptionist on that edge. Telnyx-owned Call Control numbers stay on the Voice API until `VOCIVO_SIP_INBOUND=1`. Incoming minutes are never debited from a Vocivo wallet. `+18447161777` is not the inbound product line.
 
 ## Consequences
 
-- Production TestFlight remains on Telnyx park + Call Control.
+- Production TestFlight needs a native rebuild (prebuild) to intercept Vocivo VoIP pushes. APNs auth key `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_AUTH_KEY` must be set on Vercel for killed-state SIP inbound.
 - Internal media on the SIP edge does not traverse Telnyx.
 - PSTN on the SIP edge is SIP origination + carrier minutes, not Call Control Dial/bridge.
-- Flipping numbers onto the FQDN trunk is a later operator step after web SIP and killed-state ring pass.
+- Conversational LLM audio is not on the SIP edge yet; the Vocivo “AI receptionist” is a company greeting plus DTMF transfer to the team.
+- Flipping Telnyx-owned numbers onto the FQDN trunk is a later operator step. Customer SIP numbers inbound immediately when assigned as `sip_trunk`.

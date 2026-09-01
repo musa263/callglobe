@@ -12,7 +12,7 @@
     "check": "vite build",
     "preview": "vite preview",
     "check:api": "tsc --noEmit -p tsconfig.api.json",
-    "test": "node --import tsx --test api/_lib/*.test.ts src/voice/*.test.js",
+    "test": "node --import tsx --test api/_lib/*.test.ts src/voice/*.test.js src/lib/*.test.js",
     "test:load": "node scripts/load-test.mjs"
   },
   "dependencies": {

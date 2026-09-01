@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import type { CallerNumber, CallLog, CallRate, Profile } from '../types';
 import { fallbackRates } from '../data/fallbackRates';
 import { setVoiceSignedIn, signOutVoiceDevice } from '../lib/voipClient';
+import { unregisterVocivoSip } from '../lib/sipNative';
 
 type AuthContextValue = {
   loading: boolean;
@@ -239,6 +240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await signOutVoiceDevice();
+    await unregisterVocivoSip().catch(() => undefined);
     setIsPreview(false);
     setAuthenticated(false);
     setProfile(null);

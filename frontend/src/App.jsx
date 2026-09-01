@@ -24,7 +24,7 @@ const SAMPLE_RATES = [
   { id: 'pk', country_code: 'PK', country_name: 'Pakistan', dial_code: '+92', rate_per_min: 0.04 },
   { id: 'in', country_code: 'IN', country_name: 'India', dial_code: '+91', rate_per_min: 0.015 },
 ];
-const SAMPLE_NUMBER = { id: 'preview', phone_number: '+18447161777', label: 'Vocivo', country_code: 'US', receives_calls: true, source: 'owned' };
+const SAMPLE_NUMBER = { id: 'preview', phone_number: '+15555550100', label: 'Vocivo', country_code: 'US', receives_calls: true, source: 'sip_trunk' };
 const SAMPLE_DIRECTORY = buildDialingDirectory(SAMPLE_RATES);
 
 function historyStorageKey(userId) {
@@ -185,7 +185,7 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
           <button className="control" disabled={!voice.connected || voice.heldCall || voice.conference} onClick={() => openTool('add')} title="Add caller"><UserPlus /><span>Add caller</span></button>
           <button className="control" disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.swapCalls)} title="Swap calls"><ArrowLeftRight /><span>Swap</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.canMerge || busy} onClick={() => action(voice.mergeCalls)} title="Merge calls"><Merge /><span>Merge</span></button>
-          <button className="control" disabled={!voice.connected || !voice.incoming || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
+          <button className="control" disabled={!voice.connected || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.conference} onClick={() => openTool('participants')} title="Conference participants"><UserMinus /><span>Participants</span></button>
           <button className={voice.audioBlocked ? 'control attention' : 'control'} disabled={!voice.connected || busy} onClick={() => action(voice.resumeAudio)} title={voice.audioBlocked ? 'Resume browser audio' : 'Refresh browser audio'}><Volume2 /><span>{voice.audioBlocked ? 'Resume audio' : 'Audio'}</span></button>
         </div>
@@ -204,7 +204,7 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
   );
 }
 
-function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType, initialNumber }) {
+function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType, initialNumber, extension }) {
   const [dialMode, setDialMode] = useState('external');
   const [number, setNumber] = useState(initialNumber || '');
   const [country, setCountry] = useState(rates[0]);
@@ -240,6 +240,10 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
     if (preview) return onPreviewCall();
     if (dialMode === 'extension') {
       setCallError('');
+      if (extension && number === String(extension)) {
+        setCallError('Call a different company extension. This is your own extension.');
+        return;
+      }
       try {
         await voice.startInternalCall('', number, `Extension ${number}`);
       } catch (extensionError) { setCallError(extensionError.message || 'The extension call could not be started.'); }
@@ -286,9 +290,9 @@ function WalletView({ balance, preview }) {
   return <section className="content-view wallet-view">
     <header className="workspace-header"><div><p className="eyebrow">CALLING CREDIT</p><h1>Top up balance</h1></div></header>
     <div className="wallet-layout">
-      <div className="wallet-balance"><span className="balance-icon"><CircleDollarSign size={21} /></span><div><small>AVAILABLE VOCIVO CREDIT</small><strong>{Number.isFinite(balance) ? `$${balance.toFixed(2)}` : 'Organization managed'}</strong><p>Eligible call charges are deducted from your Vocivo wallet.</p></div><span>USD</span></div>
+      <div className="wallet-balance"><span className="balance-icon"><CircleDollarSign size={21} /></span><div><small>AVAILABLE VOCIVO CREDIT</small><strong>{Number.isFinite(balance) ? `$${balance.toFixed(2)}` : 'Organization managed'}</strong><p>Credit is only used for outbound PSTN. Incoming and internal calls are free.</p></div><span>USD</span></div>
       <div className="payment-panel">
-        <div className="payment-heading"><span><CreditCard size={20} /></span><div><h2>Vocivo billing</h2><p>Calling credit and subscription payments are managed by Vocivo without exposing the underlying carrier account.</p></div></div>
+        <div className="payment-heading"><span><CreditCard size={20} /></span><div><h2>Vocivo billing</h2><p>Incoming calls are free. Wallet credit covers outbound PSTN only.</p></div></div>
         <div className="payment-facts"><span><Check size={16} /><strong>Account</strong><small>Vocivo calling credit</small></span><span><ShieldCheck size={16} /><strong>Payment security</strong><small>Secure billing support</small></span><span><WalletCards size={16} /><strong>Currency</strong><small>USD</small></span></div>
         <button className="topup-button" disabled={preview} onClick={() => window.location.href = 'mailto:billing@vocivo.app?subject=Vocivo%20calling%20credit'}><CreditCard size={19} /> Contact Vocivo billing</button>
         <p className="payment-note">Online self-service payment processing will be enabled when the Vocivo billing provider is connected.</p>
@@ -506,7 +510,7 @@ export default function App() {
         {preview && <div className="preview-banner"><span>You are viewing a safe preview. Calls are disabled.</span><button onClick={logout}><X size={15} /> Exit preview</button></div>}
         {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={15} /></button></div>}
         {profile?.force_password_change && !preview && <div className="modal-layer" role="dialog" aria-modal="true"><section className="modal"><header><div><h2>Update your password</h2><p>This account requires a new password before you can continue.</p></div></header><form className="modal-form" onSubmit={submitForcedPassword}><label>Current password<input type="password" autoComplete="current-password" value={passwordDraft.currentPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, currentPassword: event.target.value }))} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.newPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.confirmPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))} required /></label>{passwordError && <div className="form-error" role="alert">{passwordError}</div>}<button className="primary-button" type="submit" disabled={passwordBusy}>{passwordBusy ? 'Saving...' : 'Save password'}</button></form></section></div>}
-        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
+        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} extension={shellData.profile?.extension} initialNumber={pendingDial} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
         {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setPendingDial(value); setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
         {view === 'wallet' && <WalletView balance={shellData.balance} preview={preview} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}

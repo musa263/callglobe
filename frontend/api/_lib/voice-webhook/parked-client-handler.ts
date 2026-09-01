@@ -9,6 +9,7 @@ import { callAction, dialCall, dialCallLegs, primaryVoiceCallerId } from '../voi
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 import { verifyVoiceRouteToken } from '../voice-route-token.js';
+import { internalCallsUseTelnyxPark } from '../voice-provider.js';
 import { resolveParkedReservation } from '../voice-routing.js';
 import type { VoicePayload } from './contracts.js';
 import { background, callerDisplay, customHeader, logWebhookFailure } from './support.js';
@@ -76,6 +77,12 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
   if (invalidReason) {
     console.warn('Vocivo rejected a parked call route', { eventId, routeId, flow: parkedFlow, reason: invalidReason });
     await rejectParkedCall(callControlId, eventId, 'invalid-destination', 'hang up invalid destination');
+    return;
+  }
+
+  if (reservation.flow === 'internal' && !internalCallsUseTelnyxPark()) {
+    console.warn('Vocivo rejected a Telnyx-parked internal call on the SIP edge', { eventId, routeId });
+    await rejectParkedCall(callControlId, eventId, 'sip-edge-internal', 'hang up SIP-edge internal park');
     return;
   }
 

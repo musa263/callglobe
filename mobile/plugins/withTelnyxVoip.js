@@ -45,6 +45,7 @@ function withTelnyxAppDelegate(config) {
         '// VOCIVO_VOIP_IMPORTS',
         ...(!source.includes('import PushKit') ? ['import PushKit'] : []),
         ...(!source.includes('import TelnyxVoiceCommons') ? ['import TelnyxVoiceCommons'] : []),
+        ...(!source.includes('import VocivoSip') ? ['import VocivoSip'] : []),
       ].join('\n');
       source = `${source.slice(0, insertionPoint)}\n${imports}${source.slice(insertionPoint)}`;
     }
@@ -95,6 +96,9 @@ function withTelnyxAppDelegate(config) {
   ) {
     guard UserDefaults.standard.bool(forKey: "vocivo_voice_signed_in") else {
       completion()
+      return
+    }
+    if VocivoSipPush.handle(payload, completion: completion) {
       return
     }
     TelnyxVoipPushHandler.shared.handleVoipPush(payload, type: type, completion: completion)

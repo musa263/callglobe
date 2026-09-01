@@ -1,8 +1,16 @@
 import type { PbxConfig } from './pbx-config-store.js';
+import { sipDomain, sipRealm, voiceEdge } from './voice-provider.js';
 
 const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)$/i;
 const carrierSipAddress = /^(?:sip:)?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?:;[^<>\s]+)?$/i;
 const telnyxSipHost = 'sip.telnyx.com';
+
+function isInternalSipHost(host: string | undefined) {
+  const value = host?.trim().toLowerCase();
+  if (!value) return false;
+  const allowed = new Set([telnyxSipHost, sipDomain().toLowerCase(), sipRealm().toLowerCase(), 'sip.vocivo.app'].filter(Boolean));
+  return allowed.has(value);
+}
 
 export function canonicalVoiceDestination(destination: string) {
   const value = destination.trim().replace(/^<|>$/g, '');
@@ -19,7 +27,7 @@ export function parseInternalSipUser(destination: string) {
   const match = destination.trim().match(sipUri);
   const username = match?.[1];
   const host = match?.[2];
-  if (!username || host?.trim().toLowerCase() !== telnyxSipHost) return null;
+  if (!username || !isInternalSipHost(host)) return null;
   return username;
 }
 
@@ -31,13 +39,19 @@ export function extensionSipUri(sipUsername: string) {
   return `sip:${sipUsername}@${telnyxSipHost}`;
 }
 
+/** Destination clients INVITE, and Call Control Dial uses, for the active voice edge. */
+export function clientExtensionSipUri(sipUsername: string) {
+  const host = voiceEdge() === 'sip' ? (sipDomain() || 'sip.vocivo.app') : telnyxSipHost;
+  return `sip:${sipUsername}@${host}`;
+}
+
 export function destinationSipUrisForInternalDial(
   destinationUsernames: string[],
   sourceUsernames: string[],
   fallbackDestination: string,
 ) {
-  const blocked = new Set(sourceUsernames.map((username) => extensionSipUri(username)));
-  const destinations = [...new Set(destinationUsernames.map(extensionSipUri).filter((uri) => !blocked.has(uri)))];
+  const blocked = new Set(sourceUsernames.map((username) => clientExtensionSipUri(username)));
+  const destinations = [...new Set(destinationUsernames.map(clientExtensionSipUri).filter((uri) => !blocked.has(uri)))];
   if (destinations.length) return destinations;
   const fallback = isAllowedInternalSipDestination(fallbackDestination) ? canonicalVoiceDestination(fallbackDestination) : '';
   return fallback && !blocked.has(fallback) ? [fallback] : [];
@@ -64,7 +78,7 @@ export function extensionSipUsernames(
 }
 
 export function organizationExtensionSipUri(_config: PbxConfig, _organizationId: string, sipUsername: string) {
-  return extensionSipUri(sipUsername);
+  return clientExtensionSipUri(sipUsername);
 }
 
 export function activeOrganizationExtensionTargets(

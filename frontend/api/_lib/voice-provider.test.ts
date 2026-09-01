@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit } from './voice-provider.js';
+import { clientIceServers, sipDomain, sipIceServers, sipInboundEnabled, sipRealm, sipWsUri, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit, internalCallsUseTelnyxPark } from './voice-provider.js';
 
-const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND'] as const;
+const keys = [
+  'TELNYX_ICE_SERVERS_JSON',
+  'VOCIVO_VOICE_EDGE',
+  'VOCIVO_SIP_REALM',
+  'VOCIVO_SIP_DOMAIN',
+  'VOCIVO_SIP_WSS_URI',
+  'VOCIVO_SIP_INBOUND',
+  'VOCIVO_TURN_SECRET',
+  'VOCIVO_TURN_URLS',
+  'VOCIVO_TURN_TTL_SECONDS',
+  'VOCIVO_STUN_URLS',
+] as const;
 
 function withEnvironment(values: Partial<Record<(typeof keys)[number], string>>, run: () => void) {
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -46,18 +57,45 @@ test('defaults the voice edge to Telnyx so TestFlight stays on CallKit', () => {
 });
 
 test('enables the self-hosted SIP edge only when explicitly requested', () => {
-  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', VOCIVO_SIP_REALM: 'sip.example.test', VOCIVO_SIP_INBOUND: '1' }, () => {
+  withEnvironment({
+    VOCIVO_VOICE_EDGE: 'sip',
+    VOCIVO_SIP_REALM: 'sip.example.test',
+    VOCIVO_SIP_INBOUND: '1',
+    TELNYX_ICE_SERVERS_JSON: JSON.stringify([
+      { urls: ['turn:turn.telnyx.example:3478'], username: 'ephemeral-user', credential: 'ephemeral-secret' },
+    ]),
+  }, () => {
     assert.equal(voiceEdge(), 'sip');
     assert.equal(sipRealm(), 'sip.example.test');
     assert.equal(sipInboundEnabled(), true);
     assert.equal(voiceRouteNeedsTelnyxCredit('internal'), false);
     assert.equal(voiceRouteNeedsTelnyxCredit('outbound'), true);
+    assert.equal(internalCallsUseTelnyxPark(), false);
+    assert.deepEqual(sipIceServers(), [{ urls: 'stun:stun.l.google.com:19302' }]);
+    assert.deepEqual(clientIceServers('sip'), sipIceServers());
+    assert.equal(JSON.stringify(clientIceServers('sip')).includes('turn'), false);
+  });
+});
+
+test('SIP ICE issues time-limited TURN credentials from VOCIVO_TURN_SECRET', () => {
+  withEnvironment({
+    VOCIVO_TURN_SECRET: 'turn-shared-secret',
+    VOCIVO_TURN_URLS: 'turn:sip.vocivo.app:3478',
+    VOCIVO_TURN_TTL_SECONDS: '60',
+    VOCIVO_STUN_URLS: 'stun:sip.vocivo.app:3478',
+  }, () => {
+    const servers = sipIceServers('org:ext');
+    assert.equal(servers[0].urls, 'stun:sip.vocivo.app:3478');
+    assert.equal(servers[1].urls, 'turn:sip.vocivo.app:3478');
+    assert.match(String(servers[1].username), /:org:ext$/);
+    assert.ok(servers[1].credential);
   });
 });
 
 test('Telnyx park still checks carrier credit for internal calls', () => {
   withEnvironment({}, () => {
     assert.equal(voiceRouteNeedsTelnyxCredit('internal'), true);
+    assert.equal(internalCallsUseTelnyxPark(), true);
   });
 });
 
@@ -67,5 +105,15 @@ test('delegates to Telnyx SDK defaults and rejects unauthenticated TURN servers'
   });
   withEnvironment({ TELNYX_ICE_SERVERS_JSON: JSON.stringify([{ urls: 'turn:turn.telnyx.example:3478' }]) }, () => {
     assert.throws(() => voiceIceServers(), /require a username and credential/i);
+  });
+});
+
+test('SIP websocket URI falls back to wss://<domain>/ws', () => {
+  withEnvironment({ VOCIVO_SIP_WSS_URI: 'wss://sip.vocivo.app/ws' }, () => {
+    assert.equal(sipWsUri(), 'wss://sip.vocivo.app/ws');
+  });
+  withEnvironment({ VOCIVO_SIP_DOMAIN: 'sip.example.test' }, () => {
+    assert.equal(sipDomain(), 'sip.example.test');
+    assert.equal(sipWsUri(), 'wss://sip.example.test/ws');
   });
 });

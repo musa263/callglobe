@@ -16,6 +16,15 @@ export function sipNativeAvailable(nativeModules: { VocivoSip?: unknown } | null
   return Boolean(nativeModules?.VocivoSip);
 }
 
-export function shouldUseSipNative(edge: VoiceEdge, nativeModules: { VocivoSip?: unknown } | null | undefined) {
-  return edge === 'sip' && sipNativeAvailable(nativeModules);
+/** SIP-edge phones must REGISTER on Vocivo SIP even when NativeModules.VocivoSip is empty (Expo loads it via requireOptionalNativeModule). */
+export function shouldRegisterSipEdge(edge: VoiceEdge) {
+  return edge === 'sip';
+}
+
+export function shouldUseSipNative(
+  edge: VoiceEdge,
+  nativeModules: { VocivoSip?: unknown } | null | undefined,
+  platform: string = typeof navigator === 'undefined' ? 'ios' : 'web',
+) {
+  return shouldRegisterSipEdge(edge) && platform === 'ios' && sipNativeAvailable(nativeModules);
 }

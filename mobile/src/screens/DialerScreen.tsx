@@ -38,7 +38,8 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
   const callerCountry = selectedCaller?.country_code || (selectedCaller?.phone_number.startsWith('+966') ? 'SA' : selectedCaller?.phone_number.startsWith('+1') ? 'US' : null);
   const routeRisk = !internalCandidate && selectedCaller?.source === 'verified' && callerCountry === selected.country_code && !['US', 'CA'].includes(selected.country_code);
   const ownedFallback = callerNumbers.find((item) => item.source === 'owned');
-  const canCall = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : Boolean(selectedCaller && number.length >= 4 && profile?.can_call !== false && (!balanceVisible || balance > 0));
+  const destinationReady = internalCandidate ? Boolean(profile?.extension && /^\d{2,5}$/.test(number) && number !== profile.extension) : Boolean(selectedCaller && number.length >= 4 && profile?.can_call !== false && (!balanceVisible || balance > 0));
+  const canCall = destinationReady && isReady;
   const displayNumber = useMemo(() => number.replace(/(.{3})/g, '$1 ').trim(), [number]);
 
   useEffect(() => {
@@ -136,7 +137,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
         <Pressable accessibilityLabel="Start call" disabled={!canCall} onPress={call} style={({ pressed }) => [styles.callButton, !canCall && styles.callDisabled, pressed && canCall && styles.callPressed]}>
           <Phone size={29} color={colors.ink} fill={colors.ink} strokeWidth={1.5} />
         </Pressable>
-        <Text style={styles.callHint}>{internalCandidate ? (canCall ? 'Call extension' : 'Choose another extension') : !selectedCaller ? 'A caller ID must be assigned first' : !canCall && number.length >= 4 ? 'Calling unavailable' : 'Tap to call'}</Text>
+        <Text style={styles.callHint}>{!isReady ? 'Connecting your Vocivo phone' : internalCandidate ? (destinationReady ? 'Call extension' : 'Choose another extension') : !selectedCaller ? 'A caller ID must be assigned first' : !destinationReady && number.length >= 4 ? 'Calling unavailable' : 'Tap to call'}</Text>
       </View>
 
       <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={setSelected} onClose={() => setShowRates(false)} />
