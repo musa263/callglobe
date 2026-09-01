@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireSession, createTenantAdminSession, createSession, invalidateOwnerSessions } from '../auth.js';
+import { requireSession, createTenantAdminSession, createSession, invalidateOwnerSessions, setSessionCookies } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { changePassword } from '../number-config.js';
 import { readPbxConfig } from '../pbx-config-store.js';
@@ -27,6 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : session.accountId && session.organizationId
         ? await createTenantAdminSession((await activeTenantAdmin(session.accountId, session.organizationId))!)
         : undefined;
+    if (token) setSessionCookies(res, token, session.sub === 'vocivo-owner' ? 60 * 60 * 24 * 30 : 60 * 60 * 12);
     return res.status(200).json({ success: true, ...(token ? { token } : {}) });
   } catch (error) {
     if (writeAuthError(res, error)) return;

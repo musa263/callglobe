@@ -1,5 +1,5 @@
-import type { VercelRequest } from '@vercel/node';
-import { randomUUID } from 'node:crypto';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { jwtVerify, SignJWT, type JWTPayload } from 'jose';
 import { requiredEnv } from './http.js';
 import { put } from './object-store.js';
@@ -88,10 +88,50 @@ export async function verifyEnrollmentToken(token: string) {
   return { extensionId: payload.extensionId, jti: payload.jti };
 }
 
-async function verifySessionToken(req: VercelRequest) {
+const sessionCookieName = 'vocivo_session';
+const csrfCookieName = 'vocivo_csrf';
+
+function cookieValue(name: string, value: string, maxAgeSeconds: number, httpOnly: boolean) {
+  const attributes = [`${name}=${value}`, 'Path=/', `Max-Age=${maxAgeSeconds}`, 'SameSite=Strict', 'Secure'];
+  if (httpOnly) attributes.push('HttpOnly');
+  return attributes.join('; ');
+}
+
+// Web clients authenticate with an httpOnly session cookie (double-submit CSRF cookie
+// alongside it); mobile clients keep sending the bearer token and are unaffected.
+export function setSessionCookies(res: VercelResponse, token: string, maxAgeSeconds: number) {
+  const csrf = randomBytes(16).toString('hex');
+  res.setHeader('Set-Cookie', [cookieValue(sessionCookieName, token, maxAgeSeconds, true), cookieValue(csrfCookieName, csrf, maxAgeSeconds, false)]);
+}
+
+export function clearSessionCookies(res: VercelResponse) {
+  res.setHeader('Set-Cookie', [cookieValue(sessionCookieName, '', 0, true), cookieValue(csrfCookieName, '', 0, false)]);
+}
+
+function assertCsrf(req: VercelRequest) {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return;
+  const headerValue = req.headers['x-vocivo-csrf'];
+  const csrfHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const csrfCookie = req.cookies?.[csrfCookieName];
+  if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) throw new Error('Unauthorized');
+}
+
+function sessionTokenFrom(req: VercelRequest) {
   const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) throw new Error('Unauthorized');
-  const token = header.slice(7);
+  if (header?.startsWith('Bearer ')) return header.slice(7);
+  const cookieToken = req.cookies?.[sessionCookieName];
+  if (typeof cookieToken === 'string' && cookieToken) {
+    // Cookie-authenticated mutations must carry the double-submit CSRF header.
+    assertCsrf(req);
+    return cookieToken;
+  }
+  return undefined;
+}
+
+async function verifySessionToken(req: VercelRequest) {
+  const token = sessionTokenFrom(req);
+  if (!token) throw new Error('Unauthorized');
   const { payload } = await jwtVerify(token, key(), { issuer, audience });
   if (typeof payload.sub !== 'string' || payload.sub !== 'vocivo-owner' && !payload.sub.startsWith('vocivo-extension:') && !payload.sub.startsWith('vocivo-account:')) throw new Error('Unauthorized');
   return payload as JWTPayload & { sub: string };

@@ -456,6 +456,7 @@ export default function App() {
   }, [view]);
   function logout() {
     voice.disconnect();
+    api('/api/auth/session', { method: 'DELETE' }).catch(() => {});
     clearSession();
     setSession(null);
     setPreview(false);

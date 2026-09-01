@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import io
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,7 @@ app = FastAPI(title="Vocivo Voice Engine", version="1.0.0")
 cache_dir = Path(os.getenv("TTS_CACHE_DIR", "/var/cache/vocivo-tts"))
 cache_dir.mkdir(parents=True, exist_ok=True)
 public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+cache_ttl_seconds = max(1, int(os.getenv("TTS_CACHE_TTL_DAYS", "30"))) * 86400
 service_secret = os.getenv("TTS_SERVICE_SECRET", "")
 pipelines: dict[str, KPipeline] = {}
 
@@ -62,6 +64,17 @@ def synthesize(request: SpeechRequest) -> bytes:
     return buffer.getvalue()
 
 
+def evict_stale_cache_entries() -> None:
+    # Opportunistic sweep so the content-addressed cache cannot grow unbounded.
+    cutoff = time.time() - cache_ttl_seconds
+    try:
+        for entry in cache_dir.iterdir():
+            if entry.suffix == ".wav" and entry.is_file() and entry.stat().st_mtime < cutoff:
+                entry.unlink(missing_ok=True)
+    except OSError:
+        pass  # eviction is best-effort; synthesis must never fail because of it
+
+
 def cache_key(request: SpeechRequest) -> str:
     return hashlib.sha256(f"{request.voice}|{request.speed}|{request.input}".encode()).hexdigest()
 
@@ -85,6 +98,7 @@ def speech(request: SpeechRequest, _: None = Depends(authorize)) -> Response:
 def render(request: SpeechRequest, _: None = Depends(authorize)) -> dict:
     if not public_base_url.startswith("https://"):
         raise HTTPException(status_code=503, detail="PUBLIC_BASE_URL must be configured with HTTPS")
+    evict_stale_cache_entries()
     key = cache_key(request)
     path = cache_dir / f"{key}.wav"
     if not path.exists():

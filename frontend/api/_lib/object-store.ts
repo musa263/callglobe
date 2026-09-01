@@ -798,7 +798,7 @@ export async function transactObject(
   });
 }
 
-export async function get(pathname: string, _options: { access?: 'public' | 'private'; useCache?: boolean } = {}) {
+export async function get(pathname: string, options: { access?: 'public' | 'private'; useCache?: boolean } = {}) {
   return withDatabaseRetry(async (sql) => {
     const rows = await sql<StoredRow[]>`
       select pathname, body, content_type, access, uploaded_at, etag
@@ -806,6 +806,9 @@ export async function get(pathname: string, _options: { access?: 'public' | 'pri
     `;
     const row = rows[0];
     if (!row) return null;
+    // A caller reading on behalf of an unauthenticated (public) context only
+    // receives objects that were stored with public access.
+    if (options.access === 'public' && row.access !== 'public') return null;
     const body = Buffer.from(row.body);
     return { statusCode: 200, stream: new Response(new Uint8Array(body)).body, blob: blobMetadata({ ...row, size: body.length }) };
   });
@@ -815,20 +818,33 @@ export async function list(options: ListOptions = {}) {
   const prefix = options.prefix || '';
   const requestedLimit = Number(options.limit);
   const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 1000, 1), 1000);
-  const offset = options.cursor ? Math.max(0, Number(Buffer.from(options.cursor, 'base64url').toString('utf8')) || 0) : 0;
+  const decodedCursor = options.cursor ? Buffer.from(options.cursor, 'base64url').toString('utf8') : '';
+  // Keyset cursors carry the last-returned pathname; a purely numeric cursor is a
+  // legacy row offset from a previous deploy and is honored once for that call.
+  const legacyOffset = decodedCursor && /^\d+$/.test(decodedCursor) ? Math.max(0, Number(decodedCursor) || 0) : 0;
+  const afterPathname = decodedCursor && !/^\d+$/.test(decodedCursor) ? decodedCursor : '';
   return withDatabaseRetry(async (sql) => {
-    const rows = await sql<Array<StoredRow & { size: number }>>`
-      select pathname, content_type, access, uploaded_at, etag, octet_length(body)::int as size
-      from vocivo_objects
-      where pathname >= ${prefix} and pathname < ${`${prefix}\uffff`}
-      order by pathname asc
-      limit ${limit + 1} offset ${offset}
-    `;
+    const rows = afterPathname
+      ? await sql<Array<StoredRow & { size: number }>>`
+          select pathname, content_type, access, uploaded_at, etag, octet_length(body)::int as size
+          from vocivo_objects
+          where pathname >= ${prefix} and pathname < ${`${prefix}\uffff`} and pathname > ${afterPathname}
+          order by pathname asc
+          limit ${limit + 1}
+        `
+      : await sql<Array<StoredRow & { size: number }>>`
+          select pathname, content_type, access, uploaded_at, etag, octet_length(body)::int as size
+          from vocivo_objects
+          where pathname >= ${prefix} and pathname < ${`${prefix}\uffff`}
+          order by pathname asc
+          limit ${limit + 1} offset ${legacyOffset}
+        `;
     const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
     return {
-      blobs: rows.slice(0, limit).map(blobMetadata),
+      blobs: page.map(blobMetadata),
       hasMore,
-      cursor: hasMore ? Buffer.from(String(offset + limit)).toString('base64url') : undefined,
+      cursor: hasMore && page.length ? Buffer.from(page[page.length - 1].pathname).toString('base64url') : undefined,
     };
   });
 }

@@ -37,6 +37,7 @@ export type VoiceState = {
   forwardNoAnswer?: string;
   forwardUnavailable?: string;
   forwardingDepth?: number;
+  forwardedFrom?: string[];
   bridgeOnAnswer?: boolean;
 };
 

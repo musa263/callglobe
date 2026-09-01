@@ -8,6 +8,10 @@ export type PbxConfig = {
   version: number;
   company: { name: string; timezone: string; defaultCallerId: string; emergencyAddress: string };
   activeOrganizationId: string;
+  // Pins which organization owns the legacy Telnyx-tag-based settings that
+  // predate multi-tenancy (see number-config.ts). Optional: when unset, the
+  // historical organizations[0] fallback applies unchanged.
+  legacyPrimaryOrganizationId?: string;
   organizations: Array<{
     id: string; name: string; slug: string; extensionStart: number; extensionEnd: number;
     accountType: 'business' | 'individual'; ownerDisplayName: string; ownerEmail: string;
@@ -82,16 +86,26 @@ export function defaultPbxConfig(): PbxConfig {
   };
 }
 
-function key() { return createHash('sha256').update(requiredEnv('AUTH_SECRET')).digest(); }
+function legacyKey() { return createHash('sha256').update(requiredEnv('AUTH_SECRET')).digest(); }
+// Domain-separated like the sibling stores; legacyKey() still decrypts configs
+// written before this key existed, and every write re-encrypts with key().
+function key() { return createHash('sha256').update(`${requiredEnv('AUTH_SECRET')}:pbx-config:v2`).digest(); }
 function encrypt(value: PbxConfig) {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key(), iv);
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
 }
-function decrypt(value: Buffer) {
-  const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12));
+function decryptWith(value: Buffer, secret: Buffer) {
+  const decipher = createDecipheriv('aes-256-gcm', secret, value.subarray(0, 12));
   decipher.setAuthTag(value.subarray(12, 28));
   return JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as PbxConfig;
+}
+function decrypt(value: Buffer) {
+  try {
+    return decryptWith(value, key());
+  } catch {
+    return decryptWith(value, legacyKey());
+  }
 }
 
 function mergeConfig(stored?: Partial<PbxConfig>): PbxConfig {

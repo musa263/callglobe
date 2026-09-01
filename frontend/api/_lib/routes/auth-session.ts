@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireSession } from '../auth.js';
+import { clearSessionCookies, requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed } from '../http.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { effectiveEntitlements, readTenantSaasState } from '../saas-store.js';
@@ -7,7 +7,12 @@ import { VOCIVO_PLATFORM_NAME, VOCIVO_SUPERADMIN_NAME } from '../platform-identi
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
-  if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
+  if (req.method === 'DELETE') {
+    // Logout: clearing cookies needs no valid session and must always succeed.
+    clearSessionCookies(res);
+    return res.status(200).json({ success: true });
+  }
+  if (req.method !== 'GET') return methodNotAllowed(res, ['GET', 'DELETE']);
   try {
     const session = await requireSession(req);
     const isOwner = session.sub === 'vocivo-owner';

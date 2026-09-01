@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const pathname = typeof req.query.path === 'string' ? req.query.path : '';
       if (!publicStoragePrefixes.some((prefix) => pathname.startsWith(prefix))) return res.status(404).end();
-      const object = await get(pathname);
+      const object = await get(pathname, { access: 'public' });
       if (!object?.stream) return res.status(404).end();
       const body = Buffer.from(await new Response(object.stream).arrayBuffer());
       res.setHeader('Content-Type', object.blob.contentType || 'application/octet-stream');

@@ -301,6 +301,30 @@ async function ensureWalletTables(sql: Sql) {
         end $$;
       `);
     });
+    await sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext('vocivo:schema:wallet-entry-type-check-v1'))`;
+      const applied = await transaction<Array<{ migration_id: string }>>`
+        insert into vocivo_schema_migrations (migration_id)
+        values ('wallet-entry-type-check-v1')
+        on conflict (migration_id) do nothing
+        returning migration_id
+      `;
+      if (!applied.length) return;
+      await transaction.unsafe(`
+        do $$ begin
+          if not exists (
+            select 1 from pg_constraint
+            where conname = 'vocivo_wallet_entries_entry_type_check'
+              and conrelid = 'vocivo_wallet_entries'::regclass
+          ) then
+            alter table vocivo_wallet_entries
+            add constraint vocivo_wallet_entries_entry_type_check
+            check (entry_type in ('topup', 'manual_credit', 'manual_debit', 'refund', 'chargeback', 'promotion'))
+            not valid;
+          end if;
+        end $$;
+      `);
+    });
     walletTablesReady = true;
   })().finally(() => { walletTablesRequest = null; });
   await walletTablesRequest;
@@ -434,7 +458,7 @@ export async function readRetailRateDirectory<T extends { country_code: string; 
           fxBufferBps: settings.fxBufferBps,
           surchargeMicros: rule.surchargeMicros,
         });
-        return { ...item, rate_per_min: retailRateMicros / 1_000_000 } as T;
+        return { ...item, rate_per_min: retailRateMicros / 1_000_000, rate_known: true } as T;
       });
     });
     return priced as T[];

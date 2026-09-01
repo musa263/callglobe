@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import bcrypt from 'bcryptjs';
-import { createSession, createTenantAdminSession } from '../auth.js';
+import { createSession, createTenantAdminSession, setSessionCookies } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { readPasswordHash } from '../number-config.js';
 import { readPbxConfig } from '../pbx-config-store.js';
@@ -55,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!valid) return reject();
       await clearAccountLoginFailures(email, ip);
       const token = await createSession(email);
+      setSessionCookies(res, token, 60 * 60 * 24 * 30);
       return res.status(200).json({
         token,
         profile: {
@@ -72,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = effectiveEntitlements(await readTenantSaasState(organization.id, config), organization.id, organization.accountType);
     if (!access.serviceActive) return res.status(403).json({ error: 'This company subscription is not active. Contact Vocivo support.' });
     const token = await createTenantAdminSession(account);
+    setSessionCookies(res, token, 60 * 60 * 12);
     await clearAccountLoginFailures(email, ip);
     return res.status(200).json({
       token,

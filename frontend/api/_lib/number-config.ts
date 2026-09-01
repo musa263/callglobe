@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { requiredEnv } from './http.js';
 import { telnyx, telnyxPstnConnectionId } from './telnyx.js';
-import { readPbxConfig, savePbxConfig } from './pbx-config-store.js';
+import { readPbxConfig, savePbxConfig, type PbxConfig } from './pbx-config-store.js';
 import { numberOrganizationId } from './tenancy.js';
 
 export type BusinessVoiceConfig = {
@@ -93,10 +93,20 @@ async function readTaggedBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
   }
 }
 
+// The Telnyx-tag-based legacy config belongs to exactly one organization.
+// Admins can pin the owner via legacyPrimaryOrganizationId; without a valid
+// pin, the historical organizations[0] assumption applies unchanged.
+function resolveLegacyPrimaryOrganizationId(pbx: PbxConfig) {
+  const pinned = pbx.legacyPrimaryOrganizationId && pbx.organizations.some((item) => item.id === pbx.legacyPrimaryOrganizationId)
+    ? pbx.legacyPrimaryOrganizationId
+    : undefined;
+  return pinned || pbx.organizations[0]?.id || 'primary';
+}
+
 export async function readBusinessVoiceConfig(organizationId = 'primary'): Promise<BusinessVoiceConfig> {
   const pbx = await readPbxConfig();
   if (pbx.businessVoiceConfigs[organizationId]) return { ...defaults, ...pbx.businessVoiceConfigs[organizationId] };
-  if (organizationId === (pbx.organizations[0]?.id || 'primary')) return readTaggedBusinessVoiceConfig();
+  if (organizationId === resolveLegacyPrimaryOrganizationId(pbx)) return readTaggedBusinessVoiceConfig();
   const organization = pbx.organizations.find((item) => item.id === organizationId);
   return { ...defaults, companyName: organization?.name || defaults.companyName, greeting: `Welcome to ${organization?.name || defaults.companyName}.` };
 }

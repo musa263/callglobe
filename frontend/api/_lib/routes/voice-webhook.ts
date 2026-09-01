@@ -60,6 +60,7 @@ type AgentRouteOptions = {
   forwardNoAnswer?: string;
   forwardUnavailable?: string;
   forwardingDepth?: number;
+  forwardedFrom?: string[];
   dialFrom?: string;
 };
 
@@ -94,6 +95,7 @@ async function routeToAgent(callControlId: string, department: string, waitingMe
       inboundNumber: options.inboundNumber, voicemailEnabled: options.voicemailEnabled !== false,
       forwardBusy: options.forwardBusy, forwardNoAnswer: options.forwardNoAnswer,
       forwardUnavailable: options.forwardUnavailable, forwardingDepth: options.forwardingDepth,
+      forwardedFrom: options.forwardedFrom,
     },
     from: dialFrom,
     fromDisplayName: callerDisplay(remoteIdentity ? `${businessName} - ${remoteIdentity}` : `${businessName} call`),
@@ -195,6 +197,7 @@ async function routeToExtension(input: {
   callerName?: string;
   announceWaiting?: boolean;
   forwardingDepth?: number;
+  forwardedFrom?: string[];
 }) {
   const [config, basePbx, extensions] = await Promise.all([
     readBusinessVoiceConfig(input.organizationId),
@@ -253,6 +256,7 @@ async function routeToExtension(input: {
       forwardNoAnswer: profile?.forwardNoAnswer,
       forwardUnavailable: profile?.forwardUnavailable,
       forwardingDepth: input.forwardingDepth || 0,
+      forwardedFrom: input.forwardedFrom,
       dialFrom,
     },
   );
@@ -262,6 +266,7 @@ async function routeAfterAgentFailure(state: NonNullable<ReturnType<typeof decod
   const organizationId = state.organizationId;
   if (!organizationId) throw new Error('Inbound call state has no tenant organization.');
   const target = forwardingTargetForCause(state, cause);
+  const visited = [...(state.forwardedFrom || []), ...(state.targetExtensionId ? [state.targetExtensionId] : [])].slice(-5);
   const voicemailTarget = !target || ['voicemail', 'main voicemail'].includes(target.toLowerCase());
   if (voicemailTarget || (state.forwardingDepth || 0) >= 2) {
     await routeUnavailable(state.parentCallControlId || '', organizationId, eventId, state.callerNumber, state.callerName, state.voicemailEnabled);
@@ -269,12 +274,13 @@ async function routeAfterAgentFailure(state: NonNullable<ReturnType<typeof decod
   }
 
   const extension = await findExtension(target.replace(/\D/g, ''), organizationId);
-  if (extension && extension.id !== state.targetExtensionId) {
+  if (extension && extension.id !== state.targetExtensionId && !visited.includes(extension.id)) {
     await routeToExtension({
       callControlId: state.parentCallControlId || '', eventId, organizationId,
       inboundNumber: state.inboundNumber || '', extension,
       callerNumber: state.callerNumber, callerName: state.callerName,
       announceWaiting: false, forwardingDepth: (state.forwardingDepth || 0) + 1,
+      forwardedFrom: visited,
     });
     return;
   }
@@ -289,7 +295,7 @@ async function routeAfterAgentFailure(state: NonNullable<ReturnType<typeof decod
     }
     await routeToAgent(state.parentCallControlId || '', 'Forwarded call', config.waitingMessage, config.voice, eventId, destination, undefined, 45, state.callerNumber, state.callerName, organizationId, {
       announceWaiting: false, voicemailEnabled: state.voicemailEnabled, inboundNumber: state.inboundNumber,
-      forwardingDepth: (state.forwardingDepth || 0) + 1, dialFrom: from,
+      forwardingDepth: (state.forwardingDepth || 0) + 1, forwardedFrom: visited, dialFrom: from,
     });
     return;
   }

@@ -21,6 +21,10 @@ export const mobileRates = getCountries().map((countryCode: CountryCode) => ({
   country_name: names.of(countryCode) || countryCode,
   dial_code: `+${getCountryCallingCode(countryCode)}`,
   flag: countryCode,
-  // Older TestFlight builds format this field as a number without a null check.
+  // Older TestFlight builds format this field as a number without a null check,
+  // so unknown rates stay 0 here; rate_known lets newer clients tell "free"
+  // apart from "no estimate available" (current clients already render falsy
+  // rates as "Live carrier rate").
   rate_per_min: estimatedRates[countryCode] ?? 0,
+  rate_known: estimatedRates[countryCode] !== undefined,
 })).sort((a, b) => a.country_name.localeCompare(b.country_name));

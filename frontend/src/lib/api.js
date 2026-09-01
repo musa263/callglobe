@@ -4,8 +4,19 @@ export function getStoredSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
 }
 
-export function storeSession(session) { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
+export function storeSession(session) {
+  // The auth token now lives in an httpOnly cookie set by the server; persist
+  // everything except the token so an XSS can no longer read a usable credential.
+  // (Sessions stored by older builds keep their token and continue to work.)
+  const { token, ...rest } = session || {};
+  localStorage.setItem(SESSION_KEY, JSON.stringify(rest));
+}
 export function clearSession() { localStorage.removeItem(SESSION_KEY); }
+
+function csrfToken() {
+  const match = document.cookie.match(/(?:^|;\s*)vocivo_csrf=([^;]+)/);
+  return match ? match[1] : '';
+}
 
 export async function api(path, options = {}) {
   const { auth = true, body, headers, ...fetchOptions } = options;
@@ -26,6 +37,7 @@ export async function api(path, options = {}) {
         headers: {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(auth && session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+          ...(csrfToken() ? { 'X-Vocivo-Csrf': csrfToken() } : {}),
           ...headers,
         },
         body: body ? JSON.stringify(body) : undefined,
