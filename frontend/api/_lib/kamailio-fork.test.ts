@@ -14,7 +14,8 @@ test('Kamailio wakes the phone then forks live contacts without blocking WebSock
   assert.match(cfg, /async", "workers", 16/);
   assert.match(cfg, /cors_mode", 2/);
   assert.match(cfg, /\$Rp != 8080 && \$fU =~ "\^\[0-9\]\{1,8\}\$"/);
-  assert.match(cfg, /\$rU =~ "\^\[0-9\]\{1,8\}\$"/);
+  assert.match(cfg, /reject untrusted internal INVITE/);
+  assert.doesNotMatch(cfg, /\$rU =~ "\^\[0-9\]\{1,8\}\$"/);
   assert.match(cfg, /WAKEUP_NOW/);
   assert.match(cfg, /if \(lookup\("location"\)\)/);
   assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1200"\)/);

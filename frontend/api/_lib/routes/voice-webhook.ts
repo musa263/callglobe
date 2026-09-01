@@ -25,7 +25,7 @@ import { clearConferenceCall, isConferenceEnded, markConferenceEnded, readConfer
 import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../office-hours.js';
 import { accessForOrganization } from '../saas-access.js';
-import { activeOrganizationExtensionTargets, extensionSipUri, organizationExtensionSipUri } from '../internal-sip.js';
+import { activeOrganizationExtensionTargets, clientExtensionSipUri, organizationExtensionSipUri } from '../internal-sip.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
 import { claimReplayKey, releaseReplayKey } from '../object-store.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools, inboundAiCommandId, inboundAiRoutingKey } from '../ai-transfer.js';
@@ -196,14 +196,14 @@ async function routeToExtension(input: {
   }
 
   const primarySipUsers = await listExtensionSipUsernames(input.extension.id);
-  const destinations = (primarySipUsers.length ? primarySipUsers : [input.extension.sipUsername]).map(extensionSipUri);
+  const destinations = (primarySipUsers.length ? primarySipUsers : [input.extension.sipUsername]).map(clientExtensionSipUri);
   const targetExtensionIds = [input.extension.id];
   let dialFrom: string | undefined;
   const simultaneous = profile?.simultaneousRing?.trim() || '';
   const simultaneousExtension = extensions.find((item) => item.extension === simultaneous && item.id !== input.extension.id && item.status === 'active' && item.sipUsername);
   if (simultaneousExtension) {
     const simultaneousSipUsers = await listExtensionSipUsernames(simultaneousExtension.id);
-    destinations.push(...(simultaneousSipUsers.length ? simultaneousSipUsers : [simultaneousExtension.sipUsername]).map(extensionSipUri));
+    destinations.push(...(simultaneousSipUsers.length ? simultaneousSipUsers : [simultaneousExtension.sipUsername]).map(clientExtensionSipUri));
     targetExtensionIds.push(simultaneousExtension.id);
   } else {
     const simultaneousNumber = normalizeE164(simultaneous);

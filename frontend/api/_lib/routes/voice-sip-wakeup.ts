@@ -96,6 +96,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const callerName = text(req.body?.callerName, 80);
     const from = text(req.body?.from, 80);
     if (!username) return res.status(400).json({ error: 'A SIP username is required.' });
+    if (!/^[A-Za-z0-9_.-]{3,80}$/.test(username)) {
+      return res.status(200).json({ ok: false, skipped: 'invalid_username', apnsConfigured: apnsConfigured() });
+    }
     const lookup = await ringDevices({ username, callId, callerName, from });
     return res.status(200).json({ ...lookup, apnsConfigured: apnsConfigured() });
   } catch (error) {

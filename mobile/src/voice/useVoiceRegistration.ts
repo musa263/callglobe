@@ -70,23 +70,33 @@ export function useVoiceRegistration({
         setPreferredVoiceEdge(edge);
         if (shouldUseSipNative(edge, NativeModules, Platform.OS)) {
           await voipClient.logout().catch((failure) => reportVoiceError('logout Telnyx before SIP edge', failure));
-          const sip = await api.post<{
-            username: string;
-            password: string;
-            domain: string;
-            wsUri?: string;
-            ice_servers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
-          }>('/api/voice/sip-credentials', {});
-          await registerVocivoSip({
-            username: sip.username,
-            password: sip.password,
-            domain: sip.domain,
-            wsUri: sip.wsUri,
-            displayName: sip.username,
-            iceServers: sip.ice_servers,
-          });
+          const connectSip = async () => {
+            const sip = await api.post<{
+              username: string;
+              password: string;
+              domain: string;
+              wsUri?: string;
+              ice_servers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
+            }>('/api/voice/sip-credentials', {});
+            await registerVocivoSip({
+              username: sip.username,
+              password: sip.password,
+              domain: sip.domain,
+              wsUri: sip.wsUri,
+              displayName: sip.username,
+              iceServers: sip.ice_servers,
+            });
+          };
+          await connectSip();
           if (canceled) return;
           setPushRegistration(pushNotificationDeviceToken ? 'registered' : 'registering');
+          appStateSubscription = AppState.addEventListener('change', (state) => {
+            if (state !== 'active' || canceled) return;
+            if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
+            activeRegistrationTimer = setTimeout(() => {
+              connectSip().catch((failure) => reportVoiceError('foreground SIP registration', failure));
+            }, 250);
+          });
           return;
         }
         const pushBootstrap = launchedFromPush && bootstrapSession && isVoiceSessionFresh(bootstrapSession, 30_000)

@@ -39,7 +39,7 @@ export function extensionSipUri(sipUsername: string) {
   return `sip:${sipUsername}@${telnyxSipHost}`;
 }
 
-/** Destination the SIP/WebRTC client should INVITE. Call Control Dial still uses extensionSipUri. */
+/** Destination clients INVITE, and Call Control Dial uses, for the active voice edge. */
 export function clientExtensionSipUri(sipUsername: string) {
   const host = voiceEdge() === 'sip' ? (sipDomain() || 'sip.vocivo.app') : telnyxSipHost;
   return `sip:${sipUsername}@${host}`;
@@ -50,8 +50,8 @@ export function destinationSipUrisForInternalDial(
   sourceUsernames: string[],
   fallbackDestination: string,
 ) {
-  const blocked = new Set(sourceUsernames.map((username) => extensionSipUri(username)));
-  const destinations = [...new Set(destinationUsernames.map(extensionSipUri).filter((uri) => !blocked.has(uri)))];
+  const blocked = new Set(sourceUsernames.map((username) => clientExtensionSipUri(username)));
+  const destinations = [...new Set(destinationUsernames.map(clientExtensionSipUri).filter((uri) => !blocked.has(uri)))];
   if (destinations.length) return destinations;
   const fallback = isAllowedInternalSipDestination(fallbackDestination) ? canonicalVoiceDestination(fallbackDestination) : '';
   return fallback && !blocked.has(fallback) ? [fallback] : [];
@@ -78,7 +78,7 @@ export function extensionSipUsernames(
 }
 
 export function organizationExtensionSipUri(_config: PbxConfig, _organizationId: string, sipUsername: string) {
-  return extensionSipUri(sipUsername);
+  return clientExtensionSipUri(sipUsername);
 }
 
 export function activeOrganizationExtensionTargets(

@@ -136,7 +136,9 @@ test('Medium.docx leftovers: wakeup window, nginx snippet, no public 7443', () =
   const cfg = read('services/sip/kamailio/kamailio.cfg');
   assert.match(cfg, /route\(CHALLENGE\)/);
   assert.match(cfg, /8081\/sip-nonce/);
-  assert.match(cfg, /db_mode", 2/);
+  assert.match(cfg, /db_mode", 1/);
+  assert.match(cfg, /reject untrusted internal INVITE/);
+  assert.match(cfg, /WAIT_REGISTER suspend failed/);
   assert.match(cfg, /lookup\("location"\)/);
   assert.doesNotMatch(cfg, /listen=tcp:0.0.0.0:7443/);
   assert.ok(fs.existsSync(path.join(root, 'services/sip/nginx/vocivo-sip-edge-proxy.conf')));

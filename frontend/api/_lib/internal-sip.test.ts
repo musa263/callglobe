@@ -16,7 +16,7 @@ test('Vocivo SIP URIs are recognized as internal destinations on the SIP edge', 
   try {
     assert.equal(parseInternalSipUser('sip:employee@sip.vocivo.app'), 'employee');
     assert.equal(parseInternalSipUser('sip:employee@sip.telnyx.com'), 'employee');
-    assert.equal(organizationExtensionSipUri(defaultPbxConfig(), 'primary', '2000'), 'sip:2000@sip.telnyx.com');
+    assert.equal(organizationExtensionSipUri(defaultPbxConfig(), 'primary', '2000'), 'sip:2000@sip.vocivo.app');
     assert.equal(clientExtensionSipUri('2000'), 'sip:2000@sip.vocivo.app');
   } finally {
     if (previousEdge === undefined) delete process.env.VOCIVO_VOICE_EDGE;
@@ -26,7 +26,7 @@ test('Vocivo SIP URIs are recognized as internal destinations on the SIP edge', 
   }
 });
 
-test('organization extension routing always produces a Telnyx SIP URI', () => {
+test('organization extension routing follows the active voice edge', () => {
   assert.equal(
     organizationExtensionSipUri(defaultPbxConfig(), 'primary', '2000'),
     'sip:2000@sip.telnyx.com',

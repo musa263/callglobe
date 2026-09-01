@@ -24,6 +24,8 @@ test('VocivoSipEngine keeps hangup after VoIP push handling', () => {
   assert.ok(source.includes('@invalid;transport=ws>'));
   assert.ok(source.includes('("Content-Length", "\\(body.utf8.count)")'));
   assert.ok(source.includes('uri: "sip:\\(config?.domain ?? "")"'));
+  assert.match(source, /scheduleReconnect/);
+  assert.match(source, /didCloseWith closeCode/);
   const credentials = fs.readFileSync(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../modules/vocivo-sip/ios/VocivoSipCredentials.swift'),
     'utf8',
