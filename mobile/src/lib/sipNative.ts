@@ -125,27 +125,41 @@ export function subscribeVocivoSipEvents(handlers: SipEventHandlers) {
   return () => subscriptions.forEach((subscription) => subscription.remove());
 }
 
+let registerEpoch = 0;
+
 export async function registerVocivoSip(config: NativeConfig) {
+  const epoch = ++registerEpoch;
   realm = config.domain;
   const native = vocivoSipModule();
   if (native && isIosNativePlatform()) {
-    await native.register(config);
-    nativeRegistered = true;
-    jsAgentReady = false;
-    nativeHangup = (callId) => native.hangup(callId);
-    emitReady(true);
-    const js = await sipJs();
-    js.markExternalSipReady(config.domain, true);
-    return;
+    try {
+      await native.register(config);
+      if (epoch !== registerEpoch) return;
+      nativeRegistered = true;
+      jsAgentReady = false;
+      nativeHangup = (callId) => native.hangup(callId);
+      emitReady(true);
+      const js = await sipJs();
+      js.markExternalSipReady(config.domain, true);
+      return;
+    } catch {
+      if (epoch !== registerEpoch) return;
+      nativeRegistered = false;
+    }
   }
   const js = await sipJs();
   await js.startSipUserAgent(config);
+  if (epoch !== registerEpoch) {
+    await js.stopSipUserAgent();
+    return;
+  }
   jsAgentReady = true;
   nativeRegistered = false;
   emitReady(true);
 }
 
 export async function unregisterVocivoSip() {
+  registerEpoch += 1;
   const native = vocivoSipModule();
   nativeRegistered = false;
   jsAgentReady = false;

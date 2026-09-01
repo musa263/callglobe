@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { clientIceServers, sipIceServers, sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit, internalCallsUseTelnyxPark } from './voice-provider.js';
+import { clientIceServers, sipDomain, sipIceServers, sipInboundEnabled, sipRealm, sipWsUri, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit, internalCallsUseTelnyxPark } from './voice-provider.js';
 
 const keys = [
   'TELNYX_ICE_SERVERS_JSON',
   'VOCIVO_VOICE_EDGE',
   'VOCIVO_SIP_REALM',
+  'VOCIVO_SIP_DOMAIN',
+  'VOCIVO_SIP_WSS_URI',
   'VOCIVO_SIP_INBOUND',
   'VOCIVO_TURN_SECRET',
   'VOCIVO_TURN_URLS',
@@ -103,5 +105,15 @@ test('delegates to Telnyx SDK defaults and rejects unauthenticated TURN servers'
   });
   withEnvironment({ TELNYX_ICE_SERVERS_JSON: JSON.stringify([{ urls: 'turn:turn.telnyx.example:3478' }]) }, () => {
     assert.throws(() => voiceIceServers(), /require a username and credential/i);
+  });
+});
+
+test('SIP websocket URI falls back to wss://<domain>/ws', () => {
+  withEnvironment({ VOCIVO_SIP_WSS_URI: 'wss://sip.vocivo.app/ws' }, () => {
+    assert.equal(sipWsUri(), 'wss://sip.vocivo.app/ws');
+  });
+  withEnvironment({ VOCIVO_SIP_DOMAIN: 'sip.example.test' }, () => {
+    assert.equal(sipDomain(), 'sip.example.test');
+    assert.equal(sipWsUri(), 'wss://sip.example.test/ws');
   });
 });

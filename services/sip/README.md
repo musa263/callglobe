@@ -31,4 +31,4 @@ Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164
 ## Clients
 
 - Web: SIP.js over `VOCIVO_SIP_WSS_URI` when `VOCIVO_VOICE_EDGE=sip`.
-- iOS: Vocivo native SIP + CallKit for origination and internal legs when `VOCIVO_VOICE_EDGE=sip`. Inbound DIDs stay on Telnyx Call Control. Telnyx SDK remains the fallback if the native module is not linked.
+- iOS: Vocivo native SIP + CallKit over the same WSS URI. `location /ws` must echo `Sec-WebSocket-Protocol` (see `nginx/sip-websocket.conf`). If the native module is missing, the app still REGISTERs with SIP.js instead of falling through to Telnyx.

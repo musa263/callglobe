@@ -81,7 +81,10 @@ export function sipDomain() {
 }
 
 export function sipWsUri() {
-  return trimmedEnv('VOCIVO_SIP_WSS_URI');
+  const explicit = trimmedEnv('VOCIVO_SIP_WSS_URI');
+  if (explicit) return explicit;
+  const domain = sipDomain();
+  return domain ? `wss://${domain}/ws` : '';
 }
 
 function validIceUrl(value: unknown): value is string {

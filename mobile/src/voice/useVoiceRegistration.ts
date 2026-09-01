@@ -1,12 +1,12 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
-import { AppState, NativeModules, Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons-sdk';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { registerVocivoSip, setPreferredVoiceEdge, unregisterVocivoSip } from '../lib/sipNative';
+import { registerVocivoSip, setPreferredVoiceEdge, sipClientReady, unregisterVocivoSip } from '../lib/sipNative';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
-import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../lib/voiceEdge';
+import { shouldRegisterSipEdge, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../lib/voiceEdge';
 import type { ActiveCall } from '../types';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 import { voiceLoginConfig } from './session';
@@ -68,9 +68,10 @@ export function useVoiceRegistration({
         const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
         const edge = voiceEdgeFromConfig(edgeConfig);
         setPreferredVoiceEdge(edge);
-        if (shouldUseSipNative(edge, NativeModules, Platform.OS)) {
+        if (shouldRegisterSipEdge(edge)) {
           await voipClient.logout().catch((failure) => reportVoiceError('logout Telnyx before SIP edge', failure));
           const connectSip = async () => {
+            if (sipClientReady()) return;
             const sip = await api.post<{
               username: string;
               password: string;
@@ -82,7 +83,7 @@ export function useVoiceRegistration({
               username: sip.username,
               password: sip.password,
               domain: sip.domain,
-              wsUri: sip.wsUri,
+              wsUri: sip.wsUri || (sip.domain ? `wss://${sip.domain}/ws` : ''),
               displayName: sip.username,
               iceServers: sip.ice_servers,
             });
@@ -92,6 +93,7 @@ export function useVoiceRegistration({
           setPushRegistration(pushNotificationDeviceToken ? 'registered' : 'registering');
           appStateSubscription = AppState.addEventListener('change', (state) => {
             if (state !== 'active' || canceled) return;
+            if (sipClientReady()) return;
             if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
             activeRegistrationTimer = setTimeout(() => {
               connectSip().catch((failure) => reportVoiceError('foreground SIP registration', failure));

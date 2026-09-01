@@ -45,15 +45,19 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   private var pendingReferOk = 0
   private var wantsRegistered = false
   private var reconnectWorkItem: DispatchWorkItem?
+  private var socketGeneration: UInt64 = 0
   var onEvent: ((String, [String: Any]) -> Void)?
 
   func register(config: VocivoSipConfig, completion: @escaping (Result<Void, Error>) -> Void) {
     unregister()
+    socketGeneration += 1
+    let generation = socketGeneration
     wantsRegistered = true
     self.config = config
     pendingRegister = completion
     guard let url = URL(string: config.wsUri) else {
       completion(.failure(NSError(domain: "VocivoSip", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid SIP websocket URL."])))
+      pendingRegister = nil
       return
     }
     let session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
@@ -61,11 +65,17 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     let task = session.webSocketTask(with: url, protocols: ["sip"])
     socket = task
     task.resume()
-    listen()
+    listen(task, generation: generation)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+      guard let self, generation == self.socketGeneration, self.pendingRegister != nil else { return }
+      self.pendingRegister?(.failure(NSError(domain: "VocivoSip", code: 4, userInfo: [NSLocalizedDescriptionKey: "SIP registration timed out."])))
+      self.pendingRegister = nil
+    }
   }
 
   func unregister() {
     wantsRegistered = false
+    socketGeneration += 1
     reconnectWorkItem?.cancel()
     reconnectWorkItem = nil
     registerTimer?.invalidate()
@@ -350,13 +360,13 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     recordRoutes = reverseRoutes ? routes.reversed() : routes
   }
 
-  private func listen() {
-    socket?.receive { [weak self] result in
-      guard let self else { return }
+  private func listen(_ expected: URLSessionWebSocketTask, generation: UInt64) {
+    expected.receive { [weak self] result in
+      guard let self, generation == self.socketGeneration, self.socket === expected else { return }
       switch result {
       case .failure:
-        pendingRegister?(.failure(NSError(domain: "VocivoSip", code: 1006, userInfo: [NSLocalizedDescriptionKey: "The SIP websocket closed."])))
-        pendingRegister = nil
+        self.pendingRegister?(.failure(NSError(domain: "VocivoSip", code: 1006, userInfo: [NSLocalizedDescriptionKey: "The SIP websocket closed."])))
+        self.pendingRegister = nil
         self.scheduleReconnect()
         return
       case .success(.string(let text)):
@@ -366,7 +376,7 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
       @unknown default:
         break
       }
-      self.listen()
+      self.listen(expected, generation: generation)
     }
   }
 
@@ -580,10 +590,12 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
   }
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+    guard session === self.session, webSocketTask === socket else { return }
     sendRegister(authorization: nil)
   }
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    guard session === self.session, webSocketTask === socket else { return }
     scheduleReconnect()
   }
 
@@ -592,13 +604,15 @@ final class VocivoSipEngine: NSObject, URLSessionWebSocketDelegate {
     reconnectWorkItem?.cancel()
     let work = DispatchWorkItem { [weak self] in
       guard let self, self.wantsRegistered, let config = self.config, let url = URL(string: config.wsUri) else { return }
+      self.socketGeneration += 1
+      let generation = self.socketGeneration
       self.socket?.cancel(with: .goingAway, reason: nil)
       let session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
       self.session = session
       let task = session.webSocketTask(with: url, protocols: ["sip"])
       self.socket = task
       task.resume()
-      self.listen()
+      self.listen(task, generation: generation)
     }
     reconnectWorkItem = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)

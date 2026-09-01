@@ -26,7 +26,7 @@ export function createRouteId() {
   return `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function waitForVoiceConnection(timeoutMs = 12_000) {
+export async function waitForVoiceConnection(timeoutMs = 30_000) {
   if (sipClientReady()) return;
   if (preferredVoiceEdge() === 'sip') {
     const deadline = Date.now() + timeoutMs;
