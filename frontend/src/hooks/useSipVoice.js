@@ -65,6 +65,12 @@ export function useSipVoice(token, enabled, identity = {}) {
   const disconnect = useCallback(async () => {
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
+    hangupSession(heldSessionRef.current);
+    heldSessionRef.current = null;
+    heldRouteIdRef.current = null;
+    heldIdentityRef.current = null;
+    setHeldCall(null);
+    setConference(null);
     try { await credentialsRef.current?.registerer?.unregister(); } catch (failure) { reportWebVoiceError('SIP unregister', failure); }
     try { await credentialsRef.current?.userAgent?.stop(); } catch (failure) { reportWebVoiceError('SIP stop', failure); }
     credentialsRef.current = null;
@@ -289,6 +295,8 @@ export function useSipVoice(token, enabled, identity = {}) {
     const incoming = incomingRef.current;
     if (!incoming) return;
     await incoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false } } });
+    const callId = sipSessionId(incoming);
+    api('/api/voice/sip-wakeup', { method: 'POST', body: { action: 'answered', callId } }).catch(() => undefined);
     sessionRef.current = incoming;
     incomingRef.current = null;
     setCall(incoming);

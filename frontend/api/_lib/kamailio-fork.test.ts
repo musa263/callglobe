@@ -18,10 +18,10 @@ test('Kamailio wakes the phone then forks live contacts without blocking WebSock
   assert.doesNotMatch(cfg, /\$rU =~ "\^\[0-9\]\{1,8\}\$"/);
   assert.match(cfg, /WAKEUP_NOW/);
   assert.match(cfg, /if \(lookup\("location"\)\)/);
-  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1200"\)/);
-  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1000"\)/);
-  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "1"\)/);
-  assert.match(cfg, /async_route\("WAIT_REGISTER", "2"\)/);
+  assert.match(cfg, /async_route\("WAIT_REGISTER", "8"\)/);
+  assert.doesNotMatch(cfg, /async_route\("WAIT_REGISTER", "2"\)/);
+  assert.doesNotMatch(cfg, /\$avp\(tries\)/);
+  assert.match(cfg, /public wakeup then one wait/);
   assert.match(cfg, /\$Rp != 8080/);
   assert.match(cfg, /reject unauthenticated E.164 INVITE/);
   assert.match(cfg, /\$du = "sip:127.0.0.1:5080;transport=udp"/);

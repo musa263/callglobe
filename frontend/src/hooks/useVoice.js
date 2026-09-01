@@ -15,7 +15,7 @@ export function useVoice(token, enabled, identity = {}) {
       if (cancelled) return;
       setEdge(config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx');
     }).catch(() => {
-      if (!cancelled) setEdge((current) => current);
+      if (!cancelled) setEdge('telnyx');
     });
     return () => { cancelled = true; };
   }, [enabled, token]);

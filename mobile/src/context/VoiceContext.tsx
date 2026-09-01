@@ -58,6 +58,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const mediaConfirmInFlightRef = useRef(new Set<string>());
   const loginConfigRef = useRef<VoiceLoginConfig | null>(null);
   const sipSessionRef = useRef<Session | Invitation | null>(null);
+  const waitingSipSessionRef = useRef<Session | Invitation | null>(null);
   const heldCallRef = useRef<ActiveCall | null>(null);
   const iceListenerCleanupRef = useRef(new Map<string, () => void>());
   const lastNetworkTypeRef = useRef<NetInfoStateType | null>(null);
@@ -528,7 +529,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   useEffect(() => {
     setSipIncomingHandler((invitation) => {
-      sipSessionRef.current = invitation;
       const callId = sipSessionId(invitation);
       const remote = String(invitation.remoteIdentity?.uri || '');
       watchSipSession(invitation, callId);
@@ -544,6 +544,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         onHold: false,
         isIncoming: true,
       };
+      const current = activeCallRef.current;
+      if (current && current.phase === 'active') {
+        waitingSipSessionRef.current = invitation;
+        setWaitingCall(incoming);
+        return;
+      }
+      sipSessionRef.current = invitation;
       activeCallRef.current = incoming;
       setActiveCall(incoming);
     });
@@ -616,8 +623,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [watchSipSession]);
 
   const refreshIncomingCalls = useCallback(async () => {
-    if (sipClientReady() || preferredVoiceEdge() === 'sip') {
-      setPushRegistration('registered');
+    if (preferredVoiceEdge() === 'sip') {
+      setPushRegistration(sipClientReady() ? 'registered' : 'unavailable');
       return;
     }
     setPushRegistration('registering');
@@ -1001,6 +1008,14 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const answerWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
+    const waitingInvite = waitingSipSessionRef.current as Invitation | null;
+    if (waitingInvite && typeof waitingInvite.accept === 'function') {
+      await waitingInvite.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
+      sipSessionRef.current = waitingInvite;
+      waitingSipSessionRef.current = null;
+      setWaitingCall(null);
+      return;
+    }
     if (sipClientReady()) {
       await answerVocivoSip(waitingCall.id);
       setWaitingCall(null);
@@ -1041,8 +1056,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const rejectWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
+    const waitingInvite = waitingSipSessionRef.current as Invitation | null;
+    waitingSipSessionRef.current = null;
+    if (waitingInvite && typeof waitingInvite.reject === 'function') {
+      await waitingInvite.reject();
+      setWaitingCall(null);
+      return;
+    }
     if (sipClientReady()) {
-      await hangupVocivoSip(sipSessionRef.current, waitingCall.id);
+      await hangupVocivoSip(waitingInvite, waitingCall.id);
       setWaitingCall(null);
       return;
     }
@@ -1220,6 +1242,16 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     durationRef.current = 0;
     setActiveCall(null);
     setDuration(0);
+    const held = heldCallRef.current;
+    if (held && (sipClientReady() || preferredVoiceEdge() === 'sip')) {
+      await setVocivoSipHeld(false, sipSessionRef.current).catch((failure) => reportVoiceError('resume held SIP line after hangup', failure));
+      const resumed = { ...held, onHold: false, phase: 'active' as const };
+      heldCallRef.current = null;
+      setHeldCall(null);
+      activeCallRef.current = resumed;
+      setActiveCall(resumed);
+      return;
+    }
     if (resumeAfterEnd) {
       await resumeAfterEnd.resume().catch((failure) => reportVoiceError('resume remaining line after hangup', failure));
       voipClient.setActiveCall(resumeAfterEnd.callId);
@@ -1239,8 +1271,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setActiveCall((current) => current ? { ...current, phase: 'connecting' } : current);
       return;
     }
-    if (sipClientReady() && activeCall?.id) {
-      await answerVocivoSip(activeCall.id);
+    const nativeCallId = activeCallRef.current?.id;
+    if (sipClientReady() && nativeCallId) {
+      await answerVocivoSip(nativeCallId);
       setActiveCall((current) => current ? { ...current, phase: 'connecting' } : current);
       return;
     }

@@ -97,6 +97,9 @@ test('High.docx: iOS dialogs, CANCEL, Call-ID, CallKit, hold re-INVITE', () => {
   assert.match(engine, /socket != nil/);
   assert.match(engine, /expires=\\\(contactExpires\)/);
   assert.match(engine, /pendingMergeByes/);
+  assert.match(engine, /scheduleReconnect/);
+  const voice = read('mobile/src/context/VoiceContext.tsx');
+  assert.match(voice, /activeCallRef.current\?\.id/);
   const media = read('mobile/modules/vocivo-sip/ios/VocivoSipMedia.swift');
   assert.doesNotMatch(media, /localAudio\[target\]\?\.isEnabled = !held/);
   assert.match(media, /flushIceWaiters\(slot: slot\)/);
@@ -122,6 +125,8 @@ test('High.docx: web inbound Terminated, waiting INVITE, REFER without mass hang
   assert.match(sip, /SessionState.Terminated/);
   assert.match(sip, /incomingRef.current !== invitation/);
   assert.match(sip, /hangupSession\(session\)/);
+  assert.match(sip, /hangupSession\(heldSessionRef.current\)/);
+  assert.match(sip, /action: 'answered'/);
   const control = read('frontend/src/voice/sipCallControl.js');
   assert.match(control, /ReferrerState/);
   assert.match(sip, /canMerge: Boolean\(heldCall && mediaReady && !conference\)/);
