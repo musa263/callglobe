@@ -4,7 +4,7 @@ import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../h
 import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
-import { voiceIceServers, voiceProvider } from '../voice-provider.js';
+import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../voice-provider.js';
 import { sessionOrganizationId } from '../tenancy.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -21,14 +21,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const config = await readPbxConfig();
     const extension = await getExtension(session.extensionId);
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
-    const provider = voiceProvider(config);
+    const edge = voiceEdge(config);
+    const provider = edge;
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({
       provider,
+      voice_edge: edge,
       pbx_engine: provider,
-      authentication: 'token',
+      authentication: edge === 'sip' ? 'digest' : 'token',
       token_endpoint: '/api/telnyx/token',
-      sip_domain: 'sip.telnyx.com',
+      sip_credentials_endpoint: '/api/voice/sip-credentials',
+      sip_domain: edge === 'sip' ? sipDomain() : 'sip.telnyx.com',
+      sip_realm: edge === 'sip' ? sipRealm() : 'sip.telnyx.com',
+      sip_ws_uri: edge === 'sip' ? sipWsUri() : '',
       ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
       extension: extension.extension,
       organization_id: extension.organizationId,

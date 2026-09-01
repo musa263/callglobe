@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { outboundWalletBlockReason, retailRateFromWholesale, walletBalanceAfter } from './wallet-store.js';
+import { LAUNCH_CALLING_CREDIT_MINOR, launchCallingCreditKey, outboundWalletBlockReason, retailRateFromWholesale, walletBalanceAfter } from './wallet-store.js';
 
 test('retail pricing protects the configured gross margin', () => {
   assert.equal(retailRateFromWholesale({ wholesaleRateMicros: 10_000, grossMarginBps: 3000 }), 14_286);
@@ -37,4 +37,6 @@ test('blocks outbound calling on frozen or empty tenant wallets', () => {
   assert.equal(outboundWalletBlockReason({ ...base, status: 'active', availableMinor: 500 }), '');
   assert.match(outboundWalletBlockReason({ ...base, status: 'frozen', availableMinor: 500 }) || '', /frozen/i);
   assert.match(outboundWalletBlockReason({ ...base, status: 'active', availableMinor: 0 }) || '', /credit/i);
+  assert.equal(LAUNCH_CALLING_CREDIT_MINOR, 2500);
+  assert.equal(launchCallingCreditKey('primary'), 'launch-calling-credit:primary');
 });

@@ -10,7 +10,7 @@ import { api, clearSession, getStoredSession, storeSession } from './lib/api';
 import { buildDialingDirectory } from './lib/countries';
 import { useVoice } from './hooks/useVoice';
 import AdminConsole from './admin/AdminConsole';
-import { describeRemote } from './voice/callIdentity';
+import { describeIncoming } from './voice/callIdentity';
 
 const KEYS = [
   ['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
@@ -115,7 +115,7 @@ function CallerIdMenu({ numbers, selected, onSelect, open, onToggle }) {
 }
 
 function IncomingCall({ call, onAnswer, onDecline }) {
-  const identity = describeRemote(call);
+  const identity = describeIncoming(call);
   return (
     <div className="call-overlay" role="dialog" aria-modal="true">
       <div className="call-modal incoming-modal">
@@ -249,7 +249,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
     setNumber((current) => `${current}${value}`.slice(0, 22));
   }
   async function call() {
-    if (!number || voice.callStarting) return;
+    if (!number || voice.callStarting || voice.active) return;
     if (preview) return onPreviewCall();
     if (dialMode === 'extension') {
       setCallError('');
@@ -264,10 +264,6 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
     }
     if (dialMode !== 'extension' && !selectedNumber?.phone_number) {
       setCallError('Choose a caller ID before placing an external call.');
-      return;
-    }
-    if (dialMode !== 'extension' && Number.isFinite(balance) && balance <= 0) {
-      setCallError('Calling credit is required before placing this call.');
       return;
     }
     setCallError('');
@@ -292,7 +288,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
           {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See live rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
           <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key)} onPointerDown={key === '0' ? startZeroHold : undefined} onPointerUp={key === '0' ? endZeroHold : undefined} onPointerLeave={key === '0' ? endZeroHold : undefined}><strong>{key}</strong><small>{letters}</small></button>)}</div>
           {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
-          <button className={`call-button ${voice.callStarting ? 'starting' : ''}`} onClick={call} disabled={voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !preview && !selectedNumber?.phone_number) || (!preview && !voice.ready)}><Phone size={22} /> {voice.callStarting ? 'Starting call...' : voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
+          <button className="call-button" onClick={call} disabled={voice.active || voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !preview && !selectedNumber?.phone_number) || (!preview && !voice.ready)}><Phone size={22} /> {voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
         </div>
       </div>
     </section>

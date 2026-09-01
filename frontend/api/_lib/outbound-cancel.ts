@@ -190,6 +190,10 @@ export async function hangupConferenceParticipant(pair: OutboundCallPair, hangin
   }
 }
 
+export async function hangupCallControlIds(ids: string[], commandPrefix: string) {
+  await Promise.all([...new Set(ids.filter(Boolean))].map((id) => hangupLeg(id, `${commandPrefix}-${id.slice(-8)}`)));
+}
+
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {
   // Re-read the pair first so legs added by concurrent webhooks (forks, peers)
   // are part of the hangup set before tracking is cleared.

@@ -155,7 +155,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       onHold: call.currentIsHeld,
       isIncoming: call.isIncoming,
       photoUrl: meta.photoUrl || inviteHeader(call, 'X-Vocivo-Caller-Photo') || undefined,
-      routeId: meta.routeId,
+      routeId: meta.routeId || inviteHeader(call, 'X-Vocivo-Route-ID'),
       callerId: meta.callerId,
     };
   }, []);
@@ -284,7 +284,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (cleanup) iceListenerCleanupRef.current.set(call.callId, cleanup);
     };
     bindIceListener();
-    if (!callMetaRef.current.has(call.callId)) callMetaRef.current.set(call.callId, { startedAt: base.startedAt, connectedAt: base.connectedAt });
+    if (!callMetaRef.current.has(call.callId)) {
+      callMetaRef.current.set(call.callId, {
+        startedAt: base.startedAt,
+        connectedAt: base.connectedAt,
+        routeId: inviteHeader(call, 'X-Vocivo-Route-ID') || undefined,
+      });
+    }
+    const incomingRouteId = inviteHeader(call, 'X-Vocivo-Route-ID');
+    if (incomingRouteId && !callRouteIdsRef.current.has(call.callId)) callRouteIdsRef.current.set(call.callId, incomingRouteId);
     setActiveCall((existing) => {
       const next = { ...base, speaker: existing?.speaker ?? base.speaker };
       activeCallRef.current = next;
@@ -310,12 +318,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           stopRingback();
           void confirmMediaConnected(call).catch((failure) => reportVoiceError('confirm bidirectional media', failure));
         }
-        setActiveCall((current) => {
-          if (current?.id !== call.callId) return current;
-          const next = { ...current, phase };
-          activeCallRef.current = next;
-          return next;
-        });
+        const takeRemainingCall = (remaining: typeof call) => {
+          if (remaining.currentState === TelnyxCallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
+          voipClient.setActiveCall(remaining.callId);
+          attachCall(remaining);
+        };
         if (phase === 'ended' || phase === 'failed') {
           cancelRoutePolling(call.callId);
           stopRingback();
@@ -323,21 +330,37 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           callRouteIdsRef.current.delete(call.callId);
           callMetaRef.current.delete(call.callId);
           clearCallSubscriptions(call.callId);
+          const remainingNow = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
+          if (remainingNow) {
+            takeRemainingCall(remainingNow);
+            return;
+          }
           const releaseTimer = setTimeout(() => lifecycleRef.current.release(call.callId), 60_000);
           const resumeTimer = setTimeout(() => {
             // A newer call (optimistic or attached) now owns the UI; this ended call's teardown must not clear it.
             if (activeCallRef.current && activeCallRef.current.id !== call.callId) return;
             const remaining = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
-            if (!remaining) {
-              attachCall(null);
+            if (remaining) {
+              takeRemainingCall(remaining);
               return;
             }
-            if (remaining.currentState === TelnyxCallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
-            voipClient.setActiveCall(remaining.callId);
-            attachCall(remaining);
+            setActiveCall((current) => {
+              if (current?.id !== call.callId) return current;
+              const next = { ...current, phase };
+              activeCallRef.current = next;
+              return next;
+            });
+            attachCall(null);
           }, 200);
           attachTimersRef.current.set(call.callId, [releaseTimer, resumeTimer]);
+          return;
         }
+        setActiveCall((current) => {
+          if (current?.id !== call.callId) return current;
+          const next = { ...current, phase };
+          activeCallRef.current = next;
+          return next;
+        });
       }),
       call.isMuted$.subscribe((muted) => setActiveCall((current) => current?.id === call.callId ? { ...current, muted } : current)),
       call.isHeld$.subscribe((onHold) => setActiveCall((current) => current?.id === call.callId ? { ...current, onHold } : current)),
@@ -678,7 +701,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (startAttemptRef.current === guardAttempt) startingCallRef.current = false;
       throw setupError;
     }
-    const destination = `sip:${sipUsername}@sip.telnyx.com`;
+    const destination = sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '';
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
     const startedAt = Date.now();
@@ -931,6 +954,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     await ensureCallMicrophonePermission();
     setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'connecting' } : current);
     try {
+      const routeId = inviteHeader(call, 'X-Vocivo-Route-ID') || callRouteIdsRef.current.get(call.callId);
+      if (routeId) {
+        api.post('/api/voice/progress', { routeId, event: 'answered' }).catch((failure) => reportVoiceError('report answered route', failure));
+      }
       voipClient.setActiveCall(call.callId);
       await call.answer();
       if (Platform.OS === 'android') await VoicePnBridge.hideIncomingCallNotification();
@@ -941,7 +968,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setError(answerError instanceof Error ? answerError.message : 'The incoming call could not be answered.');
       throw answerError;
     }
-  }, []);
+  }, [reportVoiceError]);
   const toggleMute = useCallback(async () => {
     try {
       if (callRef.current) await callRef.current.toggleMute();

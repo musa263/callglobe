@@ -1,7 +1,14 @@
 import type { VoiceState } from './voice-control.js';
+import { canonicalVoiceDestination, isAllowedInternalSipDestination } from './internal-sip.js';
 
 export function parkedFlowUsesNativeBridge(flow: 'outbound' | 'internal') {
   return flow === 'internal';
+}
+
+/** One SIP URI per internal park dial so CallKit is not replaced by a sibling alias fork. */
+export function parkedInternalDialTargets(reservationDestination: string, aliasDestinations: string[]) {
+  if (isAllowedInternalSipDestination(reservationDestination)) return [canonicalVoiceDestination(reservationDestination)];
+  return aliasDestinations.filter(Boolean);
 }
 
 export function parkedDestinationDialInput(input: {

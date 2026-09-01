@@ -1,0 +1,28 @@
+<profile name="external">
+  <gateways>
+    <gateway name="telnyx">
+      <param name="proxy" value="$${TELNYX_SIP_HOST}"/>
+      <param name="realm" value="$${TELNYX_SIP_REALM}"/>
+      <param name="username" value="$${TELNYX_SIP_USERNAME}"/>
+      <param name="password" value="$${TELNYX_SIP_PASSWORD}"/>
+      <param name="register" value="false"/>
+      <param name="caller-id-in-from" value="true"/>
+      <param name="from-domain" value="sip.telnyx.com"/>
+      <param name="extension-in-contact" value="true"/>
+      <param name="ping" value="30"/>
+    </gateway>
+  </gateways>
+  <settings>
+    <param name="sip-port" value="5080"/>
+    <param name="dialplan" value="XML"/>
+    <param name="context" value="public"/>
+    <param name="auth-calls" value="false"/>
+    <param name="rtp-ip" value="0.0.0.0"/>
+    <param name="sip-ip" value="0.0.0.0"/>
+    <param name="ext-rtp-ip" value="$${PUBLIC_IP}"/>
+    <param name="ext-sip-ip" value="$${PUBLIC_IP}"/>
+    <param name="inbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
+    <param name="outbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
+    <param name="manage-presence" value="false"/>
+  </settings>
+</profile>

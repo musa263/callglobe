@@ -1,6 +1,6 @@
 import type { PbxConfig } from './pbx-config-store.js';
 
-export type VoiceProvider = 'telnyx';
+export type VoiceEdge = 'telnyx' | 'sip';
 
 export type VoiceIceServer = {
   urls: string | string[];
@@ -12,8 +12,34 @@ function trimmedEnv(name: string) {
   return process.env[name]?.trim() || '';
 }
 
-export function voiceProvider(_config: PbxConfig): VoiceProvider {
-  return 'telnyx';
+export function voiceEdge(_config?: PbxConfig): VoiceEdge {
+  return trimmedEnv('VOCIVO_VOICE_EDGE') === 'sip' ? 'sip' : 'telnyx';
+}
+
+/** Internal SIP-edge calls stay on Kamailio/FreeSWITCH and must not wait on Telnyx /balance. */
+export function voiceRouteNeedsTelnyxCredit(flow: 'internal' | 'outbound', edge: VoiceEdge = voiceEdge()) {
+  return !(edge === 'sip' && flow === 'internal');
+}
+
+/** @deprecated use voiceEdge */
+export function voiceProvider(config?: PbxConfig) {
+  return voiceEdge(config);
+}
+
+export function sipInboundEnabled() {
+  return trimmedEnv('VOCIVO_SIP_INBOUND') === '1';
+}
+
+export function sipRealm() {
+  return trimmedEnv('VOCIVO_SIP_REALM') || trimmedEnv('VOCIVO_SIP_DOMAIN') || 'sip.vocivo.local';
+}
+
+export function sipDomain() {
+  return trimmedEnv('VOCIVO_SIP_DOMAIN') || sipRealm();
+}
+
+export function sipWsUri() {
+  return trimmedEnv('VOCIVO_SIP_WSS_URI');
 }
 
 function validIceUrl(value: unknown): value is string {

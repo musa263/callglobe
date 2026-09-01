@@ -11,6 +11,43 @@ function audioRtpCounts(stats) {
   return { inbound, outbound };
 }
 
+export function samplesHaveSpeechEnergy(samples, threshold = 8) {
+  if (!samples?.length) return false;
+  let min = 255;
+  let max = 0;
+  for (const value of samples) {
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return max - min > threshold;
+}
+
+export async function remoteInboundAudioStarted(call, timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs;
+  const readPeer = () => call?.peer?.instance;
+  let baseline = 0;
+  try {
+    if (readPeer()?.getStats) baseline = audioRtpCounts(await readPeer().getStats()).inbound;
+  } catch {
+    baseline = 0;
+  }
+  while (Date.now() < deadline) {
+    const peer = readPeer();
+    if (!peer?.getStats) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      continue;
+    }
+    try {
+      const current = audioRtpCounts(await peer.getStats()).inbound;
+      if (current - baseline >= 3) return true;
+    } catch {
+      // Keep waiting for the first remote packets.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  return false;
+}
+
 export async function waitForWebCallMedia(call, timeoutMs = 8_000) {
   const deadline = Date.now() + timeoutMs;
   let baseline = { inbound: 0, outbound: 0 };

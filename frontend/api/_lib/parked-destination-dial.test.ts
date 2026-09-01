@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parkedDestinationDialInput, parkedFlowUsesNativeBridge } from './parked-destination-dial.js';
+import { parkedDestinationDialInput, parkedFlowUsesNativeBridge, parkedInternalDialTargets } from './parked-destination-dial.js';
 
 test('only internal parked calls use Telnyx native bridge-on-answer', () => {
   assert.equal(parkedFlowUsesNativeBridge('internal'), true);
@@ -22,6 +22,17 @@ test('PSTN parked Dial stays independent of the caller leg', () => {
   assert.equal(dial.linkTo, undefined);
   assert.equal(dial.state.bridgeOnAnswer, false);
   assert.equal(dial.state.parentCallControlId, 'parked');
+});
+
+test('internal park dials only the reserved SIP URI so CallKit is not replaced by a sibling alias', () => {
+  assert.deepEqual(
+    parkedInternalDialTargets('sip:callee@sip.telnyx.com', ['sip:web@sip.telnyx.com', 'sip:mobile@sip.telnyx.com']),
+    ['sip:callee@sip.telnyx.com'],
+  );
+  assert.deepEqual(
+    parkedInternalDialTargets('2003', ['sip:web@sip.telnyx.com', 'sip:mobile@sip.telnyx.com']),
+    ['sip:web@sip.telnyx.com', 'sip:mobile@sip.telnyx.com'],
+  );
 });
 
 test('internal parked Dial forks SIP aliases and links them to the parked caller', () => {

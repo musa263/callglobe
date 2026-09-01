@@ -16,7 +16,7 @@ SIP passwords and carrier keys remain server-side. The app receives a short-live
 ## Local setup
 
 1. Copy `.env.example` to `.env.local`.
-2. Set `EXPO_PUBLIC_API_URL` to the Vercel deployment URL.
+2. Set `EXPO_PUBLIC_API_URL` to `https://vocivo.app`.
 3. Run `npm install`.
 4. Run `npx expo prebuild`, then `npm run ios` or `npm run android`.
 

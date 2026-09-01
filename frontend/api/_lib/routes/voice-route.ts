@@ -12,6 +12,7 @@ import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
 import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
+import { voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
 import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
 import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
 
@@ -80,9 +81,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internationalAllowed: profile?.permissions?.international !== false,
       }, destination, callerId);
     }
-    // Tenant wallets do not fund internal calls. Vocivo's carrier account still
-    // has to be operational because Telnyx transports both managed call legs.
-    await assertTelnyxVoiceReady();
+    // Tenant wallets do not fund internal calls. Telnyx park still needs a live
+    // carrier wallet. SIP-edge internal calls fork locally and must not wait on /balance.
+    if (voiceRouteNeedsTelnyxCredit(requestedFlow)) await assertTelnyxVoiceReady();
     if (requestedFlow !== 'internal') {
       const wallet = await readTenantWallet(organizationId);
       const blocked = outboundWalletBlockReason(wallet);

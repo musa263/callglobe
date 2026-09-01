@@ -1,8 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
-import { hangupConferenceParticipant, terminateOutboundPair } from '../outbound-cancel.js';
+import { hangupCallControlIds, hangupConferenceParticipant, terminateOutboundPair } from '../outbound-cancel.js';
 import { liveOutboundDestinationId, readOutboundCallPairByRoute } from '../outbound-call-store.js';
+import { sessionMayControlVoiceRoute } from '../voice-route-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 
@@ -14,7 +15,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const routeId = typeof req.body?.routeId === 'string' ? req.body.routeId.trim() : '';
     if (!isVoiceRouteId(routeId)) return res.status(400).json({ error: 'A valid call route is required.' });
     const route = await readVoiceRoute(routeId);
-    if (!route || route.userId !== session.sub) return res.status(404).json({ error: 'Call route not found.' });
+    if (!route || !sessionMayControlVoiceRoute(session, route)) return res.status(404).json({ error: 'Call route not found.' });
+    const destHangup = Boolean(session.extensionId && session.extensionId === route.destinationExtensionId && route.userId !== session.sub);
 
     const pair = await readOutboundCallPairByRoute(routeId);
     if (pair) {
@@ -24,7 +26,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`);
       }
     }
-    await updateVoiceRoute(routeId, { phase: 'ended', failureCause: 'caller_hangup' });
+    if (route.wakeupCallControlIds?.length) {
+      await hangupCallControlIds(route.wakeupCallControlIds, `sip-cancel-${routeId.slice(-10)}`);
+    }
+    await updateVoiceRoute(routeId, { phase: 'ended', failureCause: destHangup ? 'callee_rejected' : 'caller_hangup' });
 
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ canceled: true });

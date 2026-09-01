@@ -14,9 +14,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await accessForSession(session);
     if (access.superadmin === true) return res.status(200).json({ balance: null, can_call: false, currency: 'USD', pending: 0, rates: mobileRates });
     const canCall = access.features.internalCalling || access.features.outboundCalling;
-    const canViewWallet = access.organization.accountType === 'individual' || ['company_owner', 'company_admin'].includes(session.role || '');
     const [wallet, rates] = await Promise.all([
-      canViewWallet ? readTenantWallet(access.organization.id, access.subscription.currency) : Promise.resolve(null),
+      readTenantWallet(access.organization.id, access.subscription.currency),
       readRetailRateDirectory(mobileRates),
     ]);
     return res.status(200).json({

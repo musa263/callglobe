@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import cancel from './_lib/routes/voice-cancel.js';
+import progress from './_lib/routes/voice-progress.js';
 import conferences from './_lib/routes/voice-conferences.js';
 import config from './_lib/routes/voice-config.js';
 import devices from './_lib/routes/voice-devices.js';
@@ -15,11 +16,16 @@ import voicemails from './_lib/routes/voice-voicemails.js';
 import webhook from './_lib/routes/voice-webhook.js';
 import webPush from './_lib/routes/voice-web-push.js';
 import aiTransfer from './_lib/routes/voice-ai-transfer.js';
+import sipAuth from './_lib/routes/voice-sip-auth.js';
+import sipCredentials from './_lib/routes/voice-sip-credentials.js';
+import sipInbound from './_lib/routes/voice-sip-inbound.js';
+import sipWakeup from './_lib/routes/voice-sip-wakeup.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
 const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   cancel,
+  progress,
   conferences,
   config,
   devices,
@@ -35,6 +41,10 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   webhook,
   'ai-transfer': aiTransfer,
   'web-push': webPush,
+  'sip-auth': sipAuth,
+  'sip-credentials': sipCredentials,
+  'sip-inbound': sipInbound,
+  'sip-wakeup': sipWakeup,
 });
 
 export default function handler(req: VercelRequest, res: VercelResponse) {

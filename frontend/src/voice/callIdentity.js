@@ -24,6 +24,20 @@ export function describeRemote(call, fallbackNumber = '') {
   };
 }
 
+export function describeIncoming(call, fallbackNumber = '') {
+  if (call?.options || call?.direction) return describeRemote(call, fallbackNumber);
+  const uri = String(call?.remoteIdentity?.uri || '');
+  const user = uri.replace(/^sip:/i, '').split('@')[0];
+  const displayName = String(call?.remoteIdentity?.displayName || '').trim();
+  const extensionMatch = displayName.match(/extension\s+(\d{2,5})/i);
+  return {
+    name: displayName || (user ? 'Company colleague' : 'Incoming call'),
+    number: extensionMatch ? `Extension ${extensionMatch[1]}` : (user && !user.startsWith('gencred') ? user : 'Internal call'),
+    internal: true,
+    photoUrl: '',
+  };
+}
+
 export function getCallId(call) {
   return call?.id || call?.callId || '';
 }

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { voiceIceServers, voiceProvider } from './voice-provider.js';
+import { sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit } from './voice-provider.js';
 
-const keys = ['TELNYX_ICE_SERVERS_JSON'] as const;
+const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND'] as const;
 
 function withEnvironment(values: Partial<Record<(typeof keys)[number], string>>, run: () => void) {
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -37,9 +37,27 @@ test('publishes authenticated Telnyx ICE servers to calling clients', () => {
   });
 });
 
-test('uses Telnyx as the only voice provider', () => {
+test('defaults the voice edge to Telnyx so TestFlight stays on CallKit', () => {
   withEnvironment({}, () => {
     assert.equal(voiceProvider(defaultPbxConfig()), 'telnyx');
+    assert.equal(voiceEdge(), 'telnyx');
+    assert.equal(sipInboundEnabled(), false);
+  });
+});
+
+test('enables the self-hosted SIP edge only when explicitly requested', () => {
+  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', VOCIVO_SIP_REALM: 'sip.example.test', VOCIVO_SIP_INBOUND: '1' }, () => {
+    assert.equal(voiceEdge(), 'sip');
+    assert.equal(sipRealm(), 'sip.example.test');
+    assert.equal(sipInboundEnabled(), true);
+    assert.equal(voiceRouteNeedsTelnyxCredit('internal'), false);
+    assert.equal(voiceRouteNeedsTelnyxCredit('outbound'), true);
+  });
+});
+
+test('Telnyx park still checks carrier credit for internal calls', () => {
+  withEnvironment({}, () => {
+    assert.equal(voiceRouteNeedsTelnyxCredit('internal'), true);
   });
 });
 
