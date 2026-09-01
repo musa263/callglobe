@@ -100,6 +100,8 @@ test('High.docx: iOS dialogs, CANCEL, Call-ID, CallKit, hold re-INVITE', () => {
   assert.match(engine, /scheduleReconnect/);
   const voice = read('mobile/src/context/VoiceContext.tsx');
   assert.match(voice, /activeCallRef.current\?\.id/);
+  const message = read('mobile/modules/vocivo-sip/ios/VocivoSipMessage.swift');
+  assert.match(message, /joined\(separator: "\\r\\n"\) \+ "\\r\\n\\r\\n"/);
   const media = read('mobile/modules/vocivo-sip/ios/VocivoSipMedia.swift');
   assert.doesNotMatch(media, /localAudio\[target\]\?\.isEnabled = !held/);
   assert.match(media, /flushIceWaiters\(slot: slot\)/);

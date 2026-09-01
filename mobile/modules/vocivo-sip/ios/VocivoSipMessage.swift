@@ -31,8 +31,7 @@ struct VocivoSipMessage {
   func serialized() -> String {
     var lines = [startLine]
     headers.forEach { lines.append("\($0.0): \($0.1)") }
-    lines.append("")
-    return lines.joined(separator: "\r\n") + body
+    return lines.joined(separator: "\r\n") + "\r\n\r\n" + body
   }
 
   static func parse(_ raw: String) -> VocivoSipMessage? {

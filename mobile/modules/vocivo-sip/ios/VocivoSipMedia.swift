@@ -81,9 +81,16 @@ final class VocivoSipMedia: NSObject, RTCPeerConnectionDelegate {
   }
 
   func setRemoteSdp(_ sdp: String, type: RTCSdpType, completion: @escaping () -> Void) {
+    guard let peer = peers[activeSlot] else {
+      completion()
+      return
+    }
     let description = RTCSessionDescription(type: type, sdp: sdp)
-    peers[activeSlot]?.setRemoteDescription(description) { error in
-      if error == nil { completion() }
+    peer.setRemoteDescription(description) { error in
+      if let error {
+        NSLog("VocivoSipMedia setRemoteDescription failed: \(error.localizedDescription)")
+      }
+      completion()
     }
   }
 

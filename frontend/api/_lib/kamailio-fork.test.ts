@@ -10,7 +10,7 @@ const cfg = fs.readFileSync(
 );
 
 test('Kamailio wakes the phone then forks live contacts without blocking WebSocket REGISTER', () => {
-  assert.match(cfg, /append_branches", 1/);
+  assert.match(cfg, /ICE=force DTLS=passive SDES-off RTCP-MUX RTP\/SAVPF/);
   assert.match(cfg, /async", "workers", 16/);
   assert.match(cfg, /cors_mode", 2/);
   assert.match(cfg, /\$Rp != 8080 && \$fU =~ "\^\[0-9\]\{1,8\}\$"/);
