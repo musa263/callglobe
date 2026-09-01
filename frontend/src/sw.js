@@ -1,10 +1,18 @@
 import { clientsClaim } from 'workbox-core';
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
 
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) {
+    event.respondWith(fetch(event.request));
+  }
+});
+
+precacheAndRoute(self.__WB_MANIFEST);
+cleanupOutdatedCaches();
 self.skipWaiting();
 clientsClaim();
-cleanupOutdatedCaches();
-precacheAndRoute(self.__WB_MANIFEST);
 
 self.addEventListener('push', (event) => {
   let data = {};

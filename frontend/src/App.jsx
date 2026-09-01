@@ -204,7 +204,7 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
   );
 }
 
-function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType, initialNumber }) {
+function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, voice, preview, onPreviewCall, accountType, initialNumber, extension }) {
   const [dialMode, setDialMode] = useState('external');
   const [number, setNumber] = useState(initialNumber || '');
   const [country, setCountry] = useState(rates[0]);
@@ -240,6 +240,10 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
     if (preview) return onPreviewCall();
     if (dialMode === 'extension') {
       setCallError('');
+      if (extension && number === String(extension)) {
+        setCallError('Call a different company extension. This is your own extension.');
+        return;
+      }
       try {
         await voice.startInternalCall('', number, `Extension ${number}`);
       } catch (extensionError) { setCallError(extensionError.message || 'The extension call could not be started.'); }
@@ -506,7 +510,7 @@ export default function App() {
         {preview && <div className="preview-banner"><span>You are viewing a safe preview. Calls are disabled.</span><button onClick={logout}><X size={15} /> Exit preview</button></div>}
         {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={15} /></button></div>}
         {profile?.force_password_change && !preview && <div className="modal-layer" role="dialog" aria-modal="true"><section className="modal"><header><div><h2>Update your password</h2><p>This account requires a new password before you can continue.</p></div></header><form className="modal-form" onSubmit={submitForcedPassword}><label>Current password<input type="password" autoComplete="current-password" value={passwordDraft.currentPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, currentPassword: event.target.value }))} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.newPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.confirmPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))} required /></label>{passwordError && <div className="form-error" role="alert">{passwordError}</div>}<button className="primary-button" type="submit" disabled={passwordBusy}>{passwordBusy ? 'Saving...' : 'Save password'}</button></form></section></div>}
-        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
+        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} preview={preview} accountType={shellData.profile?.account_type || 'individual'} extension={shellData.profile?.extension} initialNumber={pendingDial} onPreviewCall={() => setNotice('Sign in to place a real call.')} />}
         {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setPendingDial(value); setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
         {view === 'wallet' && <WalletView balance={shellData.balance} preview={preview} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}

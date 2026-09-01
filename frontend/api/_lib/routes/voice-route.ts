@@ -43,14 +43,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (requestedFlow === 'internal') {
       const organization = config.organizations.find((item) => item.id === organizationId);
       const sipUser = organization ? parseInternalSipUser(destination) : null;
-      if ((!sipUser && !/^\d{2,5}$/.test(targetExtension)) || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
+      const extensionHint = targetExtension || (/^\d{2,5}$/.test(destination) ? destination : '');
+      if ((!sipUser && !/^\d{2,5}$/.test(extensionHint)) || organization?.accountType === 'individual' || !organization?.internalCallingEnabled) return res.status(403).json({ error: 'Internal calling is not enabled for this organization.' });
       if (!session.extensionId) return res.status(403).json({ error: 'A company extension is required for internal calling.' });
       const [directory, profile] = await Promise.all([
         listExtensions(organizationId),
         readUserProfile(`vocivo-extension:${session.extensionId}`),
       ]);
       const source = directory.find((item) => item.id === session.extensionId);
-      const target = directory.find((item) => item.status === 'active' && (targetExtension ? item.extension === targetExtension : item.sipUsername === sipUser));
+      const target = directory.find((item) => item.status === 'active' && (extensionHint ? item.extension === extensionHint : item.sipUsername === sipUser));
       if (!target || target.id === session.extensionId) return res.status(403).json({ error: 'That internal destination is not available to this account.' });
       if (!source || source.organizationId !== organizationId || source.status !== 'active') return res.status(403).json({ error: 'Your company extension is not active.' });
       destination = clientExtensionSipUri(target.sipUsername);

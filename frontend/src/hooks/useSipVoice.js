@@ -264,7 +264,7 @@ export function useSipVoice(token, enabled, identity = {}) {
         method: 'POST',
         body: {
           routeId,
-              destination: sipUsername || '',
+          destination: sipUsername || String(extension || ''),
           targetExtension: extension,
           flow: 'internal',
         },
