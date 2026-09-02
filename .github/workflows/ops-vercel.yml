@@ -176,7 +176,9 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
-          cd frontend
+          # Deploy from the repository root. The Vercel project's Root Directory is
+          # already "frontend", so running this from inside frontend/ makes the CLI
+          # resolve frontend/frontend and fail with "the provided path does not exist".
           npx --yes vercel@latest pull --yes --environment production --token "$VERCEL_TOKEN" >/dev/null
           url=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" | tail -n 1)
           echo "deployed: $url"
