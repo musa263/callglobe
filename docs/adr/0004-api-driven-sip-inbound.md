@@ -1,6 +1,6 @@
 # ADR 0004: API-driven inbound dialplan on the SIP edge
 
-- Status: Accepted
+- Status: Accepted, not deployed (see status update below)
 - Date: 2026-09-02
 
 ## Context
@@ -40,3 +40,18 @@ tenant-scoped, in the PBX configuration, and would be untestable outside a live 
 - Each routing step is one HTTPS round trip from the droplet to Vercel; the binding timeout is 8 seconds and the
   static dialplan remains the safety net.
 - Call recording, the AI receptionist, and conference joins are still Call Control features in this phase.
+
+## Status update — 2 September 2026
+
+**Not deployed, and now contested.** The FreeSWITCH half of this ADR (`autoload_configs/xml_curl.conf.xml` and the
+entrypoint hook that enables `mod_xml_curl`) never reached `vocivo-sip`, and was removed from `services/sip` when
+the live configuration was imported as the source of truth. It remains in history at `e51204e~1`. The API half —
+`frontend/api/_lib/sip-dialplan.ts` and the `sip-dialplan`, `sip-prompt` and `sip-voicemail` routes — is deployed
+and unit-tested, but nothing calls it.
+
+Meanwhile the running edge carries a different, simpler inbound design: a `curl`-driven dialplan that asks
+`/api/voice/sip-inbound` for a `closed` / `ivr` / `ai` / `queue` / `bridge` action. Its server half was never
+merged here, so the deployed dialplan and the deployed API currently disagree.
+
+Choosing between the two, and the correction that inbound must arrive at Kamailio on 5060 rather than at
+FreeSWITCH on 5080, are written up in `docs/sip-edge-reconciliation.md`.

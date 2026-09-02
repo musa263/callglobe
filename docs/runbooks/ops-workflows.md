@@ -40,7 +40,7 @@ them from the secrets store.
 | `discover` | Read-only survey of an unfamiliar droplet: OS, containers, compose projects and files, git checkouts, listening ports, host services, firewall. Run this first when `status` reports `repo: NOT FOUND`. |
 | `status` | Current commit, `VOCIVO_SIP_INBOUND` flag, env key names, container state, `sofia status`. |
 | `logs` | Last 200 lines from FreeSWITCH, Kamailio and RTPEngine. |
-| `deploy` | `git pull --ff-only` on `main`, pull images, `docker compose up -d`. |
+| `deploy` | Pulls images and `docker compose up -d`. On `vocivo-sip` there is **no git checkout**, so nothing is pulled from source and config changes are not delivered this way — the action says so in its output. |
 | `enable-inbound` / `disable-inbound` | Flips `VOCIVO_SIP_INBOUND` in the edge `.env` and recreates FreeSWITCH, then shows the module/binding log lines. Flip the same flag on Vercel. |
 | `tts-deploy` | Builds `services/tts`, writes `/etc/vocivo/tts.env` from secrets, runs the container on `127.0.0.1:8000`. You still need an https reverse proxy in front of it. |
 | `tts-status` | Container state and an unauthenticated health probe (expects 401). |
@@ -51,20 +51,26 @@ them from the secrets store.
 |---|---|
 | `list-connections` | Call Control applications, FQDN/IP trunks, credential connections — with ids. |
 | `show-connection` | One connection's inbound/outbound settings, its authorised IPs or FQDNs (where Telnyx will send inbound INVITEs), and the numbers on it. Run this on the trunk **before** the first `route-number` and confirm the IP is the SIP edge on port 5080. |
-| `set-trunk-port` | Moves every authorised IP entry on an IP trunk to `port` (5060/5061/5080). Inbound must land on **5080** — FreeSWITCH's external profile; 5060 is Kamailio, which challenges unknown INVITEs with 407 and would reject the carrier. |
+| `set-trunk-port` | Moves every authorised IP entry on an IP trunk to `port` (5060/5061/5080). **Do not use this to move inbound to 5080 on vocivo-sip:** FreeSWITCH there binds `127.0.0.1:5080` and is unreachable from the internet, so the carrier must keep delivering to Kamailio on **5060**. See `docs/sip-edge-reconciliation.md`. |
 | `list-numbers` | Every number with its current connection. |
 | `show-number` | One number's routing and messaging profile. |
 | `route-number` | **The cut-over.** Re-points one DID to a connection id. Pointing a DID at the FQDN/IP trunk moves its inbound calls off Call Control and onto the SIP edge — do this one number at a time, after `enable-inbound` has been verified with a test DID. |
 
 ## Cut-over order for inbound
 
+**Blocked.** Inbound cannot be cut over until the two competing inbound designs are resolved and Kamailio learns
+to accept the carrier — see `docs/sip-edge-reconciliation.md`. In particular the live FreeSWITCH inbound dialplan
+expects an `action` field that `/api/voice/sip-inbound` does not return, and Kamailio answers `403` to E.164
+INVITEs arriving on public 5060, which is where Telnyx delivers. Moving a DID today would fail the call.
+
+Once that is settled the order is:
+
 1. Ops · Vercel → `show VOCIVO_VOICE_EDGE`; set to `sip` and verify a browser call (internal, then outbound).
-2. Ops · Droplets → `deploy`, then `status` (confirm 5060 and 5080 are listening and the firewall allows UDP 5080 in).
-3. Ops · Telnyx → `list-connections` to find the IP trunk id; `show-connection` on it; `set-trunk-port 5080` if the
-   authorised IP still says 5060.
-4. Ops · Droplets → `enable-inbound`; Ops · Vercel → `set VOCIVO_SIP_INBOUND 1`.
-5. Ops · Telnyx → `route-number` for **one test DID**; call it; check `logs`.
-6. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id.
+2. Ops · Droplets → `deploy`, then `status` (confirm Kamailio on 5060 and FreeSWITCH on 127.0.0.1:5080).
+3. Ops · Droplets → `enable-inbound`; Ops · Vercel → `set VOCIVO_SIP_INBOUND 1`.
+4. Ops · Telnyx → `route-number` for **one test DID** onto the IP trunk (which already points at 5060); call it;
+   check `logs`.
+5. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id.
 
 Known ids (this account, September 2026): Call Control application `3033560124078688149` ("Vocivo Voice System"),
 IP trunk `3035898149177656815` ("Vocivo Dedicated PBX" → 168.144.183.82). The account currently has a single DID.

@@ -18,11 +18,12 @@
     <param name="context" value="public"/>
     <param name="auth-calls" value="false"/>
     <param name="rtp-ip" value="0.0.0.0"/>
-    <param name="sip-ip" value="0.0.0.0"/>
+    <param name="sip-ip" value="127.0.0.1"/>
     <param name="ext-rtp-ip" value="$${PUBLIC_IP}"/>
     <param name="ext-sip-ip" value="$${PUBLIC_IP}"/>
     <param name="inbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="manage-presence" value="false"/>
+    <param name="sip-trace" value="no"/>
   </settings>
 </profile>
