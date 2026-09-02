@@ -64,7 +64,10 @@ export async function renderVocivoPrompt(text: string, voice: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(process.env.TTS_SERVICE_SECRET ? { Authorization: `Bearer ${process.env.TTS_SERVICE_SECRET}` } : {}) },
       body: JSON.stringify({ input: text.slice(0, 2000), voice: definition.sourceVoice, format: 'wav' }),
-      signal: AbortSignal.timeout(3500),
+      // Kokoro synthesises on CPU: a first render of an unseen prompt takes seconds,
+      // and 3.5s was short enough to fall back to the carrier voice on every cold prompt.
+      // Repeat renders are served from the content-addressed cache and return immediately.
+      signal: AbortSignal.timeout(12_000),
     });
     if (!response.ok) throw new Error(`TTS service returned ${response.status}`);
     const payload = await response.json() as { audio_url?: string };

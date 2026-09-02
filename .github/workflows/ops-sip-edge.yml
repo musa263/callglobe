@@ -238,8 +238,11 @@ jobs:
                 conf=/etc/nginx/snippets/vocivo-tts.conf
                 install -d /etc/nginx/snippets
                 printf "location %s/ {\n  proxy_pass http://127.0.0.1:8000/;\n  proxy_set_header Host \$host;\n  proxy_read_timeout 120s;\n  client_max_body_size 1m;\n}\n" "$TTS_PATH" > "$conf"
-                site=$(grep -rlE "listen[^;]*443" /etc/nginx/sites-enabled/ 2>/dev/null | head -1)
-                if [ -n "$site" ] && ! grep -q "vocivo-tts.conf" "$site"; then
+                # grep exits 1 when it matches nothing, and under pipefail that aborted the
+                # whole deploy silently — right after the build, before anything else ran.
+                site=$( { grep -rlE "listen[^;]*443" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || true; } | head -1 || true )
+                [ -n "$site" ] || echo "no TLS vhost found; serve $TTS_PATH yourself or use a subdomain"
+                if [ -n "$site" ] && ! grep -q "vocivo-tts.conf" "$site" 2>/dev/null; then
                   cp "$site" "$site.vocivo-backup"
                   awk -v inc="    include $conf;" "/listen[^;]*443/ && !seen { print; print inc; seen=1; next } { print }" "$site.vocivo-backup" > "$site"
                   # A broken vhost would take the whole edge offline, so roll back on any error.
