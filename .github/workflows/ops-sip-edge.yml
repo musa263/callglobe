@@ -24,6 +24,7 @@ on:
         options:
           - discover
           - show-config
+          - dump-config
           - status
           - logs
           - deploy
@@ -124,6 +125,18 @@ jobs:
               echo "--- listening ---"; { ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null || true; } | { grep -E ":(5060|5061|5080|7443|8080|8081|443|2223)\b" || echo "no SIP/web ports"; } | awk "{ sub(/users:.*/, \"\"); print \$1, \$5, \$6 }"
               echo "--- host services ---"; { systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null || true; } | { grep -Ei "kamailio|freeswitch|rtpengine|nginx|caddy|docker" || echo "none matching"; }
               echo "--- firewall ---"; { ufw status verbose 2>/dev/null || echo "ufw not present"; } | head -30 || true
+              ';;
+            dump-config)
+              remote="$remote"'
+              [ -n "$SIP_DIR" ] || { echo "no compose deployment found"; exit 1; }
+              cd "$SIP_DIR"
+              # Config only. .env is excluded because it holds live secrets; everything here
+              # is either committed-style config or references env vars by name.
+              echo "VOCIVO_DUMP_BEGIN"
+              tar czf - --exclude=.env --exclude=.git \
+                $( for f in docker-compose.yml .env.example README.md kamailio freeswitch nginx; do [ -e "$f" ] && printf "%s " "$f"; done ) 2>/dev/null | base64 -w0
+              echo
+              echo "VOCIVO_DUMP_END"
               ';;
             show-config)
               remote="$remote"'
