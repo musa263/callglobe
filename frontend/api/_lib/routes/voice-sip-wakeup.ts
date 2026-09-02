@@ -1,9 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
-import { listPushDevices } from '../push-device-store.js';
+import { wakeMobileDevices } from '../mobile-push-dispatcher.js';
 import { sipEdgeAuthorized } from '../sip-edge-auth.js';
 import { sendIncomingCallWebPush } from '../web-push-dispatcher.js';
+
+/** Kamailio holds the INVITE for one 8 s window, so the push must outlive nothing longer. */
+const WAKE_TTL_SECONDS = 45;
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -17,6 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const username = text(req.body?.username, 80);
     const callId = text(req.body?.callId, 120) || `sip-${Date.now()}`;
     const callerName = text(req.body?.callerName, 80);
+    const callerNumber = text(req.body?.from, 40);
     if (!username) return res.status(400).json({ error: 'A SIP username is required.' });
     const directory = await listExtensions();
     const matches = directory.filter((item) => item.status === 'active' && item.sipUsername === username);
@@ -28,16 +32,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       callerName,
       callId,
     })));
-    const devices = (await Promise.all(matches.map((item) => listPushDevices(item.organizationId, item.id)))).flat();
+    // The phone is the product: for a mobile PBX the app is normally killed, so
+    // this VoIP/FCM push is what actually makes the handset ring.
+    const mobile = await wakeMobileDevices({
+      targets: matches.map((item) => ({ organizationId: item.organizationId, extensionId: item.id })),
+      call: {
+        callId,
+        sipUsername: username,
+        callerName: callerName || undefined,
+        callerNumber: callerNumber || undefined,
+        ttlSeconds: WAKE_TTL_SECONDS,
+      },
+    });
     return res.status(200).json({
       ok: true,
+      // Kamailio reads `uuid` and appends it as X-Vocivo-Call-UUID so the ringing
+      // device can match this INVITE to the push it just received. Until Vocivo
+      // mints its own call record id, echoing the SIP Call-ID is that identity.
+      uuid: callId,
       webPush: web.reduce((total, item) => total + item.sent, 0),
-      devices: devices.map((device) => ({
-        platform: device.platform,
-        environment: device.environment,
-        extensionId: device.extensionId,
-        organizationId: device.organizationId,
-      })),
+      mobilePush: { attempted: mobile.attempted, sent: mobile.sent, pruned: mobile.pruned, unavailable: mobile.unavailable },
     });
   } catch (error) {
     return res.status(500).json({ error: publicError(error) });
