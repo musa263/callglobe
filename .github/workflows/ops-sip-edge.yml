@@ -72,19 +72,25 @@ jobs:
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
 
           # The remote script is generated here from fixed fragments; inputs only choose which fragment runs.
+          # NOTE: every discovery pipeline below ends in `|| true`. `head -1` closes the
+          # pipe early, `find` dies of SIGPIPE and `grep` exits 1 when it matches nothing —
+          # under `set -e -o pipefail` either would abort the whole remote script silently.
           remote='
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
+          first_match() { head -1 || true; }
           REPO_DIR="'"$REPO_DIR"'"
           if [ -z "$REPO_DIR" ]; then
             # 1. a checkout in the usual places
-            COMPOSE=$(find /opt /root /home /srv /var /usr/local -maxdepth 6 -path "*/services/sip/docker-compose.yml" 2>/dev/null | head -1)
+            COMPOSE=$( { find /opt /root /home /srv /var /usr/local -maxdepth 6 -path "*/services/sip/docker-compose.yml" 2>/dev/null || true; } | first_match)
             # 2. failing that, ask Docker where the running stack was started from
             if [ -z "$COMPOSE" ]; then
-              COMPOSE=$(docker compose ls --all --format json 2>/dev/null | tr "," "\n" | grep -o "/[^\"]*/services/sip/docker-compose.yml" | head -1)
+              COMPOSE=$( { docker compose ls --all --format json 2>/dev/null || true; } | tr "," "\n" | { grep -o "/[^\"]*/services/sip/docker-compose.yml" || true; } | first_match)
             fi
             # 3. failing that, sweep the disk once (slow, but only when nothing else worked)
-            [ -z "$COMPOSE" ] && COMPOSE=$(find / -xdev -path /proc -prune -o -path "*/services/sip/docker-compose.yml" -print 2>/dev/null | head -1)
+            if [ -z "$COMPOSE" ]; then
+              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -path "*/services/sip/docker-compose.yml" -print 2>/dev/null || true; } | first_match)
+            fi
             [ -n "$COMPOSE" ] && REPO_DIR=$(cd "$(dirname "$COMPOSE")/../.." && pwd)
           fi
           SIP_DIR="$REPO_DIR/services/sip"
@@ -94,26 +100,31 @@ jobs:
           case "$ACTION" in
             discover)
               remote="$remote"'
-              echo "--- os ---"; . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME"; uname -r
+              echo "--- os ---"; ( . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" ) || true; uname -r
               echo "--- docker containers ---"; docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "docker unavailable"
               echo "--- docker compose projects ---"; docker compose ls --all 2>/dev/null || echo "none"
-              echo "--- compose files on disk ---"; find / -xdev -path /proc -prune -o -name "docker-compose.y*ml" -print 2>/dev/null | head -20
-              echo "--- git checkouts ---"; find / -xdev -path /proc -prune -o -maxdepth 6 -name ".git" -print 2>/dev/null | head -20
-              echo "--- listening ---"; (ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null) | grep -E ":(5060|5061|5080|7443|8080|8081|443|2223)\b" || echo "no SIP/web ports"
-              echo "--- host services ---"; systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | grep -Ei "kamailio|freeswitch|rtpengine|nginx|caddy|docker" || echo "none matching"
-              echo "--- firewall ---"; ufw status verbose 2>/dev/null | head -30 || echo "ufw not present"
+              echo "--- compose files on disk ---"; { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -name "docker-compose.y*ml" -print 2>/dev/null || true; } | head -20 || true
+              echo "--- git checkouts ---"; { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -maxdepth 6 -name ".git" -print 2>/dev/null || true; } | head -20 || true
+              echo "--- listening ---"; { ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null || true; } | { grep -E ":(5060|5061|5080|7443|8080|8081|443|2223)\b" || echo "no SIP/web ports"; }
+              echo "--- host services ---"; { systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null || true; } | { grep -Ei "kamailio|freeswitch|rtpengine|nginx|caddy|docker" || echo "none matching"; }
+              echo "--- firewall ---"; { ufw status verbose 2>/dev/null || echo "ufw not present"; } | head -30 || true
               ';;
             status)
               remote="$remote"'
+              [ -d "$SIP_DIR" ] || { echo "no $SIP_DIR on this host — run the discover action"; exit 1; }
               cd "$SIP_DIR"
-              git -C "$REPO_DIR" log -1 --oneline
-              echo "--- flag ---"; grep -E "^VOCIVO_SIP_INBOUND=" .env || echo "VOCIVO_SIP_INBOUND not set (defaults to 0)"
-              echo "--- env keys (values hidden) ---"; sed -E "s/=.*/=<set>/" .env
-              echo "--- containers ---"; docker compose ps
-              echo "--- listening (SIP 5060 Kamailio, 5080 FreeSWITCH external) ---"; (ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null) | grep -E ":(5060|5080|7443)\b" || echo "nothing on 5060/5080"
-              echo "--- host firewall ---"; ufw status 2>/dev/null | head -25 || echo "ufw not present"
-              echo "--- freeswitch sanity ---"; docker compose exec -T freeswitch fs_cli -x "sofia status" 2>/dev/null | head -20 || echo "fs_cli unavailable"
-              echo "--- telnyx gateway ---"; docker compose exec -T freeswitch fs_cli -x "sofia status gateway telnyx" 2>/dev/null | grep -E "Name|Profile|State|PingState|Ping " || echo "gateway status unavailable"
+              git -C "$REPO_DIR" log -1 --oneline || echo "(not a git checkout)"
+              if [ -f .env ]; then
+                echo "--- flag ---"; { grep -E "^VOCIVO_SIP_INBOUND=" .env || echo "VOCIVO_SIP_INBOUND not set (defaults to 0)"; }
+                echo "--- env keys (values hidden) ---"; sed -E "s/=.*/=<set>/" .env
+              else
+                echo "--- flag --- (no .env in $SIP_DIR)"
+              fi
+              echo "--- containers ---"; docker compose ps || docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}" || true
+              echo "--- listening (SIP 5060 Kamailio, 5080 FreeSWITCH external) ---"; { ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null || true; } | { grep -E ":(5060|5080|7443)\b" || echo "nothing on 5060/5080"; }
+              echo "--- host firewall ---"; { ufw status 2>/dev/null || echo "ufw not present"; } | head -25 || true
+              echo "--- freeswitch sanity ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status" 2>/dev/null || echo "fs_cli unavailable"; } | head -20 || true
+              echo "--- telnyx gateway ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status gateway telnyx" 2>/dev/null || true; } | { grep -E "Name|Profile|State|PingState|Ping " || echo "gateway status unavailable"; }
               ';;
             logs)
               remote="$remote"'
@@ -131,7 +142,7 @@ jobs:
               if grep -qE "^VOCIVO_SIP_INBOUND=" .env; then sed -i -E "s/^VOCIVO_SIP_INBOUND=.*/VOCIVO_SIP_INBOUND='"$flag"'/" .env; else echo "VOCIVO_SIP_INBOUND='"$flag"'" >> .env; fi
               grep -E "^VOCIVO_SIP_INBOUND=" .env
               docker compose up -d --force-recreate freeswitch && sleep 8 && docker compose ps freeswitch
-              docker compose logs --tail=40 --no-color freeswitch | grep -E "Vocivo:|xml_curl|mod_http_cache|mod_shout|ERR|CRIT" || true
+              docker compose logs --tail=40 --no-color freeswitch | { grep -E "Vocivo:|xml_curl|mod_http_cache|mod_shout|ERR|CRIT" || true; }
               ';;
             tts-deploy)
               [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is required"; exit 1; }
