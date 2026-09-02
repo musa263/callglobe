@@ -63,7 +63,11 @@ const cacheTtlMs = 15_000;
 let cachedConfig: { expiresAt: number; value: PbxConfig } | null = null;
 let configRequest: Promise<PbxConfig> | null = null;
 
-const weekdays = Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, { enabled: true, start: '00:00', end: '23:59' }]));
+// A factory, not a shared constant: defaultPbxConfig() is called per request and
+// callers may mutate the result, so the default week must never alias across calls.
+function defaultWeekdays() {
+  return Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, { enabled: true, start: '00:00', end: '23:59' }]));
+}
 
 export function defaultPbxConfig(): PbxConfig {
   return {
@@ -77,7 +81,7 @@ export function defaultPbxConfig(): PbxConfig {
     userProfiles: {},
     departments: [{ id: 'general', name: 'General', managerExtension: '' }, { id: 'sales', name: 'Sales', managerExtension: '' }, { id: 'operations', name: 'Operations', managerExtension: '' }],
     outboundRules: [{ id: 'international', name: 'International calling', prefix: '+', extensionRange: '', numberLength: '', department: 'All', routes: ['Vocivo Managed'], enabled: true }],
-    officeHours: { timezone: 'Asia/Riyadh', weekdays, holidays: [] },
+    officeHours: { timezone: 'Asia/Riyadh', weekdays: defaultWeekdays(), holidays: [] },
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
     ai: { enabled: false, assistantId: '', name: 'Global Heritage Receptionist', greeting: 'Welcome to Global Heritage. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '2000', transferEnabled: true, summariesEnabled: true },
     system: { recordingEnabled: false, retentionDays: 30, emergencyCallingEnabled: false },

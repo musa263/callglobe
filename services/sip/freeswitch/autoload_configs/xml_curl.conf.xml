@@ -1,0 +1,21 @@
+<!--
+  Vocivo inbound dialplan binding (installed only when VOCIVO_SIP_INBOUND=1).
+
+  FreeSWITCH asks the Vocivo API for the dialplan of every inbound DID at each
+  routing step; the API renders office hours, voice menus, ring groups, queues
+  and voicemail from the tenant's PBX configuration. A "not found" answer (or
+  any HTTP failure) falls through to the static dialplan in dialplan/public.xml.
+  $${...} placeholders are substituted by docker-entrypoint.sh.
+-->
+<configuration name="xml_curl.conf" description="Vocivo API dialplan">
+  <bindings>
+    <binding name="vocivo-inbound">
+      <param name="gateway-url" value="$${VOCIVO_API_URL}/api/voice/sip-dialplan" bindings="dialplan"/>
+      <param name="gateway-credentials" value="vocivo:$${SIP_EDGE_SECRET}"/>
+      <param name="auth-scheme" value="basic"/>
+      <param name="disable-100-continue" value="true"/>
+      <param name="enable-cacert-check" value="true"/>
+      <param name="timeout" value="8"/>
+    </binding>
+  </bindings>
+</configuration>

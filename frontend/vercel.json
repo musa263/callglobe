@@ -6,6 +6,7 @@
     }
   },
   "rewrites": [
+    { "source": "/api/voice/sip-prompt/:file", "destination": "/api/voice?resource=sip-prompt&file=:file" },
     { "source": "/api/voice/:resource", "destination": "/api/voice?resource=:resource" },
     { "source": "/admin", "destination": "/" },
     { "source": "/landing", "destination": "/landing.html" },

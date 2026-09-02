@@ -60,6 +60,18 @@ export async function storeVoicemailAudio(id: string, sourceUrl: string) {
   return blob.pathname;
 }
 
+/** Stores recording bytes uploaded directly by the SIP edge; deterministic path so a retried upload overwrites instead of duplicating. */
+export async function storeVoicemailAudioBytes(id: string, audio: Buffer, contentType: 'audio/wav' | 'audio/mpeg') {
+  const extension = contentType === 'audio/wav' ? 'wav' : 'mp3';
+  const safeId = id.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 120) || 'recording';
+  const blob = await put(`vocivo/voicemail-audio/${safeId}.${extension}`, audio, {
+    access: 'private',
+    contentType,
+    allowOverwrite: true,
+  });
+  return blob.pathname;
+}
+
 export async function readVoicemailAudio(pathname: string) {
   return get(pathname, { access: 'private' });
 }

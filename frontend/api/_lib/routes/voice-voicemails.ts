@@ -25,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!audio?.stream) return res.status(404).json({ error: 'Recording not found.' });
       const chunks: Buffer[] = [];
       for await (const chunk of audio.stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Type', audio.blob?.contentType || 'audio/mpeg');
       res.setHeader('Cache-Control', 'private, max-age=300');
       return res.status(200).send(Buffer.concat(chunks));
     }

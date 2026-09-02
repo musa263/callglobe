@@ -43,10 +43,14 @@ services:
       TELNYX_SIP_REALM: ${TELNYX_SIP_REALM:-sip.telnyx.com}
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       VOCIVO_SIP_INBOUND: ${VOCIVO_SIP_INBOUND:-0}
+      VOCIVO_SIP_RECORDINGS_DIR: ${VOCIVO_SIP_RECORDINGS_DIR:-/var/lib/vocivo/recordings}
     volumes:
       - freeswitch-etc:/etc/freeswitch
+      - freeswitch-recordings:${VOCIVO_SIP_RECORDINGS_DIR:-/var/lib/vocivo/recordings}
       - ./freeswitch:/opt/vocivo-fs:ro
     entrypoint: ["/bin/sh", "/opt/vocivo-fs/docker-entrypoint.sh"]
 
 volumes:
   freeswitch-etc:
+  # Voicemail recordings wait here only until http_put hands them to the API.
+  freeswitch-recordings:
