@@ -91,7 +91,10 @@ jobs:
               echo "--- flag ---"; grep -E "^VOCIVO_SIP_INBOUND=" .env || echo "VOCIVO_SIP_INBOUND not set (defaults to 0)"
               echo "--- env keys (values hidden) ---"; sed -E "s/=.*/=<set>/" .env
               echo "--- containers ---"; docker compose ps
+              echo "--- listening (SIP 5060 Kamailio, 5080 FreeSWITCH external) ---"; (ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null) | grep -E ":(5060|5080|7443)\b" || echo "nothing on 5060/5080"
+              echo "--- host firewall ---"; ufw status 2>/dev/null | head -25 || echo "ufw not present"
               echo "--- freeswitch sanity ---"; docker compose exec -T freeswitch fs_cli -x "sofia status" 2>/dev/null | head -20 || echo "fs_cli unavailable"
+              echo "--- telnyx gateway ---"; docker compose exec -T freeswitch fs_cli -x "sofia status gateway telnyx" 2>/dev/null | grep -E "Name|Profile|State|PingState|Ping " || echo "gateway status unavailable"
               ';;
             logs)
               remote="$remote"'

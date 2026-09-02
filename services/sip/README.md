@@ -20,6 +20,15 @@ docker compose up -d
 
 Registered web E.164 INVITEs are bridged to `sofia/gateway/telnyx/+E164`. FreeSWITCH `public` treats numbers from this host as outbound origination; numbers arriving from Telnyx stay on the inbound DID path.
 
+## Who may place calls
+
+Kamailio verifies Digest credentials through the Vocivo API (`/api/voice/sip-auth`) for REGISTER **and** for every
+initial INVITE that does not come from this host itself (`127.0.0.1` / `PUBLIC_IP`, i.e. FreeSWITCH forking an inbound
+DID back to registered contacts). Unknown INVITEs get `407 Proxy Authentication Required`; SIP.js and the native stacks
+answer the challenge with the extension's credentials automatically. Without this, any internet host could send an
+INVITE with an E.164 target and an `X-Vocivo-Caller-ID` header and have it bridged to the Telnyx trunk. The carrier
+therefore must deliver inbound to FreeSWITCH's external profile on **5080**, not to Kamailio on 5060.
+
 ## Telnyx trunk
 
 Create an FQDN or IP connection in Mission Control pointing at this host. Put the SIP username/password (or IP ACL) in `.env`. Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`.

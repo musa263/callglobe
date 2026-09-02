@@ -50,6 +50,7 @@ them from the secrets store.
 |---|---|
 | `list-connections` | Call Control applications, FQDN/IP trunks, credential connections — with ids. |
 | `show-connection` | One connection's inbound/outbound settings, its authorised IPs or FQDNs (where Telnyx will send inbound INVITEs), and the numbers on it. Run this on the trunk **before** the first `route-number` and confirm the IP is the SIP edge on port 5080. |
+| `set-trunk-port` | Moves every authorised IP entry on an IP trunk to `port` (5060/5061/5080). Inbound must land on **5080** — FreeSWITCH's external profile; 5060 is Kamailio, which challenges unknown INVITEs with 407 and would reject the carrier. |
 | `list-numbers` | Every number with its current connection. |
 | `show-number` | One number's routing and messaging profile. |
 | `route-number` | **The cut-over.** Re-points one DID to a connection id. Pointing a DID at the FQDN/IP trunk moves its inbound calls off Call Control and onto the SIP edge — do this one number at a time, after `enable-inbound` has been verified with a test DID. |
@@ -57,7 +58,12 @@ them from the secrets store.
 ## Cut-over order for inbound
 
 1. Ops · Vercel → `show VOCIVO_VOICE_EDGE`; set to `sip` and verify a browser call (internal, then outbound).
-2. Ops · Droplets → `deploy`, then `status`.
-3. Ops · Droplets → `enable-inbound`; Ops · Vercel → `set VOCIVO_SIP_INBOUND 1`.
-4. Ops · Telnyx → `list-connections` to find the trunk id; `route-number` for **one test DID**; call it; check `logs`.
-5. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id.
+2. Ops · Droplets → `deploy`, then `status` (confirm 5060 and 5080 are listening and the firewall allows UDP 5080 in).
+3. Ops · Telnyx → `list-connections` to find the IP trunk id; `show-connection` on it; `set-trunk-port 5080` if the
+   authorised IP still says 5060.
+4. Ops · Droplets → `enable-inbound`; Ops · Vercel → `set VOCIVO_SIP_INBOUND 1`.
+5. Ops · Telnyx → `route-number` for **one test DID**; call it; check `logs`.
+6. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id.
+
+Known ids (this account, September 2026): Call Control application `3033560124078688149` ("Vocivo Voice System"),
+IP trunk `3035898149177656815` ("Vocivo Dedicated PBX" → 168.144.183.82). The account currently has a single DID.

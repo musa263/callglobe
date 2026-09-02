@@ -1,8 +1,9 @@
 name: Ops · Telnyx
 
-# Manual, read-mostly operations against Telnyx. The only write is re-pointing
-# ONE phone number to a connection per run — the cut-over step that moves a DID
-# from the Call Control application to the SIP trunk. Nothing else is mutable here.
+# Manual, read-mostly operations against Telnyx. The only writes are
+# set-trunk-port (the port on an IP trunk's authorised IP entries) and
+# route-number (re-pointing ONE phone number to a connection per run — the
+# cut-over step that moves a DID from Call Control to the SIP trunk).
 #
 # Required repository secret: TELNYX_API_KEY
 
@@ -13,13 +14,17 @@ on:
         description: What to do
         required: true
         type: choice
-        options: [list-connections, show-connection, list-numbers, show-number, route-number]
+        options: [list-connections, show-connection, set-trunk-port, list-numbers, show-number, route-number]
       number:
         description: E.164 phone number (for show-number / route-number), e.g. +15551230000
         required: false
         type: string
       connection_id:
-        description: Connection id (for show-connection / route-number) — the FQDN/IP SIP trunk connection
+        description: Connection id (for show-connection / set-trunk-port / route-number) — the FQDN/IP SIP trunk connection
+        required: false
+        type: string
+      port:
+        description: SIP port Telnyx should deliver inbound INVITEs to (for set-trunk-port) — 5080 is FreeSWITCH's external profile on the edge
         required: false
         type: string
 
@@ -38,6 +43,7 @@ jobs:
           ACTION: ${{ inputs.action }}
           NUMBER: ${{ inputs.number }}
           CONNECTION_ID: ${{ inputs.connection_id }}
+          PORT: ${{ inputs.port }}
         run: |
           set -euo pipefail
           case "$ACTION" in
@@ -45,9 +51,12 @@ jobs:
               [[ "$NUMBER" =~ ^\+[1-9][0-9]{6,14}$ ]] || { echo "::error::number must be E.164, e.g. +15551230000"; exit 1; };;
           esac
           case "$ACTION" in
-            show-connection|route-number)
+            show-connection|set-trunk-port|route-number)
               [[ "$CONNECTION_ID" =~ ^[0-9]{6,32}$ ]] || { echo "::error::connection_id must be a numeric Telnyx connection id"; exit 1; };;
           esac
+          if [ "$ACTION" = set-trunk-port ]; then
+            [[ "$PORT" =~ ^(5060|5061|5080)$ ]] || { echo "::error::port must be 5060, 5061 or 5080"; exit 1; }
+          fi
 
       - name: Run
         env:
@@ -55,6 +64,7 @@ jobs:
           ACTION: ${{ inputs.action }}
           NUMBER: ${{ inputs.number }}
           CONNECTION_ID: ${{ inputs.connection_id }}
+          PORT: ${{ inputs.port }}
         run: |
           set -euo pipefail
           [ -n "$TELNYX_API_KEY" ] || { echo "::error::TELNYX_API_KEY secret is missing"; exit 1; }
@@ -98,6 +108,19 @@ jobs:
                   fi
                 done
               } | report "connection $CONNECTION_ID"
+              ;;
+            set-trunk-port)
+              {
+                # Every authorised IP on the connection is where Telnyx delivers inbound; move them all to the new port.
+                ids=$(api "$base/ips?filter[connection_id]=$CONNECTION_ID&page[size]=50" | jq -r '.data[].id')
+                [ -n "$ids" ] || { echo "::error::connection $CONNECTION_ID has no authorised IP entries (is it an IP connection?)"; exit 1; }
+                for ipid in $ids; do
+                  before=$(api "$base/ips/$ipid" | jq -r '.data | "\(.ip_address):\(.port // 5060)"')
+                  api -X PATCH "$base/ips/$ipid" -d "{\"port\":$PORT}" >/dev/null
+                  after=$(api "$base/ips/$ipid" | jq -r '.data | "\(.ip_address):\(.port // 5060)"')
+                  echo "$before -> $after"
+                done
+              } | report "trunk port $CONNECTION_ID"
               ;;
             list-numbers)
               {
