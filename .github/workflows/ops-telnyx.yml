@@ -72,7 +72,16 @@ jobs:
           api() { curl --globoff --fail-with-body --silent --show-error --max-time 30 -H "Authorization: Bearer $TELNYX_API_KEY" -H "Content-Type: application/json" "$@"; }
           base=https://api.telnyx.com/v2
           # Mirror each report into a check-run annotation so it is readable through the API, not only the raw log.
-          report() { local title=$1; shift; local body; body=$(cat); printf '%s\n' "$body"; echo "::notice title=${title}::${body//$'\n'/%0A}"; }
+          # Full output to the job summary (readable in full through the checks API);
+          # a short head to an annotation for the run list.
+          report() {
+            local title=$1 body head
+            body=$(cat)
+            printf '%s\n' "$body"
+            { echo "### $title"; echo; echo '```'; printf '%s\n' "$body"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            head=${body:0:2000}
+            echo "::notice title=${title}::${head//$'\n'/%0A}"
+          }
 
           case "$ACTION" in
             list-connections)

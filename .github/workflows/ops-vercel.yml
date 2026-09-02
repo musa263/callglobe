@@ -89,6 +89,7 @@ jobs:
             fi
             rm -f ".env.ops.$target"
           done | tee /tmp/show.txt
+          { echo "### show $NAME"; echo; echo '```'; cat /tmp/show.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=show $NAME::$(tr '\n' ' ' < /tmp/show.txt)"
 
       - name: Set
