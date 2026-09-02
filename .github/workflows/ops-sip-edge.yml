@@ -1,0 +1,136 @@
+name: Ops · Droplets
+
+# Manual operations on the DigitalOcean droplets over SSH. Every action is a
+# fixed script chosen from the list below — free-form commands are deliberately
+# not accepted, so a workflow run can never do more than what is written here.
+#
+# Required repository secrets:
+#   OPS_SSH_KEY        private key whose public half is in root's authorized_keys on the droplets
+#   SIP_EDGE_HOST      IP or hostname of vocivo-sip
+#   PBX_HOST           IP or hostname of vocivo-pbx-01b (optional; only for host=pbx)
+#   TTS_SERVICE_SECRET shared TTS bearer secret (only for tts-deploy)
+# Optional repository variables:
+#   OPS_SSH_USER       default root
+#   SIP_EDGE_REPO_DIR  checkout path on the droplet; auto-discovered when unset
+#   TTS_PUBLIC_BASE_URL  https URL the TTS service is reachable at (only for tts-deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do on the droplet
+        required: true
+        type: choice
+        options:
+          - status
+          - logs
+          - deploy
+          - enable-inbound
+          - disable-inbound
+          - tts-deploy
+          - tts-status
+      host:
+        description: Which droplet
+        required: true
+        type: choice
+        default: sip
+        options: [sip, pbx]
+
+concurrency:
+  group: ops-droplet-${{ inputs.host }}
+  cancel-in-progress: false
+
+jobs:
+  ssh:
+    name: ${{ inputs.action }} on ${{ inputs.host }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Prepare SSH
+        env:
+          OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
+          HOST: ${{ inputs.host == 'pbx' && secrets.PBX_HOST || secrets.SIP_EDGE_HOST }}
+        run: |
+          set -euo pipefail
+          [ -n "$OPS_SSH_KEY" ] || { echo "::error::OPS_SSH_KEY secret is missing"; exit 1; }
+          [ -n "$HOST" ] || { echo "::error::host secret is missing"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OPS_SSH_KEY" > ~/.ssh/ops_key && chmod 600 ~/.ssh/ops_key
+          ssh-keyscan -T 10 -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "HOST=$HOST" >> "$GITHUB_ENV"
+
+      - name: Run
+        env:
+          ACTION: ${{ inputs.action }}
+          SSH_USER: ${{ vars.OPS_SSH_USER || 'root' }}
+          REPO_DIR: ${{ vars.SIP_EDGE_REPO_DIR }}
+          TTS_SERVICE_SECRET: ${{ secrets.TTS_SERVICE_SECRET }}
+          TTS_PUBLIC_BASE_URL: ${{ vars.TTS_PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
+
+          # The remote script is generated here from fixed fragments; inputs only choose which fragment runs.
+          remote='
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          REPO_DIR="'"$REPO_DIR"'"
+          if [ -z "$REPO_DIR" ]; then
+            COMPOSE=$(find /opt /root /home /srv -maxdepth 5 -path "*/services/sip/docker-compose.yml" 2>/dev/null | head -1)
+            [ -n "$COMPOSE" ] && REPO_DIR=$(cd "$(dirname "$COMPOSE")/../.." && pwd)
+          fi
+          SIP_DIR="$REPO_DIR/services/sip"
+          echo "repo: ${REPO_DIR:-NOT FOUND}"
+          '
+
+          case "$ACTION" in
+            status)
+              remote="$remote"'
+              cd "$SIP_DIR"
+              git -C "$REPO_DIR" log -1 --oneline
+              echo "--- flag ---"; grep -E "^VOCIVO_SIP_INBOUND=" .env || echo "VOCIVO_SIP_INBOUND not set (defaults to 0)"
+              echo "--- env keys (values hidden) ---"; sed -E "s/=.*/=<set>/" .env
+              echo "--- containers ---"; docker compose ps
+              echo "--- freeswitch sanity ---"; docker compose exec -T freeswitch fs_cli -x "sofia status" 2>/dev/null | head -20 || echo "fs_cli unavailable"
+              ';;
+            logs)
+              remote="$remote"'
+              cd "$SIP_DIR" && docker compose logs --tail=200 --no-color freeswitch kamailio rtpengine
+              ';;
+            deploy)
+              remote="$remote"'
+              cd "$REPO_DIR" && git fetch --quiet origin && git checkout --quiet main && git pull --ff-only --quiet origin main && git log -1 --oneline
+              cd "$SIP_DIR" && docker compose pull --quiet && docker compose up -d --remove-orphans && docker compose ps
+              ';;
+            enable-inbound|disable-inbound)
+              flag=$([ "$ACTION" = enable-inbound ] && echo 1 || echo 0)
+              remote="$remote"'
+              cd "$SIP_DIR"
+              if grep -qE "^VOCIVO_SIP_INBOUND=" .env; then sed -i -E "s/^VOCIVO_SIP_INBOUND=.*/VOCIVO_SIP_INBOUND='"$flag"'/" .env; else echo "VOCIVO_SIP_INBOUND='"$flag"'" >> .env; fi
+              grep -E "^VOCIVO_SIP_INBOUND=" .env
+              docker compose up -d --force-recreate freeswitch && sleep 8 && docker compose ps freeswitch
+              docker compose logs --tail=40 --no-color freeswitch | grep -E "Vocivo:|xml_curl|mod_http_cache|mod_shout|ERR|CRIT" || true
+              ';;
+            tts-deploy)
+              [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is required"; exit 1; }
+              [[ "$TTS_PUBLIC_BASE_URL" =~ ^https:// ]] || { echo "::error::TTS_PUBLIC_BASE_URL variable must be an https URL"; exit 1; }
+              remote="$remote"'
+              cd "$REPO_DIR" && git fetch --quiet origin && git pull --ff-only --quiet origin main
+              install -d -m 700 /etc/vocivo
+              umask 077; printf "TTS_SERVICE_SECRET=%s\nPUBLIC_BASE_URL=%s\nTTS_CACHE_TTL_DAYS=30\n" "'"$TTS_SERVICE_SECRET"'" "'"$TTS_PUBLIC_BASE_URL"'" > /etc/vocivo/tts.env
+              cd "$REPO_DIR/services/tts" && docker build -q -t vocivo-tts . >/dev/null
+              docker rm -f vocivo-tts >/dev/null 2>&1 || true
+              docker run -d --restart unless-stopped --name vocivo-tts -p 127.0.0.1:8000:8000 --env-file /etc/vocivo/tts.env -v vocivo-tts-cache:/var/cache/vocivo-tts vocivo-tts >/dev/null
+              sleep 5; docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}"
+              curl -s -o /dev/null -w "health (authorised): %{http_code}\n" -H "Authorization: Bearer $(sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env)" http://127.0.0.1:8000/health
+              curl -s -o /dev/null -w "health (no auth, expect 401): %{http_code}\n" http://127.0.0.1:8000/health
+              echo "NOTE: put an https reverse proxy in front of 127.0.0.1:8000 serving '"$TTS_PUBLIC_BASE_URL"'"
+              ';;
+            tts-status)
+              remote="$remote"'
+              docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}" || true
+              curl -s -o /dev/null -w "health (no auth, expect 401 or 503): %{http_code}\n" http://127.0.0.1:8000/health || echo "not listening"
+              ';;
+          esac
+
+          ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" 'bash -s' <<< "$remote"

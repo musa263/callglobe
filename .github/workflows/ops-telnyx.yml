@@ -1,0 +1,92 @@
+name: Ops · Telnyx
+
+# Manual, read-mostly operations against Telnyx. The only write is re-pointing
+# ONE phone number to a connection per run — the cut-over step that moves a DID
+# from the Call Control application to the SIP trunk. Nothing else is mutable here.
+#
+# Required repository secret: TELNYX_API_KEY
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        required: true
+        type: choice
+        options: [list-connections, list-numbers, show-number, route-number]
+      number:
+        description: E.164 phone number (for show-number / route-number), e.g. +15551230000
+        required: false
+        type: string
+      connection_id:
+        description: Target connection id (for route-number) — the FQDN/IP SIP trunk connection
+        required: false
+        type: string
+
+concurrency:
+  group: ops-telnyx
+  cancel-in-progress: false
+
+jobs:
+  telnyx:
+    name: ${{ inputs.action }} ${{ inputs.number }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate inputs
+        env:
+          ACTION: ${{ inputs.action }}
+          NUMBER: ${{ inputs.number }}
+          CONNECTION_ID: ${{ inputs.connection_id }}
+        run: |
+          set -euo pipefail
+          case "$ACTION" in
+            show-number|route-number)
+              [[ "$NUMBER" =~ ^\+[1-9][0-9]{6,14}$ ]] || { echo "::error::number must be E.164, e.g. +15551230000"; exit 1; };;
+          esac
+          if [ "$ACTION" = route-number ]; then
+            [[ "$CONNECTION_ID" =~ ^[0-9]{6,32}$ ]] || { echo "::error::connection_id must be a numeric Telnyx connection id"; exit 1; }
+          fi
+
+      - name: Run
+        env:
+          TELNYX_API_KEY: ${{ secrets.TELNYX_API_KEY }}
+          ACTION: ${{ inputs.action }}
+          NUMBER: ${{ inputs.number }}
+          CONNECTION_ID: ${{ inputs.connection_id }}
+        run: |
+          set -euo pipefail
+          [ -n "$TELNYX_API_KEY" ] || { echo "::error::TELNYX_API_KEY secret is missing"; exit 1; }
+          api() { curl --fail-with-body --silent --show-error --max-time 30 -H "Authorization: Bearer $TELNYX_API_KEY" -H "Content-Type: application/json" "$@"; }
+          base=https://api.telnyx.com/v2
+
+          case "$ACTION" in
+            list-connections)
+              echo "== Call Control applications =="
+              api "$base/call_control_applications?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.application_name)\tactive=\(.active)"'
+              echo; echo "== FQDN connections (SIP trunks by hostname) =="
+              api "$base/fqdn_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+              echo; echo "== IP connections (SIP trunks by IP) =="
+              api "$base/ip_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+              echo; echo "== Credential connections (WebRTC / SIP credentials) =="
+              api "$base/credential_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+              ;;
+            list-numbers)
+              printf '%-18s %-22s %-36s %s\n' NUMBER CONNECTION_ID CONNECTION_NAME STATUS
+              for page in 1 2 3 4; do
+                api "$base/phone_numbers?page[size]=250&page[number]=$page" | jq -r '.data[] | [.phone_number, (.connection_id // "-"), (.connection_name // "-"), .status] | @tsv' \
+                  | awk -F'\t' '{ printf "%-18s %-22s %-36s %s\n", $1, $2, $3, $4 }'
+              done
+              ;;
+            show-number)
+              api "$base/phone_numbers?filter[phone_number]=$(printf %s "$NUMBER" | sed 's/+/%2B/')" | jq '.data[] | {id, phone_number, status, connection_id, connection_name, messaging_profile_id, emergency_enabled}'
+              ;;
+            route-number)
+              id=$(api "$base/phone_numbers?filter[phone_number]=$(printf %s "$NUMBER" | sed 's/+/%2B/')" | jq -r '.data[0].id // empty')
+              [ -n "$id" ] || { echo "::error::$NUMBER is not on this Telnyx account"; exit 1; }
+              echo "before:"; api "$base/phone_numbers/$id" | jq '.data | {phone_number, connection_id, connection_name}'
+              api -X PATCH "$base/phone_numbers/$id" -d "{\"connection_id\":\"$CONNECTION_ID\"}" >/dev/null
+              echo "after:";  api "$base/phone_numbers/$id" | jq '.data | {phone_number, connection_id, connection_name}'
+              echo "::notice::$NUMBER now routes to connection $CONNECTION_ID. Inbound on this DID now arrives at that connection instead of Call Control."
+              ;;
+          esac

@@ -1,0 +1,139 @@
+name: Ops · Vercel
+
+# Manual operations against the Vercel project. Secrets never reach the log:
+# only an allowlist of non-secret variable names is ever printed by "show".
+#
+# Required repository secret: VERCEL_TOKEN (Vercel account token, "musa263's projects" scope).
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        required: true
+        type: choice
+        options: [show, set, delete, redeploy]
+      name:
+        description: Environment variable name (for show / set / delete)
+        required: false
+        type: string
+      value:
+        description: New value (for set). Leave blank for show / delete / redeploy.
+        required: false
+        type: string
+      environment:
+        description: Which Vercel environment(s)
+        required: true
+        type: choice
+        default: production
+        options: [production, preview, development, all]
+      redeploy:
+        description: Redeploy production after set/delete so the change takes effect
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: ops-vercel
+  cancel-in-progress: false
+
+env:
+  VERCEL_ORG_ID: team_jD7fFcfetmvjcQjSVYHqrSlu
+  VERCEL_PROJECT_ID: prj_KpUUSMocbJHeVOnH2YCjRTW5L6IB
+
+jobs:
+  vercel:
+    name: ${{ inputs.action }} ${{ inputs.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate inputs
+        env:
+          ACTION: ${{ inputs.action }}
+          NAME: ${{ inputs.name }}
+          VALUE: ${{ inputs.value }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" != "redeploy" ]; then
+            [[ "$NAME" =~ ^[A-Z][A-Z0-9_]{1,80}$ ]] || { echo "::error::name must look like VOCIVO_VOICE_EDGE"; exit 1; }
+          fi
+          if [ "$ACTION" = "set" ] && [ -z "$VALUE" ]; then echo "::error::set needs a value"; exit 1; fi
+          # Never let a secret value appear in logs even by accident.
+          if [ -n "$VALUE" ]; then echo "::add-mask::$VALUE"; fi
+
+      - name: Show
+        if: inputs.action == 'show'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          NAME: ${{ inputs.name }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          cd frontend
+          SAFE_TO_PRINT="VOCIVO_VOICE_EDGE VOCIVO_SIP_INBOUND VOCIVO_SIP_DOMAIN VOCIVO_SIP_REALM VOCIVO_SIP_WSS_URI VITE_APP_URL TTS_SERVICE_URL WEB_PUSH_SUBJECT APNS_TOPIC APNS_TEAM_ID APNS_KEY_ID"
+          for target in $([ "$ENVIRONMENT" = all ] && echo production preview development || echo "$ENVIRONMENT"); do
+            npx --yes vercel@latest env pull ".env.ops.$target" --environment "$target" --yes --token "$VERCEL_TOKEN" >/dev/null
+            line=$(grep -E "^${NAME}=" ".env.ops.$target" || true)
+            if [ -z "$line" ]; then
+              echo "$target: $NAME is NOT SET"
+            elif echo " $SAFE_TO_PRINT " | grep -q " $NAME "; then
+              echo "$target: $line" | sed 's/^\([^=]*\)="\(.*\)"$/\1=\2/'
+            else
+              echo "$target: $NAME is set (value hidden: not on the non-secret allowlist)"
+            fi
+            rm -f ".env.ops.$target"
+          done
+
+      - name: Set
+        if: inputs.action == 'set'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          NAME: ${{ inputs.name }}
+          VALUE: ${{ inputs.value }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          cd frontend
+          for target in $([ "$ENVIRONMENT" = all ] && echo production preview development || echo "$ENVIRONMENT"); do
+            npx --yes vercel@latest env rm "$NAME" "$target" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
+            printf '%s' "$VALUE" | npx --yes vercel@latest env add "$NAME" "$target" --token "$VERCEL_TOKEN" >/dev/null
+            echo "$target: $NAME updated"
+          done
+
+      - name: Delete
+        if: inputs.action == 'delete'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          NAME: ${{ inputs.name }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          cd frontend
+          for target in $([ "$ENVIRONMENT" = all ] && echo production preview development || echo "$ENVIRONMENT"); do
+            if npx --yes vercel@latest env rm "$NAME" "$target" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1; then
+              echo "$target: $NAME removed"
+            else
+              echo "$target: $NAME was not set"
+            fi
+          done
+
+      - name: Redeploy production
+        if: inputs.action == 'redeploy' || ((inputs.action == 'set' || inputs.action == 'delete') && inputs.redeploy)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd frontend
+          npx --yes vercel@latest pull --yes --environment production --token "$VERCEL_TOKEN" >/dev/null
+          url=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" | tail -n 1)
+          echo "deployed: $url"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --fail --silent --max-time 10 "${url%/}/api/health" >/dev/null; then echo "health: ok"; exit 0; fi
+            sleep $((attempt * 5))
+          done
+          echo "::warning::deployment did not answer /api/health within the retry window"
