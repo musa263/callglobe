@@ -11,9 +11,9 @@ Repository → **Settings → Secrets and variables → Actions**.
 
 | Secret | Used by | How to get it |
 |---|---|---|
-| `VERCEL_TOKEN` | Ops · Vercel | vercel.com → Account Settings → Tokens. Scope: musa263's projects. |
+| `VERCEL_TOKEN` | Ops · Vercel | vercel.com → Account Settings → Tokens. Scope: **musa263's projects** (the team). A project-scoped token cannot read project settings and the CLI fails with "Could not retrieve Project Settings". |
 | `TELNYX_API_KEY` | Ops · Telnyx | Telnyx Mission Control → Auth → API Keys. |
-| `OPS_SSH_KEY` | Ops · Droplets | Private half of a dedicated key: `ssh-keygen -t ed25519 -f ~/.ssh/vocivo-ops -N ""`, then `ssh-copy-id -i ~/.ssh/vocivo-ops.pub root@<droplet>` for each droplet, then paste the contents of `~/.ssh/vocivo-ops`. |
+| `OPS_SSH_KEY` | Ops · Droplets | Private half of a dedicated key: `ssh-keygen -t ed25519 -f ~/.ssh/vocivo-ops -N ""`, then `ssh-copy-id -i ~/.ssh/vocivo-ops.pub root@<droplet>` for each droplet, then paste the contents of `~/.ssh/vocivo-ops`. If the droplet only accepts key logins (`ssh-copy-id` → "Permission denied (publickey)"), append the public key to `/root/.ssh/authorized_keys` from the DigitalOcean web console instead. |
 | `SIP_EDGE_HOST` | Ops · Droplets | `168.144.183.82` (vocivo-sip) |
 | `PBX_HOST` | Ops · Droplets | `68.183.244.215` (vocivo-pbx-01b), optional |
 | `TTS_SERVICE_SECRET` | Ops · Droplets (tts-deploy) | `openssl rand -hex 32`. Set the **same value** on Vercel with Ops · Vercel → set. |
@@ -49,6 +49,7 @@ them from the secrets store.
 | action | effect |
 |---|---|
 | `list-connections` | Call Control applications, FQDN/IP trunks, credential connections — with ids. |
+| `show-connection` | One connection's inbound/outbound settings, its authorised IPs or FQDNs (where Telnyx will send inbound INVITEs), and the numbers on it. Run this on the trunk **before** the first `route-number` and confirm the IP is the SIP edge on port 5080. |
 | `list-numbers` | Every number with its current connection. |
 | `show-number` | One number's routing and messaging profile. |
 | `route-number` | **The cut-over.** Re-points one DID to a connection id. Pointing a DID at the FQDN/IP trunk moves its inbound calls off Call Control and onto the SIP edge — do this one number at a time, after `enable-inbound` has been verified with a test DID. |

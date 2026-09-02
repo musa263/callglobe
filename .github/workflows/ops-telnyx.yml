@@ -13,13 +13,13 @@ on:
         description: What to do
         required: true
         type: choice
-        options: [list-connections, list-numbers, show-number, route-number]
+        options: [list-connections, show-connection, list-numbers, show-number, route-number]
       number:
         description: E.164 phone number (for show-number / route-number), e.g. +15551230000
         required: false
         type: string
       connection_id:
-        description: Target connection id (for route-number) — the FQDN/IP SIP trunk connection
+        description: Connection id (for show-connection / route-number) — the FQDN/IP SIP trunk connection
         required: false
         type: string
 
@@ -44,9 +44,10 @@ jobs:
             show-number|route-number)
               [[ "$NUMBER" =~ ^\+[1-9][0-9]{6,14}$ ]] || { echo "::error::number must be E.164, e.g. +15551230000"; exit 1; };;
           esac
-          if [ "$ACTION" = route-number ]; then
-            [[ "$CONNECTION_ID" =~ ^[0-9]{6,32}$ ]] || { echo "::error::connection_id must be a numeric Telnyx connection id"; exit 1; }
-          fi
+          case "$ACTION" in
+            show-connection|route-number)
+              [[ "$CONNECTION_ID" =~ ^[0-9]{6,32}$ ]] || { echo "::error::connection_id must be a numeric Telnyx connection id"; exit 1; };;
+          esac
 
       - name: Run
         env:
@@ -75,6 +76,28 @@ jobs:
                 echo; echo "== Credential connections (WebRTC / SIP credentials) =="
                 api "$base/credential_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
               } | report connections
+              ;;
+            show-connection)
+              {
+                # Try each connection type; exactly one will answer for a given id.
+                for kind in ip_connections fqdn_connections credential_connections call_control_applications; do
+                  if body=$(api "$base/$kind/$CONNECTION_ID" 2>/dev/null); then
+                    echo "== $kind/$CONNECTION_ID =="
+                    echo "$body" | jq '.data | {connection_name, application_name, active, transport_protocol, inbound: (.inbound // {}), outbound: (.outbound // {}), webhook_event_url, anchorsite_override, default_on_hold_comfort_noise_enabled} | with_entries(select(.value != null))'
+                    case "$kind" in
+                      ip_connections)
+                        echo "-- authorised IPs (Telnyx sends inbound INVITEs here) --"
+                        api "$base/ips?filter[connection_id]=$CONNECTION_ID&page[size]=50" | jq -r '.data[] | "\(.ip_address):\(.port // 5060)"';;
+                      fqdn_connections)
+                        echo "-- FQDNs --"
+                        api "$base/fqdns?filter[connection_id]=$CONNECTION_ID&page[size]=50" | jq -r '.data[] | "\(.fqdn):\(.port // 5060) (\(.dns_record_type))"';;
+                    esac
+                    echo "-- numbers currently on this connection --"
+                    api "$base/phone_numbers?filter[connection_id]=$CONNECTION_ID&page[size]=250" | jq -r '.data[] | .phone_number' | sed 's/^/  /'
+                    break
+                  fi
+                done
+              } | report "connection $CONNECTION_ID"
               ;;
             list-numbers)
               {
