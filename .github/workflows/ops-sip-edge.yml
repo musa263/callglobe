@@ -205,10 +205,19 @@ jobs:
           out=$(ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" 'bash -s' <<< "$remote" 2>&1); rc=$?
           set -e
           printf '%s\n' "$out"
-          # The full output goes to the job summary, which the checks API returns in full;
-          # annotations are capped and the log viewer is virtualised, so neither is readable
-          # end-to-end from outside. The annotation keeps a short head for the run list.
           { echo "### \`$ACTION\` on \`$HOST\` — exit $rc"; echo; echo '```'; printf '%s\n' "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          head=${out:0:2000}
-          if [ $rc -eq 0 ]; then echo "::notice title=$ACTION on $HOST::${head//$'\n'/%0A}"; else echo "::error title=$ACTION on $HOST failed (exit $rc)::${head//$'\n'/%0A}"; fi
+          # GitHub caps a single annotation and the log viewer is virtualised, so long output is
+          # emitted as a numbered series of annotations — the annotations API returns them all.
+          emit() {
+            local title=$1 body=$2 level=$3 total i=0 part
+            local -a parts=()
+            while [ -n "$body" ]; do parts+=("${body:0:2500}"); body=${body:2500}; done
+            [ ${#parts[@]} -eq 0 ] && parts=("(no output)")
+            total=${#parts[@]}
+            for part in "${parts[@]}"; do
+              i=$((i+1))
+              echo "::${level} title=${title} (${i}/${total})::${part//$'\n'/%0A}"
+            done
+          }
+          if [ $rc -eq 0 ]; then emit "$ACTION on $HOST" "$out" notice; else emit "$ACTION on $HOST failed (exit $rc)" "$out" error; fi
           exit $rc
