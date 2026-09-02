@@ -1,0 +1,125 @@
+import type { VoiceObservable } from './observable';
+
+/**
+ * Engine-neutral vocabulary for a call.
+ *
+ * These are deliberately the same strings as `TelnyxCallState` and
+ * `TelnyxConnectionState`, which are string enums whose values equal their
+ * names. That means an engine built on Vocivo's own SIP edge can drive the
+ * existing `VoiceContext`, `callState.ts` and `CallLifecycleRegistry` without
+ * translating at every boundary — and without the app depending on the Telnyx
+ * SDK for its own vocabulary.
+ */
+export type VoiceCallState = 'CONNECTING' | 'RINGING' | 'ACTIVE' | 'HELD' | 'ENDED' | 'FAILED' | 'DROPPED';
+
+export type VoiceConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR';
+
+export type VoiceInviteHeader = { name: string; value: string };
+
+/**
+ * The surface `VoiceContext` uses on a call. Kept to exactly what the app
+ * touches, so an engine cannot be "nearly" compatible.
+ */
+export type VoiceCall = {
+  readonly callId: string;
+  readonly isIncoming: boolean;
+  readonly callerName: string;
+  readonly callerNumber: string;
+  readonly destination: string;
+  readonly inviteCustomHeaders: VoiceInviteHeader[];
+
+  readonly currentState: VoiceCallState;
+  readonly currentIsMuted: boolean;
+  readonly currentIsHeld: boolean;
+  readonly currentDuration: number;
+
+  readonly callState$: VoiceObservable<VoiceCallState>;
+  readonly isMuted$: VoiceObservable<boolean>;
+  readonly isHeld$: VoiceObservable<boolean>;
+
+  answer(): Promise<void>;
+  hangup(): Promise<void>;
+  hold(): Promise<void>;
+  resume(): Promise<void>;
+  toggleMute(): Promise<void>;
+  dtmf(digit: string): Promise<void>;
+};
+
+export type VoiceClient = {
+  readonly connectionState$: VoiceObservable<VoiceConnectionState>;
+  readonly calls$: VoiceObservable<VoiceCall[]>;
+  readonly activeCall$: VoiceObservable<VoiceCall | null>;
+
+  readonly currentConnectionState: VoiceConnectionState;
+  readonly currentCalls: VoiceCall[];
+  readonly currentActiveCall: VoiceCall | null;
+
+  newCall(destination: string, callerName: string, callerNumber: string | undefined, headers: VoiceInviteHeader[]): Promise<VoiceCall>;
+  getCall(callId: string): VoiceCall | undefined;
+  setActiveCall(callId: string): void;
+  logout(): Promise<void>;
+};
+
+/**
+ * What the native `VocivoSip` module must implement. Everything is a promise so
+ * the JS side never assumes a synchronous native bridge, and the engine below
+ * can be tested against a fake.
+ */
+export type NativeSipBridge = {
+  register(config: { username: string; password: string; domain: string; wsUri?: string; displayName?: string }): Promise<void>;
+  unregister(): Promise<void>;
+  invite(target: string, headers?: VoiceInviteHeader[]): Promise<string>;
+  answer(callId: string): Promise<void>;
+  hangup(callId?: string): Promise<void>;
+  hold(callId: string, on: boolean): Promise<void>;
+  mute(callId: string, on: boolean): Promise<void>;
+  sendDtmf(callId: string, digit: string): Promise<void>;
+  setSpeaker(on: boolean): Promise<void>;
+  /**
+   * iOS only, and the single most important call in the integration: PushKit
+   * terminates an app that receives a VoIP push and does not report an incoming
+   * call before returning from the delegate.
+   */
+  reportPushCall?(input: { callId: string; callerName?: string; callerNumber?: string }): Promise<void>;
+};
+
+/** Events the native module emits through `NativeEventEmitter`. */
+export type SipRegistrationEvent = { state: 'none' | 'progress' | 'ok' | 'failed'; reason?: string };
+export type SipIncomingEvent = {
+  callId: string;
+  callerName?: string;
+  callerNumber?: string;
+  sipUsername?: string;
+  headers?: VoiceInviteHeader[];
+};
+export type SipCallStateEvent = { callId: string; state: VoiceCallState; cause?: string };
+export type SipMediaStateEvent = { callId: string; muted?: boolean; onHold?: boolean; speaker?: boolean };
+
+export type SipEventName = 'registration' | 'incoming' | 'callState' | 'mediaState';
+
+export type SipEventMap = {
+  registration: SipRegistrationEvent;
+  incoming: SipIncomingEvent;
+  callState: SipCallStateEvent;
+  mediaState: SipMediaStateEvent;
+};
+
+/** Minimal shape of `NativeEventEmitter`, so the engine can be tested without React Native. */
+export type SipEventSource = {
+  addListener<K extends SipEventName>(event: K, listener: (payload: SipEventMap[K]) => void): { remove: () => void };
+};
+
+const callStates: VoiceCallState[] = ['CONNECTING', 'RINGING', 'ACTIVE', 'HELD', 'ENDED', 'FAILED', 'DROPPED'];
+
+/**
+ * Native code is the least trustworthy input in the app: a typo in a Swift or
+ * Kotlin string would otherwise drive the lifecycle registry into a state it
+ * cannot leave. Unknown states are treated as a failure, never silently kept.
+ */
+export function toVoiceCallState(value: unknown): VoiceCallState | null {
+  return typeof value === 'string' && (callStates as string[]).includes(value) ? (value as VoiceCallState) : null;
+}
+
+export function isTerminalVoiceCallState(state: VoiceCallState) {
+  return state === 'ENDED' || state === 'FAILED';
+}
