@@ -219,7 +219,8 @@ jobs:
               tar czf - -C services tts | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" \
                 'set -e; install -d -m 755 /opt/vocivo; rm -rf /opt/vocivo/tts.new; install -d /opt/vocivo/tts.new; tar xzf - -C /opt/vocivo/tts.new; rm -rf /opt/vocivo/tts; mv /opt/vocivo/tts.new/tts /opt/vocivo/tts; rmdir /opt/vocivo/tts.new'
               # Path the service is served under, so nginx can strip it before proxying.
-              tts_path=$(printf "%s" "$TTS_PUBLIC_BASE_URL" | sed -E "s#^https://[^/]+##; s#/$##")
+              # Single-quoted: in double quotes the shell expands the $# in s#/$## before sed sees it.
+              tts_path=$(printf '%s' "$TTS_PUBLIC_BASE_URL" | sed -E 's#^https://[^/]+##; s#/$##')
               remote="$remote"'
               TTS_PATH="'"$tts_path"'"
               install -d -m 700 /etc/vocivo
