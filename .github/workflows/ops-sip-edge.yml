@@ -22,6 +22,7 @@ on:
         required: true
         type: choice
         options:
+          - discover
           - status
           - logs
           - deploy
@@ -76,7 +77,14 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           REPO_DIR="'"$REPO_DIR"'"
           if [ -z "$REPO_DIR" ]; then
-            COMPOSE=$(find /opt /root /home /srv -maxdepth 5 -path "*/services/sip/docker-compose.yml" 2>/dev/null | head -1)
+            # 1. a checkout in the usual places
+            COMPOSE=$(find /opt /root /home /srv /var /usr/local -maxdepth 6 -path "*/services/sip/docker-compose.yml" 2>/dev/null | head -1)
+            # 2. failing that, ask Docker where the running stack was started from
+            if [ -z "$COMPOSE" ]; then
+              COMPOSE=$(docker compose ls --all --format json 2>/dev/null | tr "," "\n" | grep -o "/[^\"]*/services/sip/docker-compose.yml" | head -1)
+            fi
+            # 3. failing that, sweep the disk once (slow, but only when nothing else worked)
+            [ -z "$COMPOSE" ] && COMPOSE=$(find / -xdev -path /proc -prune -o -path "*/services/sip/docker-compose.yml" -print 2>/dev/null | head -1)
             [ -n "$COMPOSE" ] && REPO_DIR=$(cd "$(dirname "$COMPOSE")/../.." && pwd)
           fi
           SIP_DIR="$REPO_DIR/services/sip"
@@ -84,6 +92,17 @@ jobs:
           '
 
           case "$ACTION" in
+            discover)
+              remote="$remote"'
+              echo "--- os ---"; . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME"; uname -r
+              echo "--- docker containers ---"; docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "docker unavailable"
+              echo "--- docker compose projects ---"; docker compose ls --all 2>/dev/null || echo "none"
+              echo "--- compose files on disk ---"; find / -xdev -path /proc -prune -o -name "docker-compose.y*ml" -print 2>/dev/null | head -20
+              echo "--- git checkouts ---"; find / -xdev -path /proc -prune -o -maxdepth 6 -name ".git" -print 2>/dev/null | head -20
+              echo "--- listening ---"; (ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null) | grep -E ":(5060|5061|5080|7443|8080|8081|443|2223)\b" || echo "no SIP/web ports"
+              echo "--- host services ---"; systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | grep -Ei "kamailio|freeswitch|rtpengine|nginx|caddy|docker" || echo "none matching"
+              echo "--- firewall ---"; ufw status verbose 2>/dev/null | head -30 || echo "ufw not present"
+              ';;
             status)
               remote="$remote"'
               cd "$SIP_DIR"

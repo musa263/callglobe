@@ -37,6 +37,7 @@ them from the secrets store.
 
 | action | effect |
 |---|---|
+| `discover` | Read-only survey of an unfamiliar droplet: OS, containers, compose projects and files, git checkouts, listening ports, host services, firewall. Run this first when `status` reports `repo: NOT FOUND`. |
 | `status` | Current commit, `VOCIVO_SIP_INBOUND` flag, env key names, container state, `sofia status`. |
 | `logs` | Last 200 lines from FreeSWITCH, Kamailio and RTPEngine. |
 | `deploy` | `git pull --ff-only` on `main`, pull images, `docker compose up -d`. |
