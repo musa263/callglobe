@@ -133,4 +133,11 @@ jobs:
               ';;
           esac
 
-          ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" 'bash -s' <<< "$remote"
+          # Run, and mirror the output into a check-run annotation so it is readable through the API, not only the raw log.
+          set +e
+          out=$(ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" 'bash -s' <<< "$remote" 2>&1); rc=$?
+          set -e
+          printf '%s\n' "$out"
+          out=${out:0:6000}
+          if [ $rc -eq 0 ]; then echo "::notice title=$ACTION on $HOST::${out//$'\n'/%0A}"; else echo "::error title=$ACTION on $HOST failed (exit $rc)::${out//$'\n'/%0A}"; fi
+          exit $rc

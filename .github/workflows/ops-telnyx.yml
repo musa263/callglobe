@@ -57,36 +57,43 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$TELNYX_API_KEY" ] || { echo "::error::TELNYX_API_KEY secret is missing"; exit 1; }
-          api() { curl --fail-with-body --silent --show-error --max-time 30 -H "Authorization: Bearer $TELNYX_API_KEY" -H "Content-Type: application/json" "$@"; }
+          # --globoff: Telnyx query params use [] (page[size]) which curl would otherwise treat as glob ranges.
+          api() { curl --globoff --fail-with-body --silent --show-error --max-time 30 -H "Authorization: Bearer $TELNYX_API_KEY" -H "Content-Type: application/json" "$@"; }
           base=https://api.telnyx.com/v2
+          # Mirror each report into a check-run annotation so it is readable through the API, not only the raw log.
+          report() { local title=$1; shift; local body; body=$(cat); printf '%s\n' "$body"; echo "::notice title=${title}::${body//$'\n'/%0A}"; }
 
           case "$ACTION" in
             list-connections)
-              echo "== Call Control applications =="
-              api "$base/call_control_applications?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.application_name)\tactive=\(.active)"'
-              echo; echo "== FQDN connections (SIP trunks by hostname) =="
-              api "$base/fqdn_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
-              echo; echo "== IP connections (SIP trunks by IP) =="
-              api "$base/ip_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
-              echo; echo "== Credential connections (WebRTC / SIP credentials) =="
-              api "$base/credential_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+              {
+                echo "== Call Control applications =="
+                api "$base/call_control_applications?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.application_name)\tactive=\(.active)"'
+                echo; echo "== FQDN connections (SIP trunks by hostname) =="
+                api "$base/fqdn_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+                echo; echo "== IP connections (SIP trunks by IP) =="
+                api "$base/ip_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+                echo; echo "== Credential connections (WebRTC / SIP credentials) =="
+                api "$base/credential_connections?page[size]=50" | jq -r '.data[] | "\(.id)\t\(.connection_name)\tactive=\(.active)"'
+              } | report connections
               ;;
             list-numbers)
-              printf '%-18s %-22s %-36s %s\n' NUMBER CONNECTION_ID CONNECTION_NAME STATUS
-              for page in 1 2 3 4; do
-                api "$base/phone_numbers?page[size]=250&page[number]=$page" | jq -r '.data[] | [.phone_number, (.connection_id // "-"), (.connection_name // "-"), .status] | @tsv' \
-                  | awk -F'\t' '{ printf "%-18s %-22s %-36s %s\n", $1, $2, $3, $4 }'
-              done
+              {
+                printf '%-18s %-22s %-36s %s\n' NUMBER CONNECTION_ID CONNECTION_NAME STATUS
+                for page in 1 2 3 4; do
+                  api "$base/phone_numbers?page[size]=250&page[number]=$page" | jq -r '.data[] | [.phone_number, (.connection_id // "-"), (.connection_name // "-"), .status] | @tsv' \
+                    | awk -F'\t' '{ printf "%-18s %-22s %-36s %s\n", $1, $2, $3, $4 }'
+                done
+              } | report numbers
               ;;
             show-number)
-              api "$base/phone_numbers?filter[phone_number]=$(printf %s "$NUMBER" | sed 's/+/%2B/')" | jq '.data[] | {id, phone_number, status, connection_id, connection_name, messaging_profile_id, emergency_enabled}'
+              api "$base/phone_numbers?filter[phone_number]=$(printf %s "$NUMBER" | sed 's/+/%2B/')" | jq '.data[] | {id, phone_number, status, connection_id, connection_name, messaging_profile_id, emergency_enabled}' | report "$NUMBER"
               ;;
             route-number)
               id=$(api "$base/phone_numbers?filter[phone_number]=$(printf %s "$NUMBER" | sed 's/+/%2B/')" | jq -r '.data[0].id // empty')
               [ -n "$id" ] || { echo "::error::$NUMBER is not on this Telnyx account"; exit 1; }
-              echo "before:"; api "$base/phone_numbers/$id" | jq '.data | {phone_number, connection_id, connection_name}'
+              { echo "before:"; api "$base/phone_numbers/$id" | jq -c '.data | {phone_number, connection_id, connection_name}'; } | report "before $NUMBER"
               api -X PATCH "$base/phone_numbers/$id" -d "{\"connection_id\":\"$CONNECTION_ID\"}" >/dev/null
-              echo "after:";  api "$base/phone_numbers/$id" | jq '.data | {phone_number, connection_id, connection_name}'
+              { echo "after:";  api "$base/phone_numbers/$id" | jq -c '.data | {phone_number, connection_id, connection_name}'; } | report "after $NUMBER"
               echo "::notice::$NUMBER now routes to connection $CONNECTION_ID. Inbound on this DID now arrives at that connection instead of Call Control."
               ;;
           esac
