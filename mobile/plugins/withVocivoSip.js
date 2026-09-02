@@ -131,10 +131,23 @@ function withVocivoSipAndroidSources(config) {
       fs.copyFileSync(path.join(nativeDir(projectRoot, 'android'), name), path.join(destination, name));
     });
 
-    // Android delivers a data message to exactly one FirebaseMessagingService.
-    // Until the SIP edge is the only path in production, Vocivo has to share
-    // that one service with the carrier SDK, so this rewrites the service the
-    // Telnyx plugin generated to try Vocivo's own handling first.
+    return appConfig;
+  }]);
+}
+
+/**
+ * Android delivers a data message to exactly one `FirebaseMessagingService`.
+ * Until the SIP edge is the only path in production, Vocivo has to share that
+ * one service with the carrier SDK, so this rewrites the service the Telnyx
+ * plugin generates to try Vocivo's own handling first.
+ *
+ * It runs as a manifest mod rather than a dangerous mod on purpose: dangerous
+ * mods are applied before the typed ones, so writing this file from a dangerous
+ * mod let the Telnyx plugin's copy win and the Vocivo branch never appeared in
+ * the generated project at all.
+ */
+function withVocivoSipMessagingService(config) {
+  return withAndroidManifest(config, (appConfig) => {
     const appPackage = appConfig.android?.package;
     if (!appPackage) throw new Error('Vocivo requires an Android package name.');
     const appRoot = androidSourceRoot(appConfig, appPackage);
@@ -174,7 +187,7 @@ function withVocivoSipAndroidSources(config) {
       '',
     ].join('\n'));
     return appConfig;
-  }]);
+  });
 }
 
 function withVocivoSipMainApplication(config) {
@@ -240,6 +253,7 @@ module.exports = function withVocivoSip(config) {
   config = withVocivoSipAppDelegate(config);
   config = withVocivoSipAndroidSources(config);
   config = withVocivoSipMainApplication(config);
+  config = withVocivoSipMessagingService(config);
   config = withVocivoSipManifest(config);
   return config;
 };

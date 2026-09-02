@@ -1,0 +1,127 @@
+name: Ops · Mobile
+
+# Builds the app on EAS. Every action is a fixed command chosen from the list
+# below — free-form arguments are deliberately not accepted, so a run can never
+# do more than what is written here.
+#
+# Required repository secret:
+#   EXPO_TOKEN  Expo access token for the "mousaothman" account
+#
+# Signing credentials live on EAS, not here. --non-interactive means a build
+# fails loudly rather than silently creating a new certificate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        required: true
+        type: choice
+        default: prebuild-check
+        options:
+          - prebuild-check
+          - build-ios
+          - build-android
+          - build-both
+          - list-builds
+      profile:
+        description: EAS build profile
+        required: true
+        type: choice
+        default: preview
+        options: [preview, production, development]
+
+concurrency:
+  group: ops-mobile
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  mobile:
+    name: ${{ inputs.action }} (${{ inputs.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      # Generating the native projects is the cheapest way to find a config
+      # plugin that no longer applies — a broken plugin otherwise surfaces
+      # twenty minutes into an EAS build, or worse, silently drops a file.
+      - name: Prebuild check
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx expo prebuild --platform android --no-install
+          npx expo prebuild --platform ios --no-install
+
+          fail() { echo "::error::$1"; exit 1; }
+          for f in VocivoSipCallRegistry VocivoConnection VocivoConnectionService VocivoSipIncomingCall VocivoSipModule VocivoSipPackage; do
+            [ -f "android/app/src/main/java/app/vocivo/sip/$f.kt" ] || fail "$f.kt is missing from the generated Android project"
+          done
+          grep -q "VocivoSipPackage()" android/app/src/main/java/app/vocivo/mobile/MainApplication.kt || fail "VocivoSipPackage is not registered in MainApplication"
+          grep -q "MANAGE_OWN_CALLS" android/app/src/main/AndroidManifest.xml || fail "MANAGE_OWN_CALLS is missing from the manifest"
+          grep -q "app.vocivo.sip.VocivoConnectionService" android/app/src/main/AndroidManifest.xml || fail "the ConnectionService is not declared"
+          # The carrier SDK's plugin writes this same file. If its copy wins,
+          # a Vocivo call is handed to the carrier SDK and rings nowhere.
+          grep -q "VocivoSipIncomingCall.handle" android/app/src/main/java/app/vocivo/mobile/AppFirebaseMessagingService.kt \
+            || fail "the FCM service does not try Vocivo's own call handling first"
+
+          for f in VocivoSipCallManager.swift VocivoSip.swift VocivoSip.m; do
+            [ -f "ios/Vocivo/$f" ] || fail "$f is missing from the generated iOS project"
+            grep -q "$f" ios/Vocivo.xcodeproj/project.pbxproj || fail "$f is not in the Xcode build"
+          done
+          grep -q "VocivoSipCallManager.shared.start()" ios/Vocivo/AppDelegate.swift || fail "PushKit is not started at launch"
+          python3 - <<'PY'
+          import plistlib
+          modes = plistlib.load(open('ios/Vocivo/Info.plist', 'rb')).get('UIBackgroundModes', [])
+          missing = [m for m in ('voip', 'audio') if m not in modes]
+          if missing:
+              raise SystemExit(f"::error::UIBackgroundModes is missing {missing}; VoIP pushes would not be delivered")
+          print('background modes:', modes)
+          PY
+          echo "the native projects contain everything the SIP call path needs"
+
+      - name: Build
+        if: startsWith(inputs.action, 'build-')
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$EXPO_TOKEN" ] || { echo "::error::EXPO_TOKEN secret is missing"; exit 1; }
+          case "${{ inputs.action }}" in
+            build-ios) platform=ios;;
+            build-android) platform=android;;
+            *) platform=all;;
+          esac
+          # --no-wait: an EAS build outlives a runner, and holding one open for
+          # half an hour to watch a queue is a waste of both.
+          npx --yes eas-cli@latest build \
+            --platform "$platform" \
+            --profile "${{ inputs.profile }}" \
+            --non-interactive \
+            --no-wait
+
+      - name: List builds
+        if: inputs.action == 'list-builds' || startsWith(inputs.action, 'build-')
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$EXPO_TOKEN" ] || { echo "::error::EXPO_TOKEN secret is missing"; exit 1; }
+          npx --yes eas-cli@latest build:list --limit 5 --non-interactive | tee /tmp/builds.txt
+          echo "::notice title=recent builds::$(tr '\n' ' ' < /tmp/builds.txt | cut -c1-2000)"
