@@ -238,17 +238,29 @@ jobs:
                 conf=/etc/nginx/snippets/vocivo-tts.conf
                 install -d /etc/nginx/snippets
                 printf "location %s/ {\n  proxy_pass http://127.0.0.1:8000/;\n  proxy_set_header Host \$host;\n  proxy_read_timeout 120s;\n  client_max_body_size 1m;\n}\n" "$TTS_PATH" > "$conf"
-                # grep exits 1 when it matches nothing, and under pipefail that aborted the
-                # whole deploy silently — right after the build, before anything else ran.
-                site=$( { grep -rlE "listen[^;]*443" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || true; } | head -1 || true )
+                # -R, not -r: sites-enabled is a directory of symlinks into
+                # sites-available, and -r skips symlinks it finds while walking.
+                # That is why the first run reported "no TLS vhost" on a host
+                # whose vhost was sitting right there.
+                # grep also exits 1 when it matches nothing, which under
+                # pipefail would abort the deploy silently.
+                site=$( { grep -RlE "listen[^;]*443" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || true; } | head -1 || true )
                 [ -n "$site" ] || echo "no TLS vhost found; serve $TTS_PATH yourself or use a subdomain"
                 if [ -n "$site" ] && ! grep -q "vocivo-tts.conf" "$site" 2>/dev/null; then
-                  cp "$site" "$site.vocivo-backup"
-                  awk -v inc="    include $conf;" "/listen[^;]*443/ && !seen { print; print inc; seen=1; next } { print }" "$site.vocivo-backup" > "$site"
+                  # The backup must not live in sites-enabled: everything in
+                  # there is included, so a copy of the vhost beside it would
+                  # give nginx two identical server blocks.
+                  install -d /etc/vocivo/nginx-backups
+                  backup="/etc/vocivo/nginx-backups/$(basename "$site").$(date +%Y%m%d%H%M%S)"
+                  cp "$site" "$backup"
+                  awk -v inc="    include $conf;" "/listen[^;]*443/ && !seen { print; print inc; seen=1; next } { print }" "$backup" > "$site"
                   # A broken vhost would take the whole edge offline, so roll back on any error.
-                  nginx -t || { cp "$site.vocivo-backup" "$site"; echo "nginx config rejected; vhost restored"; exit 1; }
+                  nginx -t || { cp "$backup" "$site"; echo "nginx config rejected; vhost restored"; exit 1; }
                 fi
-                nginx -t >/dev/null 2>&1 && systemctl reload nginx && echo "nginx serves $TTS_PATH/ from 127.0.0.1:8000"
+                if [ -n "$site" ] && nginx -t >/dev/null 2>&1; then
+                  systemctl reload nginx
+                  echo "nginx serves $TTS_PATH/ from 127.0.0.1:8000 (vhost $site)"
+                fi
               fi
               sleep 20; docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}"
               secret=$(sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env)
