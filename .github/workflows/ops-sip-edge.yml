@@ -23,6 +23,7 @@ on:
         type: choice
         options:
           - discover
+          - show-config
           - status
           - logs
           - deploy
@@ -80,21 +81,36 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           first_match() { head -1 || true; }
           REPO_DIR="'"$REPO_DIR"'"
-          if [ -z "$REPO_DIR" ]; then
-            # 1. a checkout in the usual places
-            COMPOSE=$( { find /opt /root /home /srv /var /usr/local -maxdepth 6 -path "*/services/sip/docker-compose.yml" 2>/dev/null || true; } | first_match)
+          COMPOSE=""
+          [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/services/sip/docker-compose.yml" ] && COMPOSE="$REPO_DIR/services/sip/docker-compose.yml"
+          if [ -z "$COMPOSE" ]; then
+            # 1. a deployment or checkout in the usual places
+            COMPOSE=$( { find /opt /root /home /srv /var /usr/local -maxdepth 6 \( -path "*/services/sip/docker-compose.yml" -o -path "*/vocivo*/sip/docker-compose.yml" \) 2>/dev/null || true; } | first_match)
             # 2. failing that, ask Docker where the running stack was started from
             if [ -z "$COMPOSE" ]; then
               COMPOSE=$( { docker compose ls --all --format json 2>/dev/null || true; } | tr "," "\n" | { grep -o "/[^\"]*/services/sip/docker-compose.yml" || true; } | first_match)
             fi
             # 3. failing that, sweep the disk once (slow, but only when nothing else worked)
             if [ -z "$COMPOSE" ]; then
-              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -path "*/services/sip/docker-compose.yml" -print 2>/dev/null || true; } | first_match)
+              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o \( -path "*/services/sip/docker-compose.yml" -o -path "*/sip/docker-compose.yml" \) -print 2>/dev/null || true; } | first_match)
             fi
-            [ -n "$COMPOSE" ] && REPO_DIR=$(cd "$(dirname "$COMPOSE")/../.." && pwd)
           fi
-          SIP_DIR="$REPO_DIR/services/sip"
-          echo "repo: ${REPO_DIR:-NOT FOUND}"
+          # SIP_DIR is wherever docker-compose.yml actually lives; on a droplet deployed by
+          # copying files that is NOT <repo>/services/sip, and there may be no checkout at all.
+          if [ -n "${COMPOSE:-}" ]; then
+            SIP_DIR=$(cd "$(dirname "$COMPOSE")" && pwd)
+          elif [ -n "$REPO_DIR" ]; then
+            SIP_DIR="$REPO_DIR/services/sip"
+          else
+            SIP_DIR=""
+          fi
+          GIT_DIR_TOP=""
+          [ -n "$SIP_DIR" ] && GIT_DIR_TOP=$(git -C "$SIP_DIR" rev-parse --show-toplevel 2>/dev/null || true)
+          [ -n "$GIT_DIR_TOP" ] && REPO_DIR="$GIT_DIR_TOP"
+          echo "sip dir: ${SIP_DIR:-NOT FOUND}"
+          echo "git checkout: ${GIT_DIR_TOP:-none (files were copied here, not cloned)}"
+          # Print key=value files without leaking values.
+          redact() { sed -E "s/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1=<set>/"; }
           '
 
           case "$ACTION" in
@@ -105,13 +121,26 @@ jobs:
               echo "--- docker compose projects ---"; docker compose ls --all 2>/dev/null || echo "none"
               echo "--- compose files on disk ---"; { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -name "docker-compose.y*ml" -print 2>/dev/null || true; } | head -20 || true
               echo "--- git checkouts ---"; { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -maxdepth 6 -name ".git" -print 2>/dev/null || true; } | head -20 || true
-              echo "--- listening ---"; { ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null || true; } | { grep -E ":(5060|5061|5080|7443|8080|8081|443|2223)\b" || echo "no SIP/web ports"; }
+              echo "--- listening ---"; { ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null || true; } | { grep -E ":(5060|5061|5080|7443|8080|8081|443|2223)\b" || echo "no SIP/web ports"; } | awk "{ sub(/users:.*/, \"\"); print \$1, \$5, \$6 }"
               echo "--- host services ---"; { systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null || true; } | { grep -Ei "kamailio|freeswitch|rtpengine|nginx|caddy|docker" || echo "none matching"; }
               echo "--- firewall ---"; { ufw status verbose 2>/dev/null || echo "ufw not present"; } | head -30 || true
               ';;
+            show-config)
+              remote="$remote"'
+              [ -n "$SIP_DIR" ] || { echo "no compose deployment found"; exit 1; }
+              cd "$SIP_DIR"
+              echo "--- files ---"; ls -la
+              echo "--- docker-compose.yml (values of *SECRET/PASSWORD/TOKEN/KEY redacted) ---"
+              sed -E "s/((SECRET|PASSWORD|TOKEN|KEY)[A-Za-z_]*: *).*/\1<set>/I" docker-compose.yml
+              echo "--- .env keys ---"; if [ -f .env ]; then redact < .env; else echo "(no .env)"; fi
+              echo "--- mounted config trees ---"
+              for d in kamailio freeswitch nginx; do [ -d "$d" ] && { echo "[$d]"; find "$d" -maxdepth 3 -type f -printf "  %p (%s bytes)\n" 2>/dev/null | head -30; }; done
+              echo "--- freeswitch sip profiles in the container ---"
+              docker compose exec -T freeswitch sh -c "ls /etc/freeswitch/sip_profiles 2>/dev/null; grep -hE \"sip-port|sip-ip|ext-sip-ip\" /etc/freeswitch/sip_profiles/*.xml 2>/dev/null" 2>/dev/null || echo "(could not read profiles)"
+              ';;
             status)
               remote="$remote"'
-              [ -d "$SIP_DIR" ] || { echo "no $SIP_DIR on this host — run the discover action"; exit 1; }
+              [ -n "$SIP_DIR" ] && [ -d "$SIP_DIR" ] || { echo "no compose deployment found — run the discover action"; exit 1; }
               cd "$SIP_DIR"
               git -C "$REPO_DIR" log -1 --oneline || echo "(not a git checkout)"
               if [ -f .env ]; then
@@ -121,7 +150,7 @@ jobs:
                 echo "--- flag --- (no .env in $SIP_DIR)"
               fi
               echo "--- containers ---"; docker compose ps || docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}" || true
-              echo "--- listening (SIP 5060 Kamailio, 5080 FreeSWITCH external) ---"; { ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null || true; } | { grep -E ":(5060|5080|7443)\b" || echo "nothing on 5060/5080"; }
+              echo "--- listening (SIP 5060 Kamailio, 5080 FreeSWITCH external) ---"; { ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null || true; } | { grep -E ":(5060|5080|7443)\b" || echo "nothing on 5060/5080"; } | awk "{ sub(/users:.*/, \"\"); print \$1, \$5, \$6 }"
               echo "--- host firewall ---"; { ufw status 2>/dev/null || echo "ufw not present"; } | head -25 || true
               echo "--- freeswitch sanity ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status" 2>/dev/null || echo "fs_cli unavailable"; } | head -20 || true
               echo "--- telnyx gateway ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status gateway telnyx" 2>/dev/null || true; } | { grep -E "Name|Profile|State|PingState|Ping " || echo "gateway status unavailable"; }
@@ -132,7 +161,12 @@ jobs:
               ';;
             deploy)
               remote="$remote"'
-              cd "$REPO_DIR" && git fetch --quiet origin && git checkout --quiet main && git pull --ff-only --quiet origin main && git log -1 --oneline
+              if [ -n "$GIT_DIR_TOP" ]; then
+                cd "$REPO_DIR" && git fetch --quiet origin && git checkout --quiet main && git pull --ff-only --quiet origin main && git log -1 --oneline
+              else
+                echo "NOTE: $SIP_DIR is not a git checkout, so there is no source to pull."
+                echo "      Only the images and containers are refreshed below; config changes must be delivered another way."
+              fi
               cd "$SIP_DIR" && docker compose pull --quiet && docker compose up -d --remove-orphans && docker compose ps
               ';;
             enable-inbound|disable-inbound)
