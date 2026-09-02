@@ -208,18 +208,48 @@ jobs:
               ';;
             tts-deploy)
               [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is required"; exit 1; }
-              [[ "$TTS_PUBLIC_BASE_URL" =~ ^https:// ]] || { echo "::error::TTS_PUBLIC_BASE_URL variable must be an https URL"; exit 1; }
+              [[ "$TTS_PUBLIC_BASE_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~-]+)*/?$ ]] || { echo "::error::TTS_PUBLIC_BASE_URL variable must be an https URL"; exit 1; }
+              # The droplet is not a checkout, so the service source is shipped from the
+              # runner rather than pulled. Done before the remote script so nothing large
+              # has to be embedded in it.
+              echo "shipping services/tts to the droplet"
+              tar czf - -C services tts | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" \
+                'set -e; install -d -m 755 /opt/vocivo; rm -rf /opt/vocivo/tts.new; install -d /opt/vocivo/tts.new; tar xzf - -C /opt/vocivo/tts.new; rm -rf /opt/vocivo/tts; mv /opt/vocivo/tts.new/tts /opt/vocivo/tts; rmdir /opt/vocivo/tts.new'
+              # Path the service is served under, so nginx can strip it before proxying.
+              tts_path=$(printf "%s" "$TTS_PUBLIC_BASE_URL" | sed -E "s#^https://[^/]+##; s#/$##")
               remote="$remote"'
-              cd "$REPO_DIR" && git fetch --quiet origin && git pull --ff-only --quiet origin main
+              TTS_PATH="'"$tts_path"'"
               install -d -m 700 /etc/vocivo
-              umask 077; printf "TTS_SERVICE_SECRET=%s\nPUBLIC_BASE_URL=%s\nTTS_CACHE_TTL_DAYS=30\n" "'"$TTS_SERVICE_SECRET"'" "'"$TTS_PUBLIC_BASE_URL"'" > /etc/vocivo/tts.env
-              cd "$REPO_DIR/services/tts" && docker build -q -t vocivo-tts . >/dev/null
+              umask 077; printf "TTS_SERVICE_SECRET=%s\nPUBLIC_BASE_URL=%s\nTTS_CACHE_TTL_DAYS=30\n" "'"$TTS_SERVICE_SECRET"'" "'"${TTS_PUBLIC_BASE_URL%/}"'" > /etc/vocivo/tts.env
+              cd /opt/vocivo/tts && docker build -q -t vocivo-tts . >/dev/null
               docker rm -f vocivo-tts >/dev/null 2>&1 || true
-              docker run -d --restart unless-stopped --name vocivo-tts -p 127.0.0.1:8000:8000 --env-file /etc/vocivo/tts.env -v vocivo-tts-cache:/var/cache/vocivo-tts vocivo-tts >/dev/null
-              sleep 5; docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}"
-              curl -s -o /dev/null -w "health (authorised): %{http_code}\n" -H "Authorization: Bearer $(sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env)" http://127.0.0.1:8000/health
-              curl -s -o /dev/null -w "health (no auth, expect 401): %{http_code}\n" http://127.0.0.1:8000/health
-              echo "NOTE: put an https reverse proxy in front of 127.0.0.1:8000 serving '"$TTS_PUBLIC_BASE_URL"'"
+              # Capped so speech synthesis can never starve the real-time SIP processes on this box.
+              docker run -d --restart unless-stopped --name vocivo-tts --cpus 1.5 --memory 2g \
+                -p 127.0.0.1:8000:8000 --env-file /etc/vocivo/tts.env \
+                -v vocivo-tts-cache:/var/cache/vocivo-tts vocivo-tts >/dev/null
+              if [ -n "$TTS_PATH" ]; then
+                conf=/etc/nginx/snippets/vocivo-tts.conf
+                install -d /etc/nginx/snippets
+                printf "location %s/ {\n  proxy_pass http://127.0.0.1:8000/;\n  proxy_set_header Host \$host;\n  proxy_read_timeout 120s;\n  client_max_body_size 1m;\n}\n" "$TTS_PATH" > "$conf"
+                site=$(grep -rlE "listen[^;]*443" /etc/nginx/sites-enabled/ 2>/dev/null | head -1)
+                if [ -n "$site" ] && ! grep -q "vocivo-tts.conf" "$site"; then
+                  cp "$site" "$site.vocivo-backup"
+                  awk -v inc="    include $conf;" "/listen[^;]*443/ && !seen { print; print inc; seen=1; next } { print }" "$site.vocivo-backup" > "$site"
+                  # A broken vhost would take the whole edge offline, so roll back on any error.
+                  nginx -t || { cp "$site.vocivo-backup" "$site"; echo "nginx config rejected; vhost restored"; exit 1; }
+                fi
+                nginx -t >/dev/null 2>&1 && systemctl reload nginx && echo "nginx serves $TTS_PATH/ from 127.0.0.1:8000"
+              fi
+              sleep 20; docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}"
+              secret=$(sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env)
+              curl -s -o /dev/null -m 30 -w "health authorised (expect 200): %{http_code}\n" -H "Authorization: Bearer $secret" http://127.0.0.1:8000/health
+              curl -s -o /dev/null -m 30 -w "health unauthenticated (expect 401): %{http_code}\n" http://127.0.0.1:8000/health
+              echo "--- warming voices; the first synthesis downloads the model ---"
+              for voice in af_heart am_adam; do
+                curl -s -o /dev/null -m 600 -w "  $voice: %{http_code} in %{time_total}s\n" -X POST http://127.0.0.1:8000/v1/audio/render \
+                  -H "Authorization: Bearer $secret" -H "Content-Type: application/json" \
+                  -d "{\"input\":\"Thank you for calling. Please hold.\",\"voice\":\"$voice\"}"
+              done
               ';;
             tts-status)
               remote="$remote"'

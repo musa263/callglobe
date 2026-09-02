@@ -17,6 +17,8 @@ Repository → **Settings → Secrets and variables → Actions**.
 | `SIP_EDGE_HOST` | Ops · Droplets | `168.144.183.82` (vocivo-sip) |
 | `PBX_HOST` | Ops · Droplets | `68.183.244.215` (vocivo-pbx-01b), optional |
 | `TTS_SERVICE_SECRET` | Ops · Droplets (tts-deploy) | `openssl rand -hex 32`. Set the **same value** on Vercel with Ops · Vercel → set. |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_AUTH_KEY`, `APNS_TOPIC` | Ops · Vercel (sync-push-credentials) | Apple Developer → Keys → a key with APNs enabled. `APNS_AUTH_KEY` is the whole `.p8`, `APNS_TOPIC` is the bundle id (`app.vocivo.mobile`). |
+| `FCM_SERVICE_ACCOUNT` | Ops · Vercel (sync-push-credentials) | Firebase → Project settings → Service accounts → Generate new private key; the whole JSON. |
 
 Variables (same page, *Variables* tab, all optional): `OPS_SSH_USER` (default `root`), `SIP_EDGE_REPO_DIR`
 (auto-discovered when unset), `TTS_PUBLIC_BASE_URL` (https URL the TTS service is served at).
@@ -32,6 +34,7 @@ them from the secrets store.
 | `set` | Replaces the variable in the chosen environment(s), then redeploys production (uncheck *redeploy* to batch several changes). |
 | `delete` | Removes the variable. |
 | `redeploy` | Production deploy from `main`, then polls `/api/health`. |
+| `sync-push-credentials` | Copies the mobile push credentials (`APNS_*`, `FCM_SERVICE_ACCOUNT`) from the GitHub secrets store into Vercel and redeploys. They are read from secrets rather than taken as an input, because `workflow_dispatch` inputs are visible in the run's metadata to anyone who can read the repository. Missing ones are reported and skipped. |
 
 ## Ops · Droplets
 
@@ -42,7 +45,7 @@ them from the secrets store.
 | `logs` | Last 200 lines from FreeSWITCH, Kamailio and RTPEngine. |
 | `deploy` | Pulls images and `docker compose up -d`. On `vocivo-sip` there is **no git checkout**, so nothing is pulled from source and config changes are not delivered this way — the action says so in its output. |
 | `enable-inbound` / `disable-inbound` | Flips `VOCIVO_SIP_INBOUND` in the edge `.env` and recreates FreeSWITCH, then shows the module/binding log lines. Flip the same flag on Vercel. |
-| `tts-deploy` | Builds `services/tts`, writes `/etc/vocivo/tts.env` from secrets, runs the container on `127.0.0.1:8000`. You still need an https reverse proxy in front of it. |
+| `tts-deploy` | Ships `services/tts` to the droplet (it is not a checkout), builds it, writes `/etc/vocivo/tts.env` from secrets, and runs the container on `127.0.0.1:8000` capped at 1.5 CPU / 2 GB so synthesis cannot starve the real-time SIP processes. When `TTS_PUBLIC_BASE_URL` has a path, it also adds an nginx `location` under the edge's existing TLS vhost, backing the vhost up and rolling back if `nginx -t` rejects it, then warms two voices (the first synthesis downloads the model and is slow). |
 | `tts-status` | Container state and an unauthenticated health probe (expects 401). |
 
 ## Ops · Telnyx

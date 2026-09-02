@@ -4,6 +4,10 @@ name: Ops · Vercel
 # only an allowlist of non-secret variable names is ever printed by "show".
 #
 # Required repository secret: VERCEL_TOKEN (Vercel account token, "musa263's projects" scope).
+#
+# sync-push-credentials additionally reads the mobile push credentials from the
+# secrets store and copies them into Vercel. They travel secret-to-secret and are
+# never a workflow input, so they do not appear in run metadata or in the log.
 
 on:
   workflow_dispatch:
@@ -12,7 +16,7 @@ on:
         description: What to do
         required: true
         type: choice
-        options: [show, set, delete, redeploy]
+        options: [show, set, delete, redeploy, sync-push-credentials]
       name:
         description: Environment variable name (for show / set / delete)
         required: false
@@ -59,7 +63,7 @@ jobs:
           VALUE: ${{ inputs.value }}
         run: |
           set -euo pipefail
-          if [ "$ACTION" != "redeploy" ]; then
+          if [ "$ACTION" != "redeploy" ] && [ "$ACTION" != "sync-push-credentials" ]; then
             [[ "$NAME" =~ ^[A-Z][A-Z0-9_]{1,80}$ ]] || { echo "::error::name must look like VOCIVO_VOICE_EDGE"; exit 1; }
           fi
           if [ "$ACTION" = "set" ] && [ -z "$VALUE" ]; then echo "::error::set needs a value"; exit 1; fi
@@ -127,8 +131,46 @@ jobs:
             fi
           done
 
+      # Mobile push credentials are private keys. They are read from the secrets
+      # store rather than taken as an input, because workflow_dispatch inputs are
+      # visible in the run's metadata to anyone who can read the repository.
+      - name: Sync push credentials
+        if: inputs.action == 'sync-push-credentials'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+          APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+          APNS_AUTH_KEY: ${{ secrets.APNS_AUTH_KEY }}
+          APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing"; exit 1; }
+          cd frontend
+          synced=0; skipped=""
+          sync() {
+            local name=$1 value=$2
+            if [ -z "$value" ]; then skipped="$skipped $name"; return 0; fi
+            echo "::add-mask::$value"
+            for target in production preview; do
+              npx --yes vercel@latest env rm "$name" "$target" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
+              printf '%s' "$value" | npx --yes vercel@latest env add "$name" "$target" --token "$VERCEL_TOKEN" >/dev/null
+            done
+            echo "  $name -> production, preview (${#value} chars)"
+            synced=$((synced+1))
+          }
+          echo "syncing mobile push credentials:"
+          sync APNS_KEY_ID "$APNS_KEY_ID"
+          sync APNS_TEAM_ID "$APNS_TEAM_ID"
+          sync APNS_AUTH_KEY "$APNS_AUTH_KEY"
+          sync APNS_TOPIC "$APNS_TOPIC"
+          sync FCM_SERVICE_ACCOUNT "$FCM_SERVICE_ACCOUNT"
+          echo "synced $synced; not set in the secrets store:${skipped:- none}"
+          [ -n "$skipped" ] && echo "::warning::these push credentials are still missing:$skipped — the platform stays unavailable until they are set"
+          { echo "### sync-push-credentials"; echo; echo "synced $synced variable(s); missing:${skipped:- none}"; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Redeploy production
-        if: inputs.action == 'redeploy' || ((inputs.action == 'set' || inputs.action == 'delete') && inputs.redeploy)
+        if: inputs.action == 'redeploy' || inputs.action == 'sync-push-credentials' || ((inputs.action == 'set' || inputs.action == 'delete') && inputs.redeploy)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
