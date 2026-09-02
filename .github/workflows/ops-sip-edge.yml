@@ -216,7 +216,7 @@ jobs:
               # runner rather than pulled. Done before the remote script so nothing large
               # has to be embedded in it.
               echo "shipping services/tts to the droplet"
-              tar czf - -C services tts | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" \
+              tar czf - -C services tts | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
                 'set -e; install -d -m 755 /opt/vocivo; rm -rf /opt/vocivo/tts.new; install -d /opt/vocivo/tts.new; tar xzf - -C /opt/vocivo/tts.new; rm -rf /opt/vocivo/tts; mv /opt/vocivo/tts.new/tts /opt/vocivo/tts; rmdir /opt/vocivo/tts.new'
               # Path the service is served under, so nginx can strip it before proxying.
               # Single-quoted: in double quotes the shell expands the $# in s#/$## before sed sees it.
@@ -225,7 +225,10 @@ jobs:
               TTS_PATH="'"$tts_path"'"
               install -d -m 700 /etc/vocivo
               umask 077; printf "TTS_SERVICE_SECRET=%s\nPUBLIC_BASE_URL=%s\nTTS_CACHE_TTL_DAYS=30\n" "'"$TTS_SERVICE_SECRET"'" "'"${TTS_PUBLIC_BASE_URL%/}"'" > /etc/vocivo/tts.env
-              cd /opt/vocivo/tts && docker build -q -t vocivo-tts . >/dev/null
+              # Niced and memory-capped: this box carries live calls, and the image pulls
+              # PyTorch. Output is streamed rather than quiet so the ssh session stays active
+              # through a build that is otherwise silent for several minutes.
+              cd /opt/vocivo/tts && nice -n 19 docker build --memory 2g --progress plain -t vocivo-tts . 2>&1 | tail -30
               docker rm -f vocivo-tts >/dev/null 2>&1 || true
               # Capped so speech synthesis can never starve the real-time SIP processes on this box.
               docker run -d --restart unless-stopped --name vocivo-tts --cpus 1.5 --memory 2g \
@@ -264,7 +267,7 @@ jobs:
 
           # Run, and mirror the output into a check-run annotation so it is readable through the API, not only the raw log.
           set +e
-          out=$(ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" 'bash -s' <<< "$remote" 2>&1); rc=$?
+          out=$(ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" 'bash -s' <<< "$remote" 2>&1); rc=$?
           set -e
           printf '%s\n' "$out"
           { echo "### \`$ACTION\` on \`$HOST\` — exit $rc"; echo; echo '```'; printf '%s\n' "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
