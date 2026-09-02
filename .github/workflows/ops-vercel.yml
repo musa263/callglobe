@@ -8,6 +8,10 @@ name: Ops · Vercel
 # sync-push-credentials additionally reads the mobile push credentials from the
 # secrets store and copies them into Vercel. They travel secret-to-secret and are
 # never a workflow input, so they do not appear in run metadata or in the log.
+#
+# sync-tts does the same for the self-hosted speech service, so the API stops
+# falling back to the carrier's text-to-speech. Same rule: the bearer secret is
+# read from the secrets store, never typed into a dispatch form.
 
 on:
   workflow_dispatch:
@@ -16,7 +20,7 @@ on:
         description: What to do
         required: true
         type: choice
-        options: [show, set, delete, redeploy, sync-push-credentials]
+        options: [show, set, delete, redeploy, sync-push-credentials, sync-tts]
       name:
         description: Environment variable name (for show / set / delete)
         required: false
@@ -63,7 +67,7 @@ jobs:
           VALUE: ${{ inputs.value }}
         run: |
           set -euo pipefail
-          if [ "$ACTION" != "redeploy" ] && [ "$ACTION" != "sync-push-credentials" ]; then
+          if [ "$ACTION" != "redeploy" ] && [ "$ACTION" != "sync-push-credentials" ] && [ "$ACTION" != "sync-tts" ]; then
             [[ "$NAME" =~ ^[A-Z][A-Z0-9_]{1,80}$ ]] || { echo "::error::name must look like VOCIVO_VOICE_EDGE"; exit 1; }
           fi
           if [ "$ACTION" = "set" ] && [ -z "$VALUE" ]; then echo "::error::set needs a value"; exit 1; fi
@@ -169,8 +173,47 @@ jobs:
           [ -n "$skipped" ] && echo "::warning::these push credentials are still missing:$skipped — the platform stays unavailable until they are set"
           { echo "### sync-push-credentials"; echo; echo "synced $synced variable(s); missing:${skipped:- none}"; } >> "$GITHUB_STEP_SUMMARY"
 
+      # The self-hosted voice. TTS_SERVICE_URL is not a secret, but the bearer
+      # that fronts it is, and the two are useless apart — so they are set
+      # together and the secret never leaves the secrets store.
+      - name: Sync TTS service
+        if: inputs.action == 'sync-tts'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          TTS_SERVICE_SECRET: ${{ secrets.TTS_SERVICE_SECRET }}
+          TTS_PUBLIC_BASE_URL: ${{ vars.TTS_PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing"; exit 1; }
+          [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is missing"; exit 1; }
+          [[ "$TTS_PUBLIC_BASE_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~-]+)*/?$ ]] || { echo "::error::TTS_PUBLIC_BASE_URL variable must be an https URL"; exit 1; }
+          echo "::add-mask::$TTS_SERVICE_SECRET"
+          url="${TTS_PUBLIC_BASE_URL%/}"
+          cd frontend
+          set_env() {
+            local name=$1 value=$2
+            for target in production preview; do
+              npx --yes vercel@latest env rm "$name" "$target" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
+              printf '%s' "$value" | npx --yes vercel@latest env add "$name" "$target" --token "$VERCEL_TOKEN" >/dev/null
+            done
+            echo "  $name -> production, preview"
+          }
+          echo "pointing the API at the self-hosted speech service:"
+          set_env TTS_SERVICE_URL "$url"
+          set_env TTS_SERVICE_SECRET "$TTS_SERVICE_SECRET"
+          # Proves the URL is actually serving before the deployment starts
+          # trusting it. 401 is the right answer here: the service is up and
+          # refusing an unauthenticated caller.
+          code=$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$url/health" || echo 000)
+          case "$code" in
+            401|403) echo "reachable and closed to anonymous callers ($code)";;
+            200) echo "::warning::$url/health answered 200 without a bearer token — the service is open to anyone";;
+            *) echo "::error::$url/health answered $code; the API would fall back to the carrier voice"; exit 1;;
+          esac
+          { echo "### sync-tts"; echo; echo "TTS_SERVICE_URL set to $url; health answered $code"; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Redeploy production
-        if: inputs.action == 'redeploy' || inputs.action == 'sync-push-credentials' || ((inputs.action == 'set' || inputs.action == 'delete') && inputs.redeploy)
+        if: inputs.action == 'redeploy' || inputs.action == 'sync-push-credentials' || inputs.action == 'sync-tts' || ((inputs.action == 'set' || inputs.action == 'delete') && inputs.redeploy)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
