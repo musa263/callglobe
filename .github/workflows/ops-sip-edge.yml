@@ -24,6 +24,7 @@ on:
         options:
           - discover
           - show-config
+          - show-proxy
           - dump-config
           - status
           - logs
@@ -137,6 +138,20 @@ jobs:
                 $( for f in docker-compose.yml .env.example README.md kamailio freeswitch nginx; do [ -e "$f" ] && printf "%s " "$f"; done ) 2>/dev/null | base64 -w0
               echo
               echo "VOCIVO_DUMP_END"
+              ';;
+            show-proxy)
+              remote="$remote"'
+              command -v nginx >/dev/null || { echo "nginx is not installed on this host"; exit 1; }
+              echo "--- vhosts (secrets redacted) ---"
+              # nginx -T prints every included file; keep only the structural lines, and never
+              # print a header value: the edge proxy snippet carries SIP_EDGE_SECRET.
+              nginx -T 2>/dev/null \
+                | grep -nE "^\s*(#\s*configuration file|server_name|listen|location|proxy_pass|ssl_certificate|ssl_certificate_key|root|return|include)" \
+                | sed -E "s/(proxy_set_header[^;]*|Authorization[^;]*)/<redacted>/I" \
+                | head -120
+              echo "--- certificates ---"
+              for d in /etc/letsencrypt/live/*; do [ -d "$d" ] && echo "  $(basename "$d") expires $(openssl x509 -enddate -noout -in "$d/fullchain.pem" 2>/dev/null | cut -d= -f2)"; done 2>/dev/null || echo "  (no letsencrypt certificates)"
+              echo "--- resources ---"; free -m | head -2; echo; df -h / | tail -1; echo; nproc
               ';;
             show-config)
               remote="$remote"'
