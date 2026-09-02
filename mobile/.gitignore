@@ -3,8 +3,11 @@ node_modules/
 dist/
 .env
 .env.local
-ios/
-android/
+# Anchored: these are the prebuild output directories at the root of mobile/.
+# Unanchored they also matched native/ios and native/android, which silently
+# kept the hand-written Swift and Kotlin out of the repository.
+/ios/
+/android/
 *.jks
 *.p8
 *.p12

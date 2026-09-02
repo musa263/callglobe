@@ -1,0 +1,272 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { SipEventBus, SipStackBridge, sessionStateToVoiceState } from './sipBridge';
+import type { SipDisposition, SipSessionHandle, SipSessionState, SipStack, SipStackConfig } from './sipStack';
+import type { SipEventMap, SipEventName, VoiceInviteHeader } from './voiceEngine';
+
+/** Narrows an optional lookup so the assertions below read as intent, not as null checks. */
+function must<T>(value: T | undefined, what: string): T {
+  assert.ok(value !== undefined, `expected ${what}`);
+  return value;
+}
+
+const credentials: SipStackConfig = {
+  username: '1001',
+  password: 'secret',
+  domain: 'sip.vocivo.app',
+  wsUri: 'wss://sip.vocivo.app:7443',
+};
+
+class FakeSession implements SipSessionHandle {
+  private listener: ((state: SipSessionState) => void) | null = null;
+  private ended: SipDisposition = {};
+  readonly actions: string[] = [];
+
+  constructor(
+    readonly id: string,
+    readonly incoming: boolean,
+    readonly remoteDisplayName = 'Sam Tailor',
+    readonly remoteUser = '+15551230000',
+    readonly remoteTarget = 'sip:1001@sip.vocivo.app',
+    readonly headers: VoiceInviteHeader[] = [],
+  ) {}
+
+  onStateChange(listener: (state: SipSessionState) => void) {
+    this.listener = listener;
+  }
+
+  disposition() {
+    return this.ended;
+  }
+
+  /** Drives the session the way SIP.js would. */
+  move(state: SipSessionState, disposition: SipDisposition = {}) {
+    if (state === 'Terminated') this.ended = disposition;
+    this.listener?.(state);
+  }
+
+  async accept() { this.actions.push('accept'); }
+  async terminate() { this.actions.push('terminate'); }
+  async setHold(on: boolean) { this.actions.push(`hold:${on}`); }
+  async setMuted(on: boolean) { this.actions.push(`mute:${on}`); }
+  async sendDtmf(digit: string) { this.actions.push(`dtmf:${digit}`); }
+}
+
+function fakeStack() {
+  let registration: ((state: 'Initial' | 'Registered' | 'Unregistered' | 'Terminated', reason?: string) => void) | null = null;
+  let invitation: ((session: SipSessionHandle) => void) | null = null;
+  const outgoing: FakeSession[] = [];
+  const state = { started: false, stopped: false, speaker: false, startError: null as Error | null, lastTarget: '', lastHeaders: [] as VoiceInviteHeader[] };
+
+  const stack: SipStack = {
+    onRegistrationChange: (listener) => { registration = listener; },
+    onInvitation: (listener) => { invitation = listener; },
+    start: async () => {
+      if (state.startError) throw state.startError;
+      state.started = true;
+      registration?.('Registered');
+    },
+    stop: async () => { state.stopped = true; },
+    invite: async (target, headers) => {
+      state.lastTarget = target;
+      state.lastHeaders = headers;
+      const session = new FakeSession(`out-${outgoing.length + 1}`, false, '', target);
+      outgoing.push(session);
+      return session;
+    },
+    setSpeaker: async (on) => { state.speaker = on; },
+  };
+
+  return {
+    stack,
+    state,
+    outgoing,
+    ring: (session: FakeSession) => invitation?.(session),
+    registrationChange: (value: 'Initial' | 'Registered' | 'Unregistered' | 'Terminated', reason?: string) => registration?.(value, reason),
+  };
+}
+
+function harness() {
+  const events = new SipEventBus();
+  const recorded: Array<{ event: SipEventName; payload: unknown }> = [];
+  (['registration', 'incoming', 'callState', 'mediaState'] as SipEventName[]).forEach((event) => {
+    events.addListener(event, (payload) => recorded.push({ event, payload }));
+  });
+  const fake = fakeStack();
+  const bridge = new SipStackBridge({ createStack: () => fake.stack, events });
+  const of = <K extends SipEventName>(event: K) => recorded.filter((entry) => entry.event === event).map((entry) => entry.payload as SipEventMap[K]);
+  return { events, bridge, fake, recorded, of };
+}
+
+test('registration reports progress then success', async () => {
+  const { bridge, of } = harness();
+  await bridge.register(credentials);
+  assert.deepEqual(of('registration').map((entry) => entry.state), ['progress', 'ok']);
+});
+
+test('a failed start reports the failure and leaves nothing registered', async () => {
+  const { bridge, fake, of } = harness();
+  fake.state.startError = new Error('websocket refused');
+  await assert.rejects(() => bridge.register(credentials));
+  assert.deepEqual(of('registration').map((entry) => entry.state), ['progress', 'failed']);
+  assert.equal(of('registration').at(-1)?.reason, 'websocket refused');
+  await assert.rejects(() => bridge.invite('1002'), /not registered/);
+});
+
+test('an incoming INVITE surfaces the caller and its custom headers', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  const session = new FakeSession('in-1', true, 'Sam Tailor', '+15551230000', 'sip:1001@sip.vocivo.app', [
+    { name: 'X-Vocivo-Call-UUID', value: 'abc-123' },
+  ]);
+  fake.ring(session);
+  const incoming = must(of('incoming')[0], 'an incoming event');
+  assert.equal(incoming.callId, 'in-1');
+  assert.equal(incoming.callerName, 'Sam Tailor');
+  assert.equal(incoming.callerNumber, '+15551230000');
+  assert.deepEqual(incoming.headers, [{ name: 'X-Vocivo-Call-UUID', value: 'abc-123' }]);
+});
+
+test('an outgoing call rings then goes active', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  const callId = await bridge.invite('1002', [{ name: 'X-Vocivo-Tenant', value: 't1' }]);
+  assert.equal(fake.state.lastTarget, '1002');
+  assert.deepEqual(fake.state.lastHeaders, [{ name: 'X-Vocivo-Tenant', value: 't1' }]);
+
+  const session = must(fake.outgoing[0], 'the outgoing session');
+  session.move('Establishing');
+  session.move('Established');
+  assert.deepEqual(of('callState').filter((entry) => entry.callId === callId).map((entry) => entry.state), ['RINGING', 'ACTIVE']);
+});
+
+test('terminating does not end the call early', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  await bridge.invite('1002');
+  const session = must(fake.outgoing[0], 'the outgoing session');
+  session.move('Established');
+  session.move('Terminating');
+  assert.deepEqual(of('callState').map((entry) => entry.state), ['ACTIVE']);
+});
+
+test('a busy far end is an ordinary ending, a server error is a failure', () => {
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 486 } }), 'ENDED');
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 603 } }), 'ENDED');
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 487 } }), 'ENDED');
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 503 } }), 'FAILED');
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 403 } }), 'FAILED');
+  // A call that was up and then hung up is never a failure, whatever the code.
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: true, held: false, disposition: { statusCode: 503 } }), 'ENDED');
+});
+
+test('an incoming call that is never answered ends rather than fails', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  const session = new FakeSession('in-1', true);
+  fake.ring(session);
+  session.move('Terminated', { statusCode: 487, reason: 'Request Terminated' });
+  const state = must(of('callState')[0], 'a call state event');
+  assert.equal(state.state, 'ENDED');
+  assert.equal(state.cause, 'Request Terminated');
+});
+
+test('hold republishes the call state, because the re-INVITE does not', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  const callId = await bridge.invite('1002');
+  const session = must(fake.outgoing[0], 'the outgoing session');
+  session.move('Established');
+  await bridge.hold(callId, true);
+  await bridge.hold(callId, false);
+  assert.deepEqual(of('callState').map((entry) => entry.state), ['ACTIVE', 'HELD', 'ACTIVE']);
+  assert.deepEqual(of('mediaState').map((entry) => entry.onHold), [true, false]);
+  assert.deepEqual(session.actions, ['hold:true', 'hold:false']);
+});
+
+test('hold before the call is up does not publish a state it cannot be in', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  const callId = await bridge.invite('1002');
+  await bridge.hold(callId, true);
+  assert.deepEqual(of('callState').map((entry) => entry.state), []);
+});
+
+test('mute and DTMF reach the session', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  const callId = await bridge.invite('1002');
+  const session = must(fake.outgoing[0], 'the outgoing session');
+  await bridge.mute(callId, true);
+  await bridge.sendDtmf(callId, '5');
+  assert.deepEqual(session.actions, ['mute:true', 'dtmf:5']);
+  assert.deepEqual(of('mediaState').map((entry) => entry.muted), [true]);
+});
+
+test('a terminated session is forgotten so its peer connection cannot leak', async () => {
+  const { bridge, fake } = harness();
+  await bridge.register(credentials);
+  const callId = await bridge.invite('1002');
+  must(fake.outgoing[0], 'the outgoing session').move('Terminated', { statusCode: 200 });
+  await assert.rejects(() => bridge.mute(callId, true), /Unknown Vocivo SIP call/);
+  // Hanging up a call that has already gone is a no-op, not a crash: the user
+  // can always press the red button after the far end has hung up.
+  await bridge.hangup(callId);
+});
+
+test('unregister ends live calls, stops the stack and reports disconnection', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  await bridge.invite('1002');
+  const session = must(fake.outgoing[0], 'the outgoing session');
+  session.move('Established');
+  await bridge.unregister();
+  assert.deepEqual(session.actions, ['terminate']);
+  assert.equal(fake.state.stopped, true);
+  assert.equal(of('callState').at(-1)?.state, 'ENDED');
+  assert.equal(of('registration').at(-1)?.state, 'none');
+});
+
+test('registering twice tears the first stack down first', async () => {
+  const events = new SipEventBus();
+  const stacks: ReturnType<typeof fakeStack>[] = [];
+  const bridge = new SipStackBridge({
+    createStack: () => {
+      const next = fakeStack();
+      stacks.push(next);
+      return next.stack;
+    },
+    events,
+  });
+  await bridge.register(credentials);
+  await bridge.register(credentials);
+  assert.equal(stacks.length, 2);
+  assert.equal(must(stacks[0], 'the first stack').state.stopped, true);
+  assert.equal(must(stacks[1], 'the second stack').state.started, true);
+});
+
+test('the speaker route is remembered and forwarded', async () => {
+  const { bridge, fake } = harness();
+  await bridge.register(credentials);
+  await bridge.setSpeaker(true);
+  assert.equal(fake.state.speaker, true);
+  assert.equal(bridge.speakerOn, true);
+});
+
+test('a listener that throws does not stop the others', () => {
+  const events = new SipEventBus();
+  const seen: string[] = [];
+  events.addListener('callState', () => { throw new Error('boom'); });
+  events.addListener('callState', (payload) => seen.push(payload.state));
+  events.emit('callState', { callId: 'x', state: 'ACTIVE' });
+  assert.deepEqual(seen, ['ACTIVE']);
+});
+
+test('removing a listener during emit does not skip the next one', () => {
+  const events = new SipEventBus();
+  const seen: string[] = [];
+  const first = events.addListener('callState', () => { first.remove(); seen.push('first'); });
+  events.addListener('callState', () => seen.push('second'));
+  events.emit('callState', { callId: 'x', state: 'ACTIVE' });
+  assert.deepEqual(seen, ['first', 'second']);
+});

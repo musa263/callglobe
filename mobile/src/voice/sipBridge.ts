@@ -1,0 +1,295 @@
+import type { SipDisposition, SipRegistererState, SipSessionHandle, SipSessionState, SipStack, SipStackConfig, SipStackFactory } from './sipStack';
+import type {
+  NativeSipBridge,
+  SipEventMap,
+  SipEventName,
+  SipEventSource,
+  VoiceCallState,
+  VoiceInviteHeader,
+} from './voiceEngine';
+
+/**
+ * Implements `NativeSipBridge` on top of a SIP stack that speaks to Vocivo's
+ * own Kamailio edge.
+ *
+ * `SipVoiceClient` already knows how to drive the React tree from a
+ * `NativeSipBridge` plus an event source; this class is the other half of that
+ * contract. Signalling and media never touch a carrier SDK: SIP goes over the
+ * app's own WSS port and RTP goes to the app's own RTPEngine.
+ *
+ * Everything here is deliberately platform-free. The native module is left
+ * with only what genuinely cannot live in JavaScript — CallKit, PushKit,
+ * ConnectionService and the audio route — which is also the part that has to
+ * work before JavaScript is even running.
+ */
+
+/** Minimal `NativeEventEmitter`-shaped bus, so the engine can subscribe to us. */
+export class SipEventBus implements SipEventSource {
+  private readonly listeners = new Map<SipEventName, Set<(payload: never) => void>>();
+
+  addListener<K extends SipEventName>(event: K, listener: (payload: SipEventMap[K]) => void) {
+    const set = this.listeners.get(event) ?? new Set();
+    set.add(listener as (payload: never) => void);
+    this.listeners.set(event, set);
+    return { remove: () => { set.delete(listener as (payload: never) => void); } };
+  }
+
+  emit<K extends SipEventName>(event: K, payload: SipEventMap[K]) {
+    const set = this.listeners.get(event);
+    if (!set) return;
+    // Copy first: a listener may unsubscribe itself while we are iterating.
+    for (const listener of [...set]) {
+      try {
+        (listener as (value: SipEventMap[K]) => void)(payload);
+      } catch (error) {
+        console.warn('Vocivo SIP listener threw', error);
+      }
+    }
+  }
+}
+
+/**
+ * Maps a SIP.js session state onto the app's vocabulary.
+ *
+ * `Terminating` deliberately produces nothing: the call is still up until the
+ * BYE completes, and emitting a terminal state early would let the lifecycle
+ * registry tear the UI down while audio is still flowing.
+ */
+export function sessionStateToVoiceState(
+  state: SipSessionState,
+  context: { incoming: boolean; established: boolean; held: boolean; disposition?: SipDisposition },
+): VoiceCallState | null {
+  switch (state) {
+    case 'Initial':
+      return context.incoming ? 'RINGING' : 'CONNECTING';
+    case 'Establishing':
+      // Outgoing: we have sent the INVITE and are waiting on the far end.
+      // Incoming: the user has accepted and we are negotiating media.
+      return context.incoming ? 'CONNECTING' : 'RINGING';
+    case 'Established':
+      return context.held ? 'HELD' : 'ACTIVE';
+    case 'Terminating':
+      return null;
+    case 'Terminated':
+      return terminalState(context.established, context.disposition);
+    default:
+      return null;
+  }
+}
+
+/**
+ * A call that never connected only counts as FAILED when the far end actually
+ * refused it for a technical reason. Busy, decline and cancel are ordinary
+ * outcomes of a phone call and must not surface to the user as an error.
+ */
+function terminalState(established: boolean, disposition?: SipDisposition): VoiceCallState {
+  if (established) return 'ENDED';
+  const status = disposition?.statusCode ?? 0;
+  if (status === 0) return 'ENDED';
+  const expected = status === 486 || status === 487 || status === 600 || status === 603 || status < 400;
+  return expected ? 'ENDED' : 'FAILED';
+}
+
+type TrackedSession = {
+  handle: SipSessionHandle;
+  established: boolean;
+  held: boolean;
+  muted: boolean;
+  terminal: boolean;
+};
+
+export type SipStackBridgeOptions = {
+  createStack: SipStackFactory;
+  events: SipEventBus;
+};
+
+export class SipStackBridge implements NativeSipBridge {
+  private readonly createStack: SipStackFactory;
+  private readonly events: SipEventBus;
+  private readonly sessions = new Map<string, TrackedSession>();
+  private stack: SipStack | null = null;
+  private speaker = false;
+
+  constructor(options: SipStackBridgeOptions) {
+    this.createStack = options.createStack;
+    this.events = options.events;
+  }
+
+  async register(config: SipStackConfig) {
+    // Tear down without announcing a disconnection: re-registering must not
+    // flash the UI through "signed out" on its way to "connected".
+    await this.teardown();
+    const stack = this.createStack(config);
+    this.stack = stack;
+
+    stack.onRegistrationChange((state, reason) => {
+      this.events.emit('registration', { state: registrationState(state), reason });
+    });
+    stack.onInvitation((handle) => this.adoptIncoming(handle));
+
+    this.events.emit('registration', { state: 'progress' });
+    try {
+      await stack.start();
+    } catch (error) {
+      // Report rather than throw: a failed REGISTER is a state the UI shows,
+      // not an exception the caller has to catch on every sign-in path.
+      this.stack = null;
+      this.events.emit('registration', { state: 'failed', reason: describe(error) });
+      throw error;
+    }
+  }
+
+  async unregister() {
+    await this.teardown();
+    this.events.emit('registration', { state: 'none' });
+  }
+
+  private async teardown() {
+    const stack = this.stack;
+    this.stack = null;
+    for (const [callId, session] of this.sessions) {
+      if (session.terminal) continue;
+      try {
+        await session.handle.terminate();
+      } catch {
+        // A socket that is already gone must not block sign-out.
+      }
+      this.emitState(callId, 'ENDED');
+    }
+    this.sessions.clear();
+    if (stack) {
+      try {
+        await stack.stop();
+      } catch (error) {
+        console.warn('Vocivo SIP stop failed', describe(error));
+      }
+    }
+  }
+
+  async invite(target: string, headers?: VoiceInviteHeader[]) {
+    const stack = this.requireStack();
+    const handle = await stack.invite(target, headers ?? []);
+    this.track(handle);
+    return handle.id;
+  }
+
+  async answer(callId: string) {
+    await this.requireSession(callId).handle.accept();
+  }
+
+  async hangup(callId?: string) {
+    if (callId) {
+      const session = this.sessions.get(callId);
+      if (!session || session.terminal) return;
+      await session.handle.terminate();
+      return;
+    }
+    for (const session of [...this.sessions.values()]) {
+      if (session.terminal) continue;
+      try {
+        await session.handle.terminate();
+      } catch (error) {
+        console.warn('Vocivo SIP hangup failed', describe(error));
+      }
+    }
+  }
+
+  async hold(callId: string, on: boolean) {
+    const session = this.requireSession(callId);
+    await session.handle.setHold(on);
+    session.held = on;
+    this.events.emit('mediaState', { callId, onHold: on });
+    // The re-INVITE does not change the SIP.js session state, so the call state
+    // has to be republished here or the UI would never leave ACTIVE.
+    if (session.established) this.emitState(callId, on ? 'HELD' : 'ACTIVE');
+  }
+
+  async mute(callId: string, on: boolean) {
+    const session = this.requireSession(callId);
+    await session.handle.setMuted(on);
+    session.muted = on;
+    this.events.emit('mediaState', { callId, muted: on });
+  }
+
+  async sendDtmf(callId: string, digit: string) {
+    await this.requireSession(callId).handle.sendDtmf(digit);
+  }
+
+  async setSpeaker(on: boolean) {
+    this.speaker = on;
+    if (this.stack) await this.stack.setSpeaker(on);
+    this.events.emit('mediaState', { callId: '', speaker: on });
+  }
+
+  /** Exposed for the call UI, which needs to render the current route. */
+  get speakerOn() {
+    return this.speaker;
+  }
+
+  private adoptIncoming(handle: SipSessionHandle) {
+    this.track(handle);
+    this.events.emit('incoming', {
+      callId: handle.id,
+      callerName: handle.remoteDisplayName || undefined,
+      callerNumber: handle.remoteUser || undefined,
+      sipUsername: handle.remoteTarget || undefined,
+      headers: handle.headers,
+    });
+  }
+
+  private track(handle: SipSessionHandle) {
+    const session: TrackedSession = { handle, established: false, held: false, muted: false, terminal: false };
+    this.sessions.set(handle.id, session);
+    handle.onStateChange((state) => {
+      if (session.terminal) return;
+      if (state === 'Established') session.established = true;
+      const disposition = state === 'Terminated' ? handle.disposition() : undefined;
+      const next = sessionStateToVoiceState(state, {
+        incoming: handle.incoming,
+        established: session.established,
+        held: session.held,
+        disposition,
+      });
+      if (state === 'Terminated') {
+        session.terminal = true;
+        // Keep nothing: the engine holds its own record of finished calls, and
+        // a stale handle here would leak a peer connection per call.
+        this.sessions.delete(handle.id);
+      }
+      if (next) this.emitState(handle.id, next, disposition?.reason);
+    });
+  }
+
+  private emitState(callId: string, state: VoiceCallState, cause?: string) {
+    this.events.emit('callState', { callId, state, cause });
+  }
+
+  private requireStack() {
+    if (!this.stack) throw new Error('Vocivo SIP is not registered.');
+    return this.stack;
+  }
+
+  private requireSession(callId: string) {
+    const session = this.sessions.get(callId);
+    if (!session) throw new Error(`Unknown Vocivo SIP call ${callId}.`);
+    return session;
+  }
+}
+
+function registrationState(state: SipRegistererState): SipEventMap['registration']['state'] {
+  switch (state) {
+    case 'Registered':
+      return 'ok';
+    case 'Initial':
+      return 'progress';
+    case 'Unregistered':
+    case 'Terminated':
+      return 'none';
+    default:
+      return 'none';
+  }
+}
+
+function describe(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}

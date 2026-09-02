@@ -1,16 +1,19 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { bindCallUi, type CallUiEventSource, type NativeCallUi } from '../voice/callUi';
+import { SipEventBus, SipStackBridge } from '../voice/sipBridge';
 import { SipVoiceClient } from '../voice/sipCallEngine';
-import type { NativeSipBridge, SipEventSource } from '../voice/voiceEngine';
+import { createSipJsStack } from '../voice/sipStackSipJs';
 
 /**
- * The React Native binding for Vocivo's own SIP stack.
+ * The React Native binding for Vocivo's own voice stack.
  *
- * This file is the only place that touches `NativeModules`; the call logic
- * lives in `../voice/sipCallEngine`, which takes the bridge as an argument so
- * it can be tested without a device.
+ * This file is the only place that touches `NativeModules`. SIP signalling and
+ * media live in JavaScript (`../voice/sipStackSipJs`) and talk to Vocivo's own
+ * Kamailio and RTPEngine; the native `VocivoSip` module supplies only the
+ * system call UI and the VoIP-push wake-up, which cannot be done from JS.
  */
 
-export type VocivoSipModule = NativeSipBridge;
+export type VocivoSipModule = NativeCallUi;
 
 export function vocivoSipModule(): VocivoSipModule | null {
   const native = NativeModules.VocivoSip as VocivoSipModule | undefined;
@@ -21,40 +24,103 @@ function requireModule(): VocivoSipModule {
   const native = vocivoSipModule();
   if (!native) {
     throw new Error(Platform.OS === 'ios'
-      ? 'Vocivo SIP CallKit is not linked in this build. Telnyx remains the voice client.'
-      : 'Vocivo SIP is not available on this platform.');
+      ? 'Vocivo CallKit is not linked in this build. Telnyx remains the voice client.'
+      : 'Vocivo call handling is not available on this platform.');
   }
   return native;
 }
 
-export async function registerVocivoSip(config: Parameters<VocivoSipModule['register']>[0]) {
-  await requireModule().register(config);
+let bus: SipEventBus | null = null;
+let bridge: SipStackBridge | null = null;
+let client: SipVoiceClient | null = null;
+let binding: { remove: () => void } | null = null;
+
+function ensureBridge() {
+  if (bridge && bus) return { bridge, bus };
+  const native = vocivoSipModule();
+  const events = new SipEventBus();
+  const created = new SipStackBridge({
+    events,
+    createStack: (config) => createSipJsStack(config, {
+      // Routing to the loudspeaker is an audio-session change, so it stays with
+      // the platform module even though everything else here is JavaScript.
+      setSpeaker: native ? (on: boolean) => native.setSpeaker(on) : undefined,
+    }),
+  });
+  bus = events;
+  bridge = created;
+  return { bridge: created, bus: events };
+}
+
+export async function registerVocivoSip(config: {
+  username: string;
+  password: string;
+  domain: string;
+  wsUri?: string;
+  displayName?: string;
+}) {
+  await ensureBridge().bridge.register(config);
 }
 
 export async function unregisterVocivoSip() {
-  await requireModule().unregister();
+  if (!bridge) return;
+  await bridge.unregister();
 }
 
-export async function inviteVocivoSip(target: string, headers?: Parameters<VocivoSipModule['invite']>[1]) {
-  return requireModule().invite(target, headers);
+export async function inviteVocivoSip(target: string, headers?: Array<{ name: string; value: string }>) {
+  return ensureBridge().bridge.invite(target, headers);
 }
 
 export async function hangupVocivoSip(callId?: string) {
-  await requireModule().hangup(callId);
+  if (!bridge) return;
+  await bridge.hangup(callId);
 }
 
 export async function setVocivoSipSpeaker(on: boolean) {
-  await requireModule().setSpeaker(on);
+  await ensureBridge().bridge.setSpeaker(on);
+  // Keep the system call screen's own speaker button in step when it is there.
+  await vocivoSipModule()?.setSpeaker(on).catch(() => undefined);
+}
+
+/** True when this build can show a native incoming-call screen. */
+export async function callUiAvailable() {
+  const native = vocivoSipModule();
+  if (!native) return false;
+  return native.isCallUiAvailable().catch(() => false);
 }
 
 /**
  * Builds the voice client that replaces the Telnyx one when the edge is `sip`.
- * Returns null when the native module is not linked, so the caller can fall
- * back rather than crash a build that has not shipped the module yet.
+ *
+ * Returns a client whether or not the native module is linked: the SIP stack
+ * itself is pure JavaScript, so calls work in the foreground on any build. What
+ * the native module adds is the OS call screen and the ability to ring a phone
+ * whose app has been killed.
  */
-export function createSipVoiceClient(): SipVoiceClient | null {
+export function createSipVoiceClient(): SipVoiceClient {
+  if (client) return client;
+  const { bridge: sipBridge, bus: events } = ensureBridge();
   const native = vocivoSipModule();
-  if (!native) return null;
-  const events = new NativeEventEmitter(NativeModules.VocivoSip) as unknown as SipEventSource;
-  return new SipVoiceClient({ bridge: native, events });
+  if (native) {
+    binding?.remove();
+    binding = bindCallUi({
+      events,
+      bridge: sipBridge,
+      native,
+      ui: new NativeEventEmitter(NativeModules.VocivoSip) as unknown as CallUiEventSource,
+    });
+  }
+  client = new SipVoiceClient({ bridge: sipBridge, events });
+  return client;
 }
+
+/** Drops the client and its listeners. Used on sign-out and in tests. */
+export function disposeSipVoiceClient() {
+  binding?.remove();
+  binding = null;
+  client = null;
+  bridge = null;
+  bus = null;
+}
+
+export { requireModule as requireVocivoSipModule };

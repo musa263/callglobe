@@ -1,0 +1,293 @@
+import { mediaDevices, registerGlobals } from 'react-native-webrtc';
+import {
+  Invitation,
+  Inviter,
+  Registerer,
+  RegistererState,
+  SessionState,
+  UserAgent,
+  type Session,
+} from 'sip.js';
+import type { IncomingResponse } from 'sip.js/lib/core';
+import {
+  defaultSessionDescriptionHandlerFactory,
+  type SessionDescriptionHandler,
+  type SessionDescriptionHandlerOptions as WebSessionDescriptionHandlerOptions,
+} from 'sip.js/lib/platform/web';
+import type {
+  SipDisposition,
+  SipRegistererState,
+  SipSessionHandle,
+  SipSessionState,
+  SipStack,
+  SipStackConfig,
+} from './sipStack';
+import type { VoiceInviteHeader } from './voiceEngine';
+
+/**
+ * The one file that talks to SIP.js, and the one file that decides where calls
+ * go: `wss://sip.vocivo.app` — Vocivo's own Kamailio, with media relayed by
+ * Vocivo's own RTPEngine. No carrier SDK sits in the signalling or the media
+ * path, so an internal extension-to-extension call costs nothing and never
+ * leaves the tenant's own edge.
+ *
+ * The system call UI (CallKit on iOS, ConnectionService on Android) and the
+ * audio route stay in native code, because they have to run before JavaScript
+ * exists. Everything else is here.
+ */
+
+let globalsRegistered = false;
+
+/** react-native-webrtc installs `RTCPeerConnection` and friends onto global. */
+function ensureWebrtcGlobals() {
+  if (globalsRegistered) return;
+  registerGlobals();
+  globalsRegistered = true;
+}
+
+/** Vocivo is voice-only: never ask for the camera, and never negotiate video. */
+const audioOnly: MediaStreamConstraints = { audio: true, video: false };
+
+const sdhFactory = defaultSessionDescriptionHandlerFactory(async () => {
+  // Goes straight to react-native-webrtc rather than through the
+  // `navigator.mediaDevices` shim, which is not present on every RN version.
+  return mediaDevices.getUserMedia({ audio: true, video: false }) as unknown as MediaStream;
+});
+
+function toSipSessionState(state: SessionState): SipSessionState {
+  switch (state) {
+    case SessionState.Initial: return 'Initial';
+    case SessionState.Establishing: return 'Establishing';
+    case SessionState.Established: return 'Established';
+    case SessionState.Terminating: return 'Terminating';
+    default: return 'Terminated';
+  }
+}
+
+function toSipRegistererState(state: RegistererState): SipRegistererState {
+  switch (state) {
+    case RegistererState.Initial: return 'Initial';
+    case RegistererState.Registered: return 'Registered';
+    case RegistererState.Unregistered: return 'Unregistered';
+    default: return 'Terminated';
+  }
+}
+
+/**
+ * Pulls the `X-` headers off an INVITE.
+ *
+ * Vocivo's edge uses these to carry the call UUID and the tenant, which the
+ * app needs in order to reconcile a ringing call with the record the API
+ * created for it.
+ */
+function customHeaders(session: Session): VoiceInviteHeader[] {
+  const request = (session as Invitation).request as { headers?: Record<string, Array<{ raw?: string }>> } | undefined;
+  const raw = request?.headers;
+  if (!raw) return [];
+  const headers: VoiceInviteHeader[] = [];
+  for (const [name, values] of Object.entries(raw)) {
+    if (!name.toLowerCase().startsWith('x-')) continue;
+    for (const value of values) {
+      const text = value?.raw ?? '';
+      const separator = text.indexOf(':');
+      headers.push({ name, value: (separator >= 0 ? text.slice(separator + 1) : text).trim() });
+    }
+  }
+  return headers;
+}
+
+class SipJsSession implements SipSessionHandle {
+  readonly headers: VoiceInviteHeader[];
+  readonly remoteDisplayName: string;
+  readonly remoteUser: string;
+  readonly remoteTarget: string;
+
+  private listener: ((state: SipSessionState) => void) | null = null;
+  private ended: SipDisposition = {};
+  private held = false;
+
+  constructor(private readonly session: Session, readonly id: string, readonly incoming: boolean) {
+    const identity = session.remoteIdentity;
+    this.remoteDisplayName = identity?.displayName ?? '';
+    this.remoteUser = identity?.uri?.user ?? '';
+    this.remoteTarget = identity?.uri?.toString() ?? '';
+    this.headers = incoming ? customHeaders(session) : [];
+
+    // An ordinary hang-up leaves `ended` empty: no status code is precisely how
+    // the bridge tells a BYE apart from a rejection.
+    session.stateChange.addListener((state) => this.listener?.(toSipSessionState(state)));
+  }
+
+  /** Records why the far end refused, so the UI can tell busy from broken. */
+  noteRejection(response: IncomingResponse) {
+    this.ended = {
+      statusCode: response.message.statusCode,
+      reason: response.message.reasonPhrase,
+    };
+  }
+
+  onStateChange(listener: (state: SipSessionState) => void) {
+    this.listener = listener;
+  }
+
+  disposition() {
+    return this.ended;
+  }
+
+  async accept() {
+    if (!(this.session instanceof Invitation)) throw new Error('Only an incoming call can be answered.');
+    await this.session.accept({ sessionDescriptionHandlerOptions: { constraints: audioOnly } });
+  }
+
+  async terminate() {
+    switch (this.session.state) {
+      case SessionState.Initial:
+      case SessionState.Establishing:
+        if (this.session instanceof Inviter) await this.session.cancel();
+        else if (this.session instanceof Invitation) await this.session.reject();
+        return;
+      case SessionState.Established:
+        await this.session.bye();
+        return;
+      default:
+        // Already going away; nothing to send.
+        return;
+    }
+  }
+
+  async setHold(on: boolean) {
+    if (this.held === on) return;
+    this.held = on;
+    // Applies to this re-INVITE and to every later one, so a hold survives a
+    // subsequent renegotiation instead of silently un-holding the call.
+    const holdOptions: WebSessionDescriptionHandlerOptions = { hold: on, constraints: audioOnly };
+    this.session.sessionDescriptionHandlerOptionsReInvite = holdOptions;
+    await this.session.invite({ sessionDescriptionHandlerOptions: holdOptions });
+  }
+
+  async setMuted(on: boolean) {
+    // Mute is local only: stopping the track would renegotiate and the far end
+    // would hear the line drop rather than silence.
+    for (const sender of this.peerConnection()?.getSenders() ?? []) {
+      if (sender.track) sender.track.enabled = !on;
+    }
+  }
+
+  async sendDtmf(digit: string) {
+    const handler = this.session.sessionDescriptionHandler as SessionDescriptionHandler | undefined;
+    if (handler?.sendDtmf(digit)) return;
+    // RFC 2833 was unavailable — fall back to SIP INFO, which every softswitch
+    // including FreeSWITCH still accepts.
+    await this.session.info({
+      requestOptions: {
+        body: {
+          contentDisposition: 'render',
+          contentType: 'application/dtmf-relay',
+          content: `Signal=${digit}\r\nDuration=160`,
+        },
+      },
+    });
+  }
+
+  private peerConnection() {
+    const handler = this.session.sessionDescriptionHandler as SessionDescriptionHandler | undefined;
+    return handler?.peerConnection;
+  }
+}
+
+export type SipJsStackOptions = {
+  /** Set the audio route. Implemented by the native call-UI module. */
+  setSpeaker?: (on: boolean) => Promise<void>;
+  /** STUN/TURN. Defaults to Vocivo's own coturn on the SIP edge. */
+  iceServers?: RTCIceServer[];
+};
+
+export function createSipJsStack(config: SipStackConfig, options: SipJsStackOptions = {}): SipStack {
+  ensureWebrtcGlobals();
+
+  const uri = UserAgent.makeURI(`sip:${config.username}@${config.domain}`);
+  if (!uri) throw new Error(`Not a usable SIP address: ${config.username}@${config.domain}`);
+
+  let onRegistration: ((state: SipRegistererState, reason?: string) => void) | null = null;
+  let onInvitation: ((session: SipSessionHandle) => void) | null = null;
+  let sequence = 0;
+  const nextId = () => `vocivo-${Date.now().toString(36)}-${(sequence += 1)}`;
+
+  const userAgent = new UserAgent({
+    uri,
+    displayName: config.displayName,
+    authorizationUsername: config.username,
+    authorizationPassword: config.password,
+    transportOptions: {
+      server: config.wsUri ?? `wss://${config.domain}:7443`,
+      // A dropped socket on a moving phone is normal, not exceptional.
+      keepAliveInterval: 30,
+    },
+    sessionDescriptionHandlerFactory: sdhFactory,
+    sessionDescriptionHandlerFactoryOptions: {
+      iceGatheringTimeout: 3000,
+      peerConnectionConfiguration: {
+        iceServers: options.iceServers ?? [{ urls: `stun:${config.domain}:3478` }],
+      },
+    },
+    logLevel: 'warn',
+    delegate: {
+      onInvite: (invitation) => {
+        // Prefer the edge's own call UUID as the id. The VoIP push carries the
+        // same value, so the call CallKit is already showing and the INVITE
+        // that follows it are one call rather than two.
+        const uuid = customHeaders(invitation).find((header) => header.name.toLowerCase() === 'x-vocivo-call-uuid')?.value;
+        const handle = new SipJsSession(invitation, uuid || nextId(), true);
+        onInvitation?.(handle);
+      },
+    },
+  });
+
+  const registerer = new Registerer(userAgent, { expires: 600 });
+  registerer.stateChange.addListener((state) => onRegistration?.(toSipRegistererState(state)));
+
+  return {
+    onRegistrationChange: (listener) => { onRegistration = listener; },
+    onInvitation: (listener) => { onInvitation = listener; },
+
+    start: async () => {
+      await userAgent.start();
+      await registerer.register({
+        requestDelegate: {
+          onReject: (response) => {
+            onRegistration?.('Unregistered', `${response.message.statusCode} ${response.message.reasonPhrase}`);
+          },
+        },
+      });
+    },
+
+    stop: async () => {
+      try {
+        await registerer.unregister();
+      } catch {
+        // The socket may already be gone; sign-out must not depend on it.
+      }
+      await userAgent.stop();
+    },
+
+    invite: async (target, headers) => {
+      const targetUri = UserAgent.makeURI(target.includes('@') ? `sip:${target.replace(/^sip:/, '')}` : `sip:${target}@${config.domain}`);
+      if (!targetUri) throw new Error(`Not a usable call target: ${target}`);
+      const inviter = new Inviter(userAgent, targetUri, {
+        extraHeaders: headers.map((header) => `${header.name}: ${header.value}`),
+        sessionDescriptionHandlerOptions: { constraints: audioOnly },
+      });
+      const handle = new SipJsSession(inviter, nextId(), false);
+      await inviter.invite({
+        requestDelegate: {
+          onReject: (response) => handle.noteRejection(response),
+        },
+      });
+      return handle;
+    },
+
+    setSpeaker: async (on) => {
+      await options.setSpeaker?.(on);
+    },
+  };
+}
