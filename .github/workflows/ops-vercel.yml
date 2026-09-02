@@ -74,6 +74,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
           cd frontend
           SAFE_TO_PRINT="VOCIVO_VOICE_EDGE VOCIVO_SIP_INBOUND VOCIVO_SIP_DOMAIN VOCIVO_SIP_REALM VOCIVO_SIP_WSS_URI VITE_APP_URL TTS_SERVICE_URL WEB_PUSH_SUBJECT APNS_TOPIC APNS_TEAM_ID APNS_KEY_ID"
           for target in $([ "$ENVIRONMENT" = all ] && echo production preview development || echo "$ENVIRONMENT"); do
@@ -98,6 +99,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
           cd frontend
           for target in $([ "$ENVIRONMENT" = all ] && echo production preview development || echo "$ENVIRONMENT"); do
             npx --yes vercel@latest env rm "$NAME" "$target" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
@@ -113,6 +115,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
           cd frontend
           for target in $([ "$ENVIRONMENT" = all ] && echo production preview development || echo "$ENVIRONMENT"); do
             if npx --yes vercel@latest env rm "$NAME" "$target" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1; then
@@ -128,6 +131,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           set -euo pipefail
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
           cd frontend
           npx --yes vercel@latest pull --yes --environment production --token "$VERCEL_TOKEN" >/dev/null
           url=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" | tail -n 1)
