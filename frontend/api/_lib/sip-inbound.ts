@@ -1,18 +1,59 @@
-import { listExtensions, listExtensionSipUsernames } from './pbx.js';
-import type { PbxConfig } from './pbx-config-store.js';
+import { officeHoursDecision } from './office-hours.js';
+import { listExtensions, listExtensionSipUsernames, type ExtensionUser } from './pbx.js';
+import { pbxForOrganization, type PbxConfig } from './pbx-config-store.js';
 import { sipInboundEnabled } from './voice-provider.js';
 import { normalizeE164 } from './tenancy.js';
+
+/**
+ * What the SIP edge should do with a call arriving on one of Vocivo's numbers.
+ *
+ * FreeSWITCH's `vocivo-inbound-did` extension asks this endpoint once per call
+ * and branches on `action`. Keeping the decision here rather than in dialplan
+ * regexes is the point: office hours, the AI receptionist and the tenant's
+ * routing all live in the API already, and the switch stays an executor.
+ */
+
+export type SipInboundAction = 'closed' | 'ai' | 'queue' | 'bridge';
 
 export type SipInboundLookup = {
   enabled: boolean;
   reason?: string;
   organizationId?: string;
+  /** SIP usernames that could answer, kept for callers that predate `action`. */
   usernames: string[];
   bridge: string;
+  action?: SipInboundAction;
+  /** Spoken to the caller before the action, when there is something to say. */
+  prompt?: string;
+  /** How long to ring before giving up, for `queue` and `bridge`. */
+  timeoutSec?: number;
 };
 
-export async function lookupSipInbound(to: string, config: PbxConfig): Promise<SipInboundLookup> {
+const ringSeconds = 30;
+
+/**
+ * The directory lookups, injectable so the routing decision can be tested
+ * without a database — the decision is the part with the judgement in it.
+ */
+export type SipInboundDirectory = {
+  extensionsFor(organizationId: string): Promise<ExtensionUser[]>;
+  usernamesForDestination(destinationId: string): Promise<string[]>;
+};
+
+const liveDirectory: SipInboundDirectory = {
+  extensionsFor: (organizationId) => listExtensions(organizationId),
+  usernamesForDestination: (destinationId) => listExtensionSipUsernames(destinationId),
+};
+
+export async function lookupSipInbound(
+  to: string,
+  config: PbxConfig,
+  now = new Date(),
+  directoryLookup: SipInboundDirectory = liveDirectory,
+): Promise<SipInboundLookup> {
   if (!sipInboundEnabled()) {
+    // Inbound is still delivered by the carrier's Call Control app. Answering
+    // anything here would race that webhook for the same call.
     return { enabled: false, reason: 'call_control', usernames: [], bridge: '' };
   }
   const did = normalizeE164(to);
@@ -20,19 +61,65 @@ export async function lookupSipInbound(to: string, config: PbxConfig): Promise<S
   if (!assignment?.organizationId) {
     return { enabled: false, reason: 'unassigned', usernames: [], bridge: '' };
   }
-  const directory = await listExtensions(assignment.organizationId);
+
+  const organizationId = assignment.organizationId;
+  const tenant = pbxForOrganization(config, organizationId);
+  const directory = await directoryLookup.extensionsFor(organizationId);
+
   let usernames: string[] = [];
   if (assignment.destinationType === 'extension' && assignment.destinationId) {
-    usernames = await listExtensionSipUsernames(assignment.destinationId);
+    usernames = await directoryLookup.usernamesForDestination(assignment.destinationId);
   } else {
     usernames = directory.filter((item) => item.status === 'active' && item.sipUsername).map((item) => item.sipUsername);
   }
   const unique = [...new Set(usernames.filter(Boolean))];
+  const bridge = unique.map((username) => `sofia/external/${username}@127.0.0.1:5060`).join(',');
+
+  // Closed comes first: a business that is shut should not ring a colleague's
+  // phone at midnight because a number happens to point at their extension.
+  if (!officeHoursDecision(tenant.officeHours, now).open) {
+    return {
+      enabled: true,
+      organizationId,
+      usernames: unique,
+      bridge,
+      action: 'closed',
+      prompt: closedPrompt(tenant),
+    };
+  }
+
+  // Vocivo's own receptionist. The edge hands the call to the receptionist
+  // service, which transfers back into this same dialplan when the caller asks
+  // for a person — so a receptionist can never reach somewhere a colleague
+  // could not.
+  if (tenant.ai?.enabled) {
+    return { enabled: true, organizationId, usernames: unique, bridge, action: 'ai' };
+  }
+
+  if (!unique.length) {
+    return { enabled: false, reason: 'no_contacts', organizationId, usernames: [], bridge: '' };
+  }
+
+  const grouped = assignment.destinationType === 'ring_group' || assignment.destinationType === 'queue';
   return {
-    enabled: unique.length > 0,
-    reason: unique.length ? undefined : 'no_contacts',
-    organizationId: assignment.organizationId,
+    enabled: true,
+    organizationId,
     usernames: unique,
-    bridge: unique.map((username) => `sofia/external/${username}@127.0.0.1:5060`).join(','),
+    bridge,
+    action: grouped ? 'queue' : 'bridge',
+    prompt: grouped ? waitingPrompt(tenant) : undefined,
+    timeoutSec: ringSeconds,
   };
+}
+
+function closedPrompt(tenant: PbxConfig) {
+  const name = tenant.company?.name?.trim();
+  return name
+    ? `Thank you for calling ${name}. We are closed right now. Please call back during business hours.`
+    : 'Thank you for calling. We are closed right now. Please call back during business hours.';
+}
+
+function waitingPrompt(tenant: PbxConfig) {
+  const name = tenant.company?.name?.trim();
+  return name ? `Thank you for calling ${name}. Connecting you now.` : 'Thank you for calling. Connecting you now.';
 }
