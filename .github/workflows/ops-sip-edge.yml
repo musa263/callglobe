@@ -287,6 +287,13 @@ jobs:
               echo "--- last '"$since"': $total lines, $((total - kept)) of them scanner/keepalive noise (not shown) ---"
               { grep -vP "$noise" /tmp/vocivo-logs.txt || true; } | sed -E "s/^([^ ]+) +\| ([0-9T:.-]+)Z? (.*)$/\2 \1 \3/" | cut -c1-400
               rm -f /tmp/vocivo-logs.txt
+              # FreeSWITCH keeps its INFO lines (which dialplan ran, what each
+              # call executed, what xml_curl answered) in its own log file, not
+              # on stdout. The last part of it, without the per-packet chatter.
+              echo "--- freeswitch.log (call flow, last 600 lines filtered) ---"
+              docker compose exec -T freeswitch sh -c "tail -n 600 /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null \
+                | { grep -E "EXECUTE|Dialplan|xml_curl|XML_CURL|socket|http_cache|json_cdr|Hangup|hangup|NORMAL_|ERR\]|CRIT\]|New Channel|Transfer|transfer|playback|play_and_get" || echo "(no call-flow lines in the last 600 lines)"; } \
+                | grep -vE "sofia_glue|switch_rtp|send_dtmf|switch_core_media" | cut -c1-260 | tail -120
               ';;
             deploy)
               remote="$remote"'
