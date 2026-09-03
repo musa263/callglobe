@@ -262,8 +262,12 @@ class Brain:
             response.raise_for_status()
         except httpx.HTTPError as error:
             # The caller is on the line: fall back to a person rather than to an
-            # apology loop.
-            log.error("the language model did not answer: %s", error)
+            # apology loop. The response body says *why* — a rejected request
+            # is worth reading, a status code alone was not.
+            detail = ""
+            if isinstance(error, httpx.HTTPStatusError):
+                detail = error.response.text[:400]
+            log.error("the language model did not answer (%s): %s %s", self._settings.llm_model, error, detail)
             if assistant.transfer_enabled and assistant.fallback_extension:
                 return Decision(action="transfer", extension=assistant.fallback_extension, say="One moment, I'll put you through.")
             return Decision(action="message", say="Sorry, I'm having trouble right now. I'll take a message and someone will call you back.", note="(the receptionist could not reach the language model)")

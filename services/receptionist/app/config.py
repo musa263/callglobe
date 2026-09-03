@@ -55,12 +55,18 @@ class Settings:
     listen_seconds: int = 20
     silence_threshold: int = 300
     silence_seconds: int = 2
+    #: How long to wait for the caller to *start* talking before treating the
+    #: turn as silent. FreeSWITCH's recorder stops after `silence_seconds` of
+    #: quiet whether or not anyone has spoken yet, and two seconds is less than
+    #: most people take to answer "how can I help?".
+    patience_seconds: int = 10
     max_turns: int = 12
 
     @classmethod
     def from_env(cls) -> "Settings":
         def text(name: str, fallback: str) -> str:
-            return os.getenv(name, fallback).strip()
+            # A value pasted with its quotes is a common way to break a key.
+            return os.getenv(name, fallback).strip().strip("'\"").strip()
 
         def number(name: str, fallback: int) -> int:
             try:
@@ -88,6 +94,7 @@ class Settings:
             listen_seconds=number("RECEPTIONIST_LISTEN_SECONDS", cls.listen_seconds),
             silence_threshold=number("RECEPTIONIST_SILENCE_THRESHOLD", cls.silence_threshold),
             silence_seconds=number("RECEPTIONIST_SILENCE_SECONDS", cls.silence_seconds),
+            patience_seconds=number("RECEPTIONIST_PATIENCE_SECONDS", cls.patience_seconds),
             max_turns=number("RECEPTIONIST_MAX_TURNS", cls.max_turns),
         )
 

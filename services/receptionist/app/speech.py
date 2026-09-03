@@ -184,21 +184,27 @@ class Ears:
         """Loads the model at start-up rather than during the first call."""
         await self._load()
 
-    async def transcribe(self, path: Path, language: str | None = None) -> str:
+    async def transcribe(self, path: Path, language: str | None = None, hints: list[str] | None = None) -> str:
         """
         The caller's words. `language` is the tenant's receptionist language
         (en, fr, es, ...); without it recognition was pinned to English and a
-        French receptionist heard nonsense.
+        French receptionist heard nonsense. `hints` are names the caller is
+        likely to say — the business, the people it can transfer to — which
+        the recogniser otherwise turns into the nearest common word ("Musa"
+        came out as "Mozart").
         """
         if not path.exists() or path.stat().st_size == 0:
             return ""
         model = await self._load()
         spoken = (language or self._settings.stt_language or "").strip().lower()[:2] or None
+        names = [hint.strip() for hint in (hints or []) if hint and hint.strip()]
+        prompt = f"Phone call to {', '.join(dict.fromkeys(names))}." if names else None
 
         def run() -> str:
             segments, _ = model.transcribe(
                 str(path),
                 language=spoken,
+                initial_prompt=prompt,
                 beam_size=1,
                 # Phone audio is narrowband and noisy; the VAD filter keeps
                 # line noise from being transcribed as words.

@@ -109,7 +109,13 @@ class FakeFreeswitch:
 
         path = Path(arg.split(" ")[0])
         path.parent.mkdir(parents=True, exist_ok=True)
-        seconds = 1.5 if self.caller_turns else 0.05
+        # An empty turn is a caller who has not started talking yet: the
+        # recorder gives up after its silence window with next to nothing.
+        if self.caller_turns and self.caller_turns[0] == "":
+            self.caller_turns.pop(0)
+            seconds = 0.05
+        else:
+            seconds = 1.5 if self.caller_turns else 0.05
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(1)
             handle.setsampwidth(2)
@@ -140,9 +146,11 @@ class FakeEars:
     def __init__(self, freeswitch: FakeFreeswitch):
         self._freeswitch = freeswitch
         self.languages: list[str | None] = []
+        self.hints: list[list[str]] = []
 
-    async def transcribe(self, path: Path, language: str | None = None) -> str:
+    async def transcribe(self, path: Path, language: str | None = None, hints: list[str] | None = None) -> str:
         self.languages.append(language)
+        self.hints.append(list(hints or []))
         return self._freeswitch.caller_turns.pop(0) if self._freeswitch.caller_turns else ""
 
 
@@ -189,6 +197,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
                 llm_api_key="x",
                 api_secret="x",
                 listen_seconds=2,
+                patience_seconds=1,
             )
             freeswitch = FakeFreeswitch(answered=answered)
             freeswitch.caller_turns = list(turns)
@@ -238,9 +247,11 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
             decisions=[Decision(action="transfer", extension="1001", say="Putting you through to Sam.")],
         )
         transfer = [arg for app, arg in freeswitch.applications if app == "transfer"]
-        # Back into the same dialplan, so the rules that route an ordinary
-        # internal call decide where it lands.
-        self.assertEqual(transfer, ["1001 XML default"])
+        # Back into the API's dialplan as a keyed extension, so the same rules
+        # that route a menu choice ring the right phone and fall back properly.
+        self.assertEqual(transfer, ["+18447161777 XML public"])
+        self.assertIn(("set", "vocivo_stage=ext-select"), freeswitch.applications)
+        self.assertIn(("set", "vocivo_digit=1001"), freeswitch.applications)
         self.assertIn("Putting you through to Sam.", voice.said)
         self.assertEqual(api.filed[0]["outcome"], "transferred")
         self.assertEqual(api.filed[0]["transferredTo"], "1001")
@@ -263,7 +274,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Sorry, I couldn't hear you.", voice.said)
         self.assertIn("Are you still there?", voice.said)
         self.assertIn("I'll put you through to someone.", voice.said)
-        self.assertEqual([arg for app, arg in freeswitch.applications if app == "transfer"], ["1001 XML default"])
+        self.assertEqual([arg for app, arg in freeswitch.applications if app == "transfer"], ["+18447161777 XML public"])
         self.assertEqual(api.filed[0]["outcome"], "transferred")
 
     async def test_a_number_with_no_receptionist_is_released_not_answered(self):
@@ -327,13 +338,27 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         for phrase in CANNED.values():
             self.assertIn(phrase, texts)  # the fake keeps whole phrases; the real Voice splits them as it renders
 
-    async def test_recognition_listens_in_the_receptionist_language(self):
+    async def test_recognition_listens_in_the_receptionist_language_with_the_names_it_may_hear(self):
         await self._run(
-            assistant=Assistant(name="Accueil", greeting="Bonjour.", language="fr"),
+            assistant=Assistant(name="Accueil", greeting="Bonjour.", language="fr", transfer_enabled=True, targets=(TransferTarget("1001", "Musa"),)),
             turns=["Bonjour."],
             decisions=[Decision(action="hangup", say="Au revoir.")],
         )
         self.assertEqual(self.ears.languages, ["fr"])
+        self.assertEqual(self.ears.hints, [["Accueil", "Musa"]])
+
+    async def test_a_caller_who_takes_a_moment_to_speak_is_waited_for(self):
+        # The recorder returns an empty file after two quiet seconds; the
+        # handler records again rather than apologising, until patience runs out.
+        freeswitch, voice, _ = await self._run(
+            assistant=RECEPTION,
+            turns=["", "", "Hello, is this Vocivo?"],
+            decisions=[Decision(action="hangup", say="It is. Goodbye.")],
+        )
+        records = [app for app, _ in freeswitch.applications if app == "record"]
+        self.assertGreaterEqual(len(records), 3, "kept listening through the quiet")
+        self.assertNotIn("Sorry, I couldn't hear you.", voice.said)
+        self.assertIn("It is. Goodbye.", voice.said)
 
 
 if __name__ == "__main__":

@@ -72,7 +72,7 @@ class CallHandler:
                     outcome = "caller_hung_up"
                     break
 
-                heard = await self._listen(connection, call_id, assistant.language)
+                heard = await self._listen(connection, call_id, assistant)
                 if connection.hungup.is_set():
                     outcome = "caller_hung_up"
                     break
@@ -87,7 +87,7 @@ class CallHandler:
                     if assistant.transfer_enabled and assistant.fallback_extension:
                         await self._speak(connection, CANNED["transfer_fallback"], assistant.voice)
                         transferred_to = assistant.fallback_extension
-                        await self._transfer(connection, assistant.fallback_extension)
+                        await self._transfer(connection, assistant.fallback_extension, dialled)
                         outcome = "transferred"
                     else:
                         await self._speak(connection, CANNED["goodbye_no_speech"], assistant.voice)
@@ -98,7 +98,7 @@ class CallHandler:
                 conversation.add("caller", heard)
                 decision = await self._think(connection, conversation, assistant.voice)
                 conversation.add("assistant", decision.say)
-                await self._act(connection, assistant, decision)
+                await self._act(connection, assistant, decision, dialled)
 
                 if decision.action == "transfer":
                     transferred_to = decision.extension
@@ -190,20 +190,34 @@ class CallHandler:
                 log.debug("early render failed: %s", error)
         return decision
 
-    async def _listen(self, connection: EslConnection, call_id: str, language: str) -> str:
-        path = Path(self._settings.audio_dir) / "turns" / f"{call_id}-{int(time.time() * 1000)}.wav"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        argument = " ".join([
-            str(path),
-            str(self._settings.listen_seconds),
-            str(self._settings.silence_threshold),
-            str(self._settings.silence_seconds),
-        ])
-        await connection.execute("record", argument, timeout=self._settings.listen_seconds + 10)
-        if not recording_has_audio(path):
+    async def _listen(self, connection: EslConnection, call_id: str, assistant: Assistant) -> str:
+        """
+        Waits for the caller to say something, then transcribes it.
+
+        The recorder stops after `silence_seconds` of quiet, counted from the
+        very start, so a caller who takes three seconds to begin used to be
+        told "I couldn't hear you" — the receptionist looked as if it never
+        listened. Empty recordings are simply started again until the caller
+        speaks or `patience_seconds` have gone by.
+        """
+        deadline = time.monotonic() + self._settings.patience_seconds
+        while True:
+            path = Path(self._settings.audio_dir) / "turns" / f"{call_id}-{int(time.time() * 1000)}.wav"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            argument = " ".join([
+                str(path),
+                str(self._settings.listen_seconds),
+                str(self._settings.silence_threshold),
+                str(self._settings.silence_seconds),
+            ])
+            await connection.execute("record", argument, timeout=self._settings.listen_seconds + 10)
+            if recording_has_audio(path):
+                break
             self._discard(path)
-            return ""
-        heard = await self._ears.transcribe(path, language)
+            if connection.hungup.is_set() or time.monotonic() >= deadline:
+                return ""
+        hints = [assistant.name, *(target.label for target in assistant.targets)]
+        heard = await self._ears.transcribe(path, assistant.language, hints)
         self._discard(path)
         log.info("call %s heard %r", call_id[:8], heard[:120])
         return heard
@@ -215,15 +229,24 @@ class CallHandler:
         except OSError:
             pass
 
-    async def _act(self, connection: EslConnection, assistant: Assistant, decision: Decision) -> None:
+    async def _act(self, connection: EslConnection, assistant: Assistant, decision: Decision, dialled: str) -> None:
         await self._speak(connection, decision.say, assistant.voice)
         if decision.action == "transfer":
-            await self._transfer(connection, decision.extension)
+            await self._transfer(connection, decision.extension, dialled)
         elif decision.action in {"message", "hangup"}:
             await connection.hangup()
 
-    async def _transfer(self, connection: EslConnection, extension: str) -> None:
-        # Blind transfer back into the dialplan: the same rules that route an
-        # ordinary internal call decide where this one lands, so a receptionist
-        # can never reach somewhere a colleague could not.
-        await connection.execute("transfer", f"{extension} XML default", timeout=10)
+    async def _transfer(self, connection: EslConnection, extension: str, dialled: str) -> None:
+        """
+        Hands the call to the API's dialplan as if the caller had keyed the
+        extension at the menu: the API resolves the extension to the phone
+        registered for it, plays the waiting message, rings it, and falls to
+        voicemail or the main line by the tenant's own rules.
+
+        (A transfer into the switch's `default` context by extension number
+        dialled the number as a SIP address, which is registered to nobody —
+        the switch said "not found" and hung up on the caller.)
+        """
+        await connection.set("vocivo_stage", "ext-select")
+        await connection.set("vocivo_digit", "".join(character for character in extension if character.isdigit())[:5])
+        await connection.execute("transfer", f"{dialled or extension} XML public", timeout=10)
