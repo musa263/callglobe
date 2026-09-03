@@ -238,7 +238,14 @@ jobs:
               echo "--- listening (SIP 5060 Kamailio, 5080 FreeSWITCH external) ---"; { ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null || true; } | { grep -E ":(5060|5080|7443)\b" || echo "nothing on 5060/5080"; } | awk "{ sub(/users:.*/, \"\"); print \$1, \$5, \$6 }"
               echo "--- host firewall ---"; { ufw status 2>/dev/null || echo "ufw not present"; } | head -25 || true
               echo "--- freeswitch sanity ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status" 2>/dev/null || echo "fs_cli unavailable"; } | head -20 || true
-              echo "--- telnyx gateway ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status gateway telnyx" 2>/dev/null || true; } | { grep -E "Name|Profile|State|PingState|Ping " || echo "gateway status unavailable"; }
+              echo "--- telnyx gateway ---"; { docker compose exec -T freeswitch fs_cli -x "sofia status gateway telnyx" 2>/dev/null || true; } | { grep -E "Name|Profile|State|Status|PingState|Ping " || echo "gateway status unavailable"; }
+              # The inbound dialplan speaks with flite and could play cached
+              # HTTP audio; neither module is in the vanilla autoload list.
+              echo "--- freeswitch modules the dialplan relies on ---"
+              for module in mod_flite mod_http_cache mod_shout mod_curl mod_sofia mod_conference; do
+                printf "%s: " "$module"; docker compose exec -T freeswitch fs_cli -x "module_exists $module" 2>/dev/null || echo "unknown"
+              done
+              echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
               ';;
             logs)
               remote="$remote"'
