@@ -119,7 +119,7 @@ export class SipStackBridge implements NativeSipBridge {
     // Tear down without announcing a disconnection: re-registering must not
     // flash the UI through "signed out" on its way to "connected".
     await this.teardown();
-    const stack = this.createStack(config);
+    const stack = await this.createStack(config);
     this.stack = stack;
 
     stack.onRegistrationChange((state, reason) => {

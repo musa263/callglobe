@@ -69,4 +69,12 @@ export type SipStackConfig = {
   displayName?: string;
 };
 
-export type SipStackFactory = (config: SipStackConfig) => SipStack;
+/**
+ * Builds a stack for one registration.
+ *
+ * Allowed to be asynchronous so the SIP and WebRTC implementation can be
+ * imported only when a SIP registration actually happens — a build still on the
+ * carrier edge should not be loading a second call stack at start-up, and the
+ * WebRTC binding cannot even be imported off a device.
+ */
+export type SipStackFactory = (config: SipStackConfig) => SipStack | Promise<SipStack>;

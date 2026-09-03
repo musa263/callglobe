@@ -2,7 +2,6 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { bindCallUi, type CallUiEventSource, type NativeCallUi } from '../voice/callUi';
 import { SipEventBus, SipStackBridge } from '../voice/sipBridge';
 import { SipVoiceClient } from '../voice/sipCallEngine';
-import { createSipJsStack } from '../voice/sipStackSipJs';
 
 /**
  * The React Native binding for Vocivo's own voice stack.
@@ -41,11 +40,18 @@ function ensureBridge() {
   const events = new SipEventBus();
   const created = new SipStackBridge({
     events,
-    createStack: (config) => createSipJsStack(config, {
-      // Routing to the loudspeaker is an audio-session change, so it stays with
-      // the platform module even though everything else here is JavaScript.
-      setSpeaker: native ? (on: boolean) => native.setSpeaker(on) : undefined,
-    }),
+    createStack: async (config) => {
+      // Imported here rather than at the top of the file: this pulls in SIP.js
+      // and react-native-webrtc, and a build still running on the carrier edge
+      // should never load them — react-native-webrtc cannot even be imported
+      // where the native module is absent.
+      const { createSipJsStack } = await import('../voice/sipStackSipJs');
+      return createSipJsStack(config, {
+        // Routing to the loudspeaker is an audio-session change, so it stays
+        // with the platform module even though the rest of this is JavaScript.
+        setSpeaker: native ? (on: boolean) => native.setSpeaker(on) : undefined,
+      });
+    },
   });
   bus = events;
   bridge = created;
