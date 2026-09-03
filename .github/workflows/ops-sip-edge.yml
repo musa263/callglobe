@@ -56,6 +56,10 @@ on:
         description: enable-inbound only — the carrier's SIP signalling addresses and ranges, comma-separated (e.g. 192.76.120.128/26,64.16.250.0/24)
         required: false
         type: string
+      since:
+        description: logs only — how far back to read (e.g. 30m, 2h; default 30m). Scanner noise is counted, not printed.
+        required: false
+        type: string
 
 concurrency:
   group: ops-droplet-${{ inputs.host || github.event.client_payload.host || 'sip' }}
@@ -121,6 +125,7 @@ jobs:
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           SIP_EDGE_SECRET: ${{ secrets.SIP_EDGE_SECRET }}
           TRUNK_SOURCES: ${{ inputs.trunk_sources || github.event.client_payload.trunk_sources }}
+          SINCE: ${{ inputs.since || github.event.client_payload.since }}
         run: |
           set -euo pipefail
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
@@ -248,8 +253,21 @@ jobs:
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
               ';;
             logs)
+              since="${SINCE:-30m}"
+              [[ "$since" =~ ^[0-9]{1,4}[smh]$ ]] || { echo "::error::since must look like 30m or 2h"; exit 1; }
               remote="$remote"'
-              cd "$SIP_DIR" && docker compose logs --tail=200 --no-color freeswitch kamailio rtpengine
+              cd "$SIP_DIR"
+              # Timestamped (Kamailio prints none of its own), over a window rather
+              # than a line count, and with the scanner traffic that floods 5060
+              # counted instead of printed: a 200-line tail was all scanner by the
+              # time anyone looked, and Kamailio lines carried no time at all.
+              docker compose logs -t --since "'"$since"'" --no-color freeswitch kamailio rtpengine > /tmp/vocivo-logs.txt 2>&1
+              noise="reject (untrusted internal|unauthenticated E.164) INVITE from (?!192\.76\.120\.|64\.16\.250\.|127\.0\.0\.1)|tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req|F_TCPCONN|CON_ERROR|Ping succeeded|REGISTER (challenge |auth failed |ok )?[0-9]{6,}|sip-auth rejected [0-9]{6,}|tcp_timer_check_connections|malformed SIP from"
+              total=$(wc -l < /tmp/vocivo-logs.txt)
+              kept=$( { grep -vP "$noise" /tmp/vocivo-logs.txt || true; } | wc -l)
+              echo "--- last '"$since"': $total lines, $((total - kept)) of them scanner/keepalive noise (not shown) ---"
+              { grep -vP "$noise" /tmp/vocivo-logs.txt || true; } | sed -E "s/^([^ ]+) +\| ([0-9T:.-]+)Z? (.*)$/\2 \1 \3/" | cut -c1-400
+              rm -f /tmp/vocivo-logs.txt
               ';;
             deploy)
               remote="$remote"'
