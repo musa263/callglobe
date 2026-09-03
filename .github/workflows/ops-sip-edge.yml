@@ -505,17 +505,27 @@ jobs:
               done
               ';;
             receptionist-deploy)
-              [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is required"; exit 1; }
+              # Only the language-model key has to come from GitHub. The edge
+              # secret and the speech service's secret already live on the
+              # droplet the receptionist runs on (/opt/vocivo/sip/.env and
+              # /etc/vocivo/tts.env), and are read there — a secret that
+              # exists in one place is one that cannot drift.
               [ -n "$LLM_API_KEY" ] || { echo "::error::LLM_API_KEY secret is required"; exit 1; }
-              [ -n "$SIP_EDGE_SECRET" ] || { echo "::error::SIP_EDGE_SECRET secret is required"; exit 1; }
               echo "shipping services/receptionist to the droplet"
               tar czf - -C services receptionist | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
                 'set -e; install -d -m 755 /opt/vocivo; rm -rf /opt/vocivo/receptionist.new; install -d /opt/vocivo/receptionist.new; tar xzf - -C /opt/vocivo/receptionist.new; rm -rf /opt/vocivo/receptionist; mv /opt/vocivo/receptionist.new/receptionist /opt/vocivo/receptionist; rmdir /opt/vocivo/receptionist.new'
               remote="$remote"'
               install -d -m 700 /etc/vocivo
               umask 077
+              edge_secret="'"$SIP_EDGE_SECRET"'"
+              [ -n "$edge_secret" ] || edge_secret=$( { sed -n "s/^SIP_EDGE_SECRET=//p" "$SIP_DIR/.env" 2>/dev/null || true; } | tail -1 )
+              [ -n "$edge_secret" ] || { echo "::error::SIP_EDGE_SECRET is neither a repository secret nor in $SIP_DIR/.env"; exit 1; }
+              tts_secret="'"$TTS_SERVICE_SECRET"'"
+              [ -n "$tts_secret" ] || tts_secret=$( { sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env 2>/dev/null || true; } | tail -1 )
+              [ -n "$tts_secret" ] || { echo "::error::TTS_SERVICE_SECRET is neither a repository secret nor in /etc/vocivo/tts.env (run tts-deploy first)"; exit 1; }
+              api_url=$( { sed -n "s/^VOCIVO_API_URL=//p" "$SIP_DIR/.env" 2>/dev/null || true; } | tail -1 )
               printf "TTS_SERVICE_SECRET=%s\nLLM_API_KEY=%s\nLLM_MODEL=%s\nSIP_EDGE_SECRET=%s\nVOCIVO_API_URL=%s\nSTT_MODEL=%s\n" \
-                "'"$TTS_SERVICE_SECRET"'" "'"$LLM_API_KEY"'" "'"${LLM_MODEL:-claude-3-5-haiku-latest}"'" "'"$SIP_EDGE_SECRET"'" "https://vocivo.app" "base" > /etc/vocivo/receptionist.env
+                "$tts_secret" "'"$LLM_API_KEY"'" "'"${LLM_MODEL:-claude-haiku-4-5}"'" "$edge_secret" "${api_url:-https://vocivo.app}" "base" > /etc/vocivo/receptionist.env
               # Niced and capped for the same reason the voice engine is: this
               # box carries live audio and must not be starved by a build.
               cd /opt/vocivo/receptionist && nice -n 19 docker build --memory 2g --progress plain -t vocivo-receptionist . 2>&1 | tail -25

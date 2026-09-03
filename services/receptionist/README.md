@@ -60,7 +60,7 @@ process with live calls; on the event loop it would stall them.
 | `SIP_EDGE_SECRET` | yes | Shared with Kamailio, authenticates to the Vocivo API |
 | `TTS_SERVICE_URL` | | Default `http://127.0.0.1:8000` — loopback on the SIP edge |
 | `STT_MODEL` | | `base` fits beside a live SIP process; `small` is better and wants its own box |
-| `LLM_MODEL` | | Default `claude-3-5-haiku-latest` |
+| `LLM_MODEL` | | Default `claude-haiku-4-5` |
 | `RECEPTIONIST_PORT` | | Default 8084 |
 | `RECEPTIONIST_LISTEN_SECONDS` | | Longest single caller turn, default 20 |
 | `RECEPTIONIST_SILENCE_SECONDS` | | Silence that ends a turn, default 2 |

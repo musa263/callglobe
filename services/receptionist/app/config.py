@@ -40,7 +40,7 @@ class Settings:
     #: The one part that is not self-hosted. Everything else in the call path
     #: — telephony, speech recognition, the voice — runs on Vocivo hardware.
     llm_api_key: str = ""
-    llm_model: str = "claude-3-5-haiku-latest"
+    llm_model: str = "claude-haiku-4-5"
     llm_base_url: str = "https://api.anthropic.com"
     llm_max_tokens: int = 300
 
