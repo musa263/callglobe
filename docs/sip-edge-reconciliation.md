@@ -38,7 +38,8 @@ and answer `480`. The server half of that richer design was never merged here.
 This is latent, not live: `X-Vocivo-Flow: inbound` is never set by Kamailio, and Kamailio rejects E.164 INVITEs
 on public 5060, so no call can reach that dialplan today. It becomes real the moment inbound is switched on.
 
-**2. `/sip-nonce` is not served.**
+**2. `/sip-nonce` is not served.** *(Resolved 3 September: the API serves it, and `sip-auth` now accepts only an
+answer to a nonce it issued, so a captured Authorization header cannot be replayed once the nonce expires.)*
 Live Kamailio's `CHALLENGE` route calls `http://127.0.0.1:8081/sip-nonce`, but `nginx/edge-api.conf` proxies only
 `/sip-auth` and `/sip-wakeup`, and no `sip-nonce` route exists in the API. The route degrades to `www_challenge`,
 so registration works — it just logs an error on every challenge and gives up server-issued nonces.

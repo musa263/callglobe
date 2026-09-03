@@ -32,3 +32,25 @@ export function newSipPassword() {
 export function signedSipNonce(username: string, expiresAt: number) {
   return createHmac('sha256', `${requiredEnv('AUTH_SECRET')}:sip-nonce`).update(`${username}:${expiresAt}`).digest('base64url');
 }
+
+/** How long a challenge may be answered. Phones answer within a second; five minutes covers a slow network. */
+export const sipNonceLifetimeMs = 5 * 60 * 1000;
+
+/**
+ * A nonce the API issued for one username: `<expires>.<signature>`. Kamailio
+ * puts it in the 401, the phone answers it, and sip-auth checks the answer was
+ * to a nonce of ours that has not expired — which is what stops a captured
+ * Authorization header from being replayed later.
+ */
+export function issueSipNonce(username: string, now = new Date()) {
+  const expiresAt = Math.floor(now.getTime() / 1000) + Math.floor(sipNonceLifetimeMs / 1000);
+  return `${expiresAt}.${signedSipNonce(username, expiresAt)}`;
+}
+
+export function sipNonceIsValid(nonce: string, username: string, now = new Date()) {
+  const match = /^(\d{1,12})\.([A-Za-z0-9_-]{20,})$/.exec(nonce);
+  if (!match) return false;
+  const expiresAt = Number(match[1]);
+  if (!Number.isFinite(expiresAt) || expiresAt * 1000 < now.getTime()) return false;
+  return secretMatches(signedSipNonce(username, expiresAt), match[2]);
+}

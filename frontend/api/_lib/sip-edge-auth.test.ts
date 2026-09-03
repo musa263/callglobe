@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sipEdgeAuthorized } from './sip-edge-auth.js';
+import { issueSipNonce, sipEdgeAuthorized, sipNonceIsValid } from './sip-edge-auth.js';
 
 function request(headers: Record<string, string>) {
   return { headers } as never;
@@ -39,4 +39,22 @@ test('a missing server secret fails closed', () => {
   withSecret(undefined, () => {
     assert.throws(() => sipEdgeAuthorized(request({ authorization: 'Bearer anything' })), /Missing server configuration/);
   });
+});
+
+test('a nonce the API issued is accepted for its user until it expires, and for nobody else', () => {
+  const previous = process.env.AUTH_SECRET;
+  process.env.AUTH_SECRET = 'auth-secret-for-tests';
+  try {
+    const issued = new Date('2026-09-03T12:00:00Z');
+    const nonce = issueSipNonce('sam-1001', issued);
+    assert.match(nonce, /^\d+\.[A-Za-z0-9_-]+$/);
+    assert.equal(sipNonceIsValid(nonce, 'sam-1001', new Date('2026-09-03T12:04:00Z')), true);
+    assert.equal(sipNonceIsValid(nonce, 'sam-1001', new Date('2026-09-03T12:06:00Z')), false, 'expired');
+    assert.equal(sipNonceIsValid(nonce, 'eve-1002', issued), false, 'another user');
+    assert.equal(sipNonceIsValid(`${nonce}x`, 'sam-1001', issued), false, 'tampered');
+    // What Kamailio's own www_challenge produces when the nonce service is unreachable.
+    assert.equal(sipNonceIsValid('aK1tNGEwM2E0YzRlN2Q5', 'sam-1001', issued), false);
+  } finally {
+    if (previous === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = previous;
+  }
 });

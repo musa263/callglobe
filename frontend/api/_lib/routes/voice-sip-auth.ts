@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredential } from '../sip-credential-store.js';
-import { sipEdgeAuthorized } from '../sip-edge-auth.js';
+import { sipEdgeAuthorized, sipNonceIsValid } from '../sip-edge-auth.js';
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -28,6 +28,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!challenge.username || !challenge.realm || !challenge.nonce || !challenge.uri || !challenge.response) {
       return res.status(400).json({ error: 'A complete Digest challenge is required.', ok: false });
     }
+    // Only an answer to a nonce this API issued, and recently, counts. A
+    // digest is otherwise replayable for as long as the password stands.
+    if (!sipNonceIsValid(challenge.nonce, challenge.username)) return res.status(403).json({ ok: false, reason: 'stale_nonce' });
     const stored = await readSipCredential(challenge.username);
     if (!stored || stored.realm !== challenge.realm) return res.status(403).json({ ok: false });
     const ok = digestMatches(stored.ha1, challenge);
