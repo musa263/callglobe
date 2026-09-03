@@ -1,8 +1,25 @@
 import type { PbxConfig } from './pbx-config-store.js';
+import { sipDomain, voiceEdge } from './voice-provider.js';
 
 const sipUri = /^sip:([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?::\d{1,5})?$/i;
 const carrierSipAddress = /^(?:sip:)?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+)(?:;[^<>\s]+)?$/i;
 const telnyxSipHost = 'sip.telnyx.com';
+
+/**
+ * Where an extension's phone is registered, and so where a call for it must be
+ * sent: Vocivo's own edge once VOCIVO_VOICE_EDGE=sip, the carrier's credential
+ * service before that. Dialling the carrier's host for a phone registered on
+ * the edge rang nobody — that is what the Call Control fallback did for the
+ * first hour of the cut-over.
+ */
+export function extensionSipHost() {
+  return voiceEdge() === 'sip' ? sipDomain().toLowerCase() : telnyxSipHost;
+}
+
+function isExtensionSipHost(host: string) {
+  const value = host.trim().toLowerCase();
+  return value === telnyxSipHost || value === extensionSipHost();
+}
 
 export function canonicalVoiceDestination(destination: string) {
   const value = destination.trim().replace(/^<|>$/g, '');
@@ -19,7 +36,7 @@ export function parseInternalSipUser(destination: string) {
   const match = destination.trim().match(sipUri);
   const username = match?.[1];
   const host = match?.[2];
-  if (!username || host?.trim().toLowerCase() !== telnyxSipHost) return null;
+  if (!username || !host || !isExtensionSipHost(host)) return null;
   return username;
 }
 
@@ -28,7 +45,7 @@ export function isAllowedInternalSipDestination(destination: string) {
 }
 
 export function extensionSipUri(sipUsername: string) {
-  return `sip:${sipUsername}@${telnyxSipHost}`;
+  return `sip:${sipUsername}@${extensionSipHost()}`;
 }
 
 export function destinationSipUrisForInternalDial(

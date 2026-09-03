@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { activeOrganizationExtensionTargets, canonicalVoiceDestination, destinationSipUrisForInternalDial, extensionSipUsernames, isAllowedInternalSipDestination, organizationExtensionSipUri, parseInternalSipUser, voiceDestinationsMatch } from './internal-sip.js';
+import { activeOrganizationExtensionTargets, canonicalVoiceDestination, destinationSipUrisForInternalDial, extensionSipUri, extensionSipUsernames, isAllowedInternalSipDestination, organizationExtensionSipUri, parseInternalSipUser, voiceDestinationsMatch } from './internal-sip.js';
 
 test('Telnyx SIP URIs are recognized as internal destinations', () => {
   assert.equal(parseInternalSipUser('sip:2000@sip.telnyx.com'), '2000');
@@ -66,4 +66,20 @@ test('main-line fanout includes active extensions from only the owning tenant', 
   assert.deepEqual(targets, [
     { extensionId: 'active-primary', destination: 'sip:primary-user@sip.telnyx.com' },
   ]);
+});
+
+test('on the SIP edge an extension is dialled where it is registered, and either host is recognised', () => {
+  const previous = { edge: process.env.VOCIVO_VOICE_EDGE, domain: process.env.VOCIVO_SIP_DOMAIN };
+  process.env.VOCIVO_VOICE_EDGE = 'sip';
+  process.env.VOCIVO_SIP_DOMAIN = 'sip.vocivo.app';
+  try {
+    assert.equal(extensionSipUri('sam-1001'), 'sip:sam-1001@sip.vocivo.app');
+    assert.equal(parseInternalSipUser('sip:sam-1001@sip.vocivo.app'), 'sam-1001');
+    // The web client still names the carrier host when it asks for a route.
+    assert.equal(parseInternalSipUser('sip:sam-1001@sip.telnyx.com'), 'sam-1001');
+    assert.equal(parseInternalSipUser('sip:sam-1001@untrusted.invalid'), null);
+  } finally {
+    if (previous.edge === undefined) delete process.env.VOCIVO_VOICE_EDGE; else process.env.VOCIVO_VOICE_EDGE = previous.edge;
+    if (previous.domain === undefined) delete process.env.VOCIVO_SIP_DOMAIN; else process.env.VOCIVO_SIP_DOMAIN = previous.domain;
+  }
 });

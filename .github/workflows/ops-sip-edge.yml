@@ -42,6 +42,7 @@ on:
           - rollback-config
           - enable-inbound
           - disable-inbound
+          - set-rtp-range
           - tts-deploy
           - tts-status
           - receptionist-deploy
@@ -58,6 +59,10 @@ on:
         type: string
       since:
         description: logs only — how far back to read (e.g. 30m, 2h; default 30m). Scanner noise is counted, not printed.
+        required: false
+        type: string
+      rtp_range:
+        description: set-rtp-range only — rtpengine's media port range, e.g. 30000-39999 (four ports per call; must not overlap FreeSWITCH's 20000-24999)
         required: false
         type: string
 
@@ -126,6 +131,7 @@ jobs:
           SIP_EDGE_SECRET: ${{ secrets.SIP_EDGE_SECRET }}
           TRUNK_SOURCES: ${{ inputs.trunk_sources || github.event.client_payload.trunk_sources }}
           SINCE: ${{ inputs.since || github.event.client_payload.since }}
+          RTP_RANGE: ${{ inputs.rtp_range || github.event.client_payload.rtp_range }}
         run: |
           set -euo pipefail
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
@@ -402,6 +408,25 @@ jobs:
               grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back"; exit 1; }
               docker compose up -d --force-recreate freeswitch && sleep 8 && docker compose ps freeswitch
               docker compose logs --tail=40 --no-color freeswitch | { grep -E "Vocivo:|xml_curl|mod_http_cache|mod_shout|ERR|CRIT" || true; }
+              ';;
+            set-rtp-range)
+              [[ "$RTP_RANGE" =~ ^([0-9]{4,5})-([0-9]{4,5})$ ]] || { echo "::error::rtp_range must look like 30000-39999"; exit 1; }
+              rtp_start=${BASH_REMATCH[1]}; rtp_end=${BASH_REMATCH[2]}
+              [ "$rtp_start" -ge 1024 ] && [ "$rtp_end" -le 65535 ] && [ $((rtp_end - rtp_start)) -ge 400 ] || { echo "::error::the range must lie within 1024-65535 and span at least 400 ports"; exit 1; }
+              # FreeSWITCH's own media ports (switch.conf.xml) and the SIP/TURN ports stay out of it.
+              if [ "$rtp_start" -le 24999 ] && [ "$rtp_end" -ge 20000 ]; then echo "::error::the range overlaps FreeSWITCH's 20000-24999"; exit 1; fi
+              remote="$remote"'
+              cd "$SIP_DIR"
+              set_env() {
+                if grep -qE "^$1=" .env; then sed -i -E "s#^$1=.*#$1=$2#" .env; else echo "$1=$2" >> .env; fi
+              }
+              set_env RTP_START "'"$rtp_start"'"
+              set_env RTP_END "'"$rtp_end"'"
+              grep -E "^RTP_(START|END)=" .env
+              # Recreating rtpengine drops the media of any call up at that moment.
+              docker compose up -d --force-recreate --no-deps rtpengine && sleep 3
+              docker compose ps rtpengine
+              docker compose logs --tail=5 --no-color rtpengine
               ';;
             rollback-config)
               remote="$remote"'

@@ -8,6 +8,7 @@ fi
 mkdir -p /etc/freeswitch/autoload_configs /etc/freeswitch/sip_profiles /etc/freeswitch/dialplan /etc/freeswitch/directory /etc/freeswitch/tls
 cp /opt/vocivo-fs/autoload_configs/switch.conf.xml /etc/freeswitch/autoload_configs/switch.conf.xml
 cp /opt/vocivo-fs/autoload_configs/event_socket.conf.xml /etc/freeswitch/autoload_configs/event_socket.conf.xml
+cp /opt/vocivo-fs/autoload_configs/console.conf.xml /etc/freeswitch/autoload_configs/console.conf.xml
 cp /opt/vocivo-fs/sip_profiles/external.xml /etc/freeswitch/sip_profiles/external.xml
 cp /opt/vocivo-fs/sip_profiles/internal.xml /etc/freeswitch/sip_profiles/internal.xml
 cp /opt/vocivo-fs/sip_profiles/trunk.xml /etc/freeswitch/sip_profiles/trunk.xml

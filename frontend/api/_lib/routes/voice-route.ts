@@ -12,7 +12,7 @@ import { saveVoiceRoute } from '../voice-route-store.js';
 import { createVoiceRouteToken } from '../voice-route-token.js';
 import { requireFeature } from '../saas-access.js';
 import { extensionSipUri, parseInternalSipUser } from '../internal-sip.js';
-import { voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
+import { voiceEdge, voiceRouteNeedsTelnyxCredit } from '../voice-provider.js';
 import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../telnyx.js';
 import { outboundWalletBlockReason, readTenantWallet } from '../wallet-store.js';
 
@@ -83,7 +83,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     // Tenant wallets do not fund internal calls. Telnyx park still needs a live
     // carrier wallet. SIP-edge internal calls fork locally and must not wait on /balance.
-    if (voiceRouteNeedsTelnyxCredit(requestedFlow)) await assertTelnyxVoiceReady();
+    if (voiceRouteNeedsTelnyxCredit(requestedFlow)) {
+      try {
+        await assertTelnyxVoiceReady();
+      } catch (error) {
+        // A carrier that answered "no credit" is a real reason to stop. A
+        // carrier API that could not be reached, or refused the key, is not:
+        // on the SIP edge the call goes out over the trunk without touching
+        // that API, and the trunk will refuse it itself if the account is
+        // empty. Blocking here made every outbound call fail while the
+        // carrier's API was unavailable.
+        if (error instanceof TelnyxCarrierUnavailableError || voiceEdge() !== 'sip') throw error;
+        console.error('Telnyx balance check failed; continuing on the SIP edge.', error);
+      }
+    }
     if (requestedFlow !== 'internal') {
       const wallet = await readTenantWallet(organizationId);
       const blocked = outboundWalletBlockReason(wallet);

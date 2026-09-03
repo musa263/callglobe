@@ -9,8 +9,14 @@ services:
     command:
       - --interface=${PUBLIC_IP:-127.0.0.1}
       - --listen-ng=127.0.0.1:2223
-      - --port-min=${RTP_START:-16384}
-      - --port-max=${RTP_END:-16484}
+      # Four ports per call. A hundred was twenty-five calls, and with leaked
+      # sessions on top of that the pool ran dry within a day of going live.
+      - --port-min=${RTP_START:-30000}
+      - --port-max=${RTP_END:-39999}
+      # A session that never carried media (a call nobody answered, an INVITE
+      # that failed) is released after two minutes instead of an hour.
+      - --timeout=60
+      - --silent-timeout=120
       - --foreground
       - --log-level=5
 

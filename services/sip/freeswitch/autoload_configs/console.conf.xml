@@ -1,0 +1,12 @@
+<!-- The container's stdout is the switch's log. At the vanilla level a call
+     that went well left no trace at all, so a failed one could not be told
+     from one that never arrived. -->
+<configuration name="console.conf" description="Console Logger">
+  <mappings>
+    <map name="all" value="console,debug,info,notice,warning,err,crit,alert"/>
+  </mappings>
+  <settings>
+    <param name="colorize" value="false"/>
+    <param name="loglevel" value="info"/>
+  </settings>
+</configuration>
