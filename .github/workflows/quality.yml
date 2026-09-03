@@ -44,3 +44,39 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  services:
+    name: Self-hosted services
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # httpx alone: the receptionist's tests fake everything that reaches
+      # outside the process, so the speech and model dependencies — which are
+      # large and which nothing here exercises — are not installed.
+      - run: pip install httpx==0.28.1
+      - name: Receptionist
+        working-directory: services/receptionist
+        run: python -m unittest discover -s tests -v
+      - name: FreeSWITCH configuration
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          broken = []
+          for path in sorted(Path("services/sip/freeswitch").rglob("*.xml")):
+              try:
+                  ET.parse(path)
+              except ET.ParseError as error:
+                  broken.append(f"{path}: {error}")
+          if broken:
+              for line in broken:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          print("every FreeSWITCH XML file parses")
+          PYCHECK
