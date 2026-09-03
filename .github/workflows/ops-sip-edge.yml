@@ -133,7 +133,10 @@ jobs:
             fi
             # 3. failing that, sweep the disk once (slow, but only when nothing else worked)
             if [ -z "$COMPOSE" ]; then
-              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o \( -path "*/services/sip/docker-compose.yml" -o -path "*/sip/docker-compose.yml" \) -print 2>/dev/null || true; } | first_match)
+              # Staging and backup copies of the stack contain a compose file
+              # too. Picking one of those up made sync-config delete the copy it
+              # had just shipped and leave the live directory alone.
+              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker -o -path "*/sip-backups" -o -path "*/vocivo-stage" \) -prune -o \( -path "*/services/sip/docker-compose.yml" -o -path "*/sip/docker-compose.yml" \) -print 2>/dev/null || true; } | { grep -v -e "sip-backups" -e "vocivo-stage" -e "\.new/" || true; } | first_match)
             fi
           fi
           # SIP_DIR is wherever docker-compose.yml actually lives; on a droplet deployed by
@@ -243,18 +246,32 @@ jobs:
               # shipping it safe — and necessary, because nothing in the repository
               # reaches the edge otherwise.
               echo "shipping services/sip to the droplet"
+              # Staged outside /opt/vocivo: a second copy of the stack under
+              # the deployment root is exactly what the SIP_DIR discovery
+              # above looks for, and it found the staging copy instead of the
+              # live one.
               tar czf - -C services sip | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
-                'set -e; install -d -m 755 /opt/vocivo/sip-backups; ts=$(date +%Y%m%d%H%M%S); [ -d /opt/vocivo/sip ] && cp -a /opt/vocivo/sip "/opt/vocivo/sip-backups/$ts"; rm -rf /opt/vocivo/sip.new; install -d /opt/vocivo/sip.new; tar xzf - -C /opt/vocivo/sip.new; echo "backed up to /opt/vocivo/sip-backups/$ts"'
+                'set -e; install -d -m 755 /opt/vocivo/sip-backups; ts=$(date +%Y%m%d%H%M%S); [ -d /opt/vocivo/sip ] && cp -a /opt/vocivo/sip "/opt/vocivo/sip-backups/$ts"; rm -rf /opt/vocivo-stage; install -d /opt/vocivo-stage; tar xzf - -C /opt/vocivo-stage; echo "backed up to /opt/vocivo/sip-backups/$ts"'
               remote="$remote"'
+              set -e
+              # The live directory is named, not discovered. Discovery answers
+              # "where is a compose file", and during a sync there are two.
+              TARGET=/opt/vocivo/sip
+              STAGE=/opt/vocivo-stage/sip
+              # An earlier version of this action staged under /opt/vocivo and
+              # left a copy behind when it failed. Clear it, or the discovery
+              # keeps finding two stacks.
+              rm -rf /opt/vocivo/sip.new
+              [ -d "$STAGE" ] || { echo "::error::nothing was staged at $STAGE"; exit 1; }
               # .env holds the secrets and is not in the repository; it is the one
               # file that survives a sync.
-              [ -f "$SIP_DIR/.env" ] && cp "$SIP_DIR/.env" /opt/vocivo/sip.new/sip/.env
+              if [ -f "$TARGET/.env" ]; then cp "$TARGET/.env" "$STAGE/.env"; fi
               latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
-              rm -rf "$SIP_DIR" && mv /opt/vocivo/sip.new/sip "$SIP_DIR" && rmdir /opt/vocivo/sip.new
-              cd "$SIP_DIR"
+              rm -rf "$TARGET" && mv "$STAGE" "$TARGET" && rmdir /opt/vocivo-stage
+              cd "$TARGET"
               if ! docker compose config >/dev/null 2>&1; then
                 echo "::error::the shipped compose file is not valid; rolling back"
-                rm -rf "$SIP_DIR" && cp -a "$latest" "$SIP_DIR"
+                rm -rf "$TARGET" && cp -a "$latest" "$TARGET"
                 exit 1
               fi
               docker compose up -d --remove-orphans
