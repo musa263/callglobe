@@ -11,6 +11,12 @@ name: Ops · Mobile
 # fails loudly rather than silently creating a new certificate.
 
 on:
+  # Also startable through the API with a token that can write the
+  # repository's contents, for when the "Run workflow" form will not load:
+  #   POST /repos/musa263/vocivo/dispatches
+  #   {"event_type":"ops-mobile","client_payload":{"action":"list-builds","profile":"preview"}}
+  repository_dispatch:
+    types: [ops-mobile]
   workflow_dispatch:
     inputs:
       action:
@@ -42,7 +48,7 @@ defaults:
 
 jobs:
   mobile:
-    name: ${{ inputs.action }} (${{ inputs.profile }})
+    name: ${{ (inputs.action || github.event.client_payload.action) }} (${{ (inputs.profile || github.event.client_payload.profile || 'preview') }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -57,14 +63,14 @@ jobs:
         run: npm ci
 
       - name: Unit tests
-        if: inputs.action == 'prebuild-check' || startsWith(inputs.action, 'build-')
+        if: (inputs.action || github.event.client_payload.action) == 'prebuild-check' || startsWith((inputs.action || github.event.client_payload.action), 'build-')
         run: npm run test:unit
 
       # Generating the native projects is the cheapest way to find a config
       # plugin that no longer applies — a broken plugin otherwise surfaces
       # twenty minutes into an EAS build, or worse, silently drops a file.
       - name: Prebuild check
-        if: inputs.action == 'prebuild-check' || startsWith(inputs.action, 'build-')
+        if: (inputs.action || github.event.client_payload.action) == 'prebuild-check' || startsWith((inputs.action || github.event.client_payload.action), 'build-')
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
@@ -100,22 +106,28 @@ jobs:
           echo "the native projects contain everything the SIP call path needs"
 
       - name: Build
-        if: startsWith(inputs.action, 'build-')
+        if: startsWith((inputs.action || github.event.client_payload.action), 'build-')
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          ACTION: ${{ (inputs.action || github.event.client_payload.action) }}
+          PROFILE: ${{ (inputs.profile || github.event.client_payload.profile || 'preview') }}
         run: |
           set -euo pipefail
           [ -n "$EXPO_TOKEN" ] || { echo "::error::EXPO_TOKEN secret is missing"; exit 1; }
-          case "${{ inputs.action }}" in
+          # Through the API the payload is free text, so the values are checked
+          # here rather than trusted like the form's choices.
+          case "$ACTION" in
             build-ios) platform=ios;;
             build-android) platform=android;;
-            *) platform=all;;
+            build-both) platform=all;;
+            *) echo "::error::unknown action '$ACTION'"; exit 1;;
           esac
+          case "$PROFILE" in preview|production|development) ;; *) echo "::error::unknown profile '$PROFILE'"; exit 1;; esac
           # --no-wait: an EAS build outlives a runner, and holding one open for
           # half an hour to watch a queue is a waste of both.
           npx --yes eas-cli@latest build \
             --platform "$platform" \
-            --profile "${{ inputs.profile }}" \
+            --profile "$PROFILE" \
             --non-interactive \
             --no-wait
 
@@ -123,20 +135,22 @@ jobs:
       # submits the most recent finished build rather than starting a new one,
       # so this never silently rebuilds something you have already tested.
       - name: Submit to TestFlight
-        if: inputs.action == 'submit-ios'
+        if: (inputs.action || github.event.client_payload.action) == 'submit-ios'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          PROFILE: ${{ (inputs.profile || github.event.client_payload.profile || 'preview') }}
         run: |
           set -euo pipefail
           [ -n "$EXPO_TOKEN" ] || { echo "::error::EXPO_TOKEN secret is missing"; exit 1; }
+          case "$PROFILE" in preview|production|development) ;; *) echo "::error::unknown profile '$PROFILE'"; exit 1;; esac
           npx --yes eas-cli@latest submit \
             --platform ios \
-            --profile "${{ inputs.profile }}" \
+            --profile "$PROFILE" \
             --latest \
             --non-interactive
 
       - name: List builds
-        if: inputs.action == 'list-builds' || inputs.action == 'submit-ios' || startsWith(inputs.action, 'build-')
+        if: (inputs.action || github.event.client_payload.action) == 'list-builds' || (inputs.action || github.event.client_payload.action) == 'submit-ios' || startsWith((inputs.action || github.event.client_payload.action), 'build-')
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |

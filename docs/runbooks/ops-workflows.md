@@ -30,7 +30,7 @@ curl -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.gi
   -d '{"event_type":"ops-sip-edge","client_payload":{"action":"status","host":"sip"}}'
 ```
 
-`event_type` is `ops-sip-edge`, `ops-vercel` or `ops-telnyx`; the `client_payload` keys are the form's inputs
+`event_type` is `ops-sip-edge`, `ops-vercel`, `ops-telnyx` or `ops-mobile`; the `client_payload` keys are the form's inputs
 by name (`environment` and `host` default to `production` and `sip`; pass `"redeploy": true` explicitly for a
 Vercel `set`). Anything but a listed action is refused. A 204 means the run was queued; find it under
 `GET /repos/musa263/vocivo/actions/workflows/<file>/runs?event=repository_dispatch`.
