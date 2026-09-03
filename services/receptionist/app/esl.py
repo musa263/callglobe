@@ -126,8 +126,10 @@ class EslConnection:
         # linger keeps the socket alive long enough to see the hangup event, so
         # a conversation is never cut off mid-sentence without us noticing.
         await self._send("linger\n\n")
+        # `myevents` subscribes to every event on this channel. A narrower
+        # `event plain` list issued after it replaces that subscription, and
+        # losing CHANNEL_EXECUTE_COMPLETE would hang every prompt forever.
         await self._send("myevents\n\n")
-        await self._send("event plain CHANNEL_EXECUTE_COMPLETE CHANNEL_HANGUP CHANNEL_HANGUP_COMPLETE DTMF\n\n")
         return self.channel
 
     @property
@@ -148,8 +150,14 @@ class EslConnection:
             f"execute-app-name: {app}\n"
             "event-lock: true\n"
         )
-        if arg:
-            command += f"content-type: text/plain\ncontent-length: {len(arg.encode('utf-8'))}\n\n{arg}\n"
+        if "\n" in arg:
+            # Only a multi-line argument needs the body form, and it must be
+            # exactly content-length bytes: a trailing newline would be left in
+            # the stream and read as the start of the next command.
+            body = arg.encode("utf-8")
+            command += f"content-type: text/plain\ncontent-length: {len(body)}\n\n{arg}"
+        elif arg:
+            command += f"execute-app-arg: {arg}\n\n"
         else:
             command += "\n"
         reply = await self._send(command)

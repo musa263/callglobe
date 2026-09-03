@@ -75,6 +75,33 @@ class MessageFraming(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.hungup.is_set())
 
 
+class SendMsgFraming(unittest.IsolatedAsyncioTestCase):
+    async def test_an_ordinary_argument_goes_in_a_header(self):
+        written: list[bytes] = []
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"Content-Type: command/reply\nReply-Text: +OK\n\n")
+        reader.feed_eof()
+
+        class Recorder:
+            def write(self, data): written.append(data)
+            async def drain(self): pass
+            def close(self): pass
+            async def wait_closed(self): pass
+
+        connection = EslConnection(reader, Recorder())  # type: ignore[arg-type]
+        await connection._send(  # noqa: SLF001
+            "sendmsg\ncall-command: execute\nexecute-app-name: record\nevent-lock: true\n"
+            "execute-app-arg: /tmp/turn.wav 20 300 2\n\n"
+        )
+        sent = b"".join(written).decode()
+        # The body form needs a byte-exact content-length; a stray newline after
+        # it is read as the start of the next command. A header avoids the
+        # problem entirely for the single-line arguments this app uses.
+        self.assertIn("execute-app-arg: /tmp/turn.wav 20 300 2\n", sent)
+        self.assertNotIn("content-length", sent)
+        self.assertTrue(sent.endswith("\n\n"))
+
+
 class SystemPrompt(unittest.TestCase):
     def test_it_names_every_transfer_target(self):
         prompt = system_prompt(RECEPTION)
