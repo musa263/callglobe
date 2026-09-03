@@ -246,6 +246,12 @@ jobs:
               if [ -f .env ]; then
                 echo "--- flag ---"; { grep -E "^VOCIVO_SIP_INBOUND=" .env || echo "VOCIVO_SIP_INBOUND not set (defaults to 0)"; }
                 echo "--- env keys (values hidden) ---"; sed -E "s/=.*/=<set>/" .env
+                # Port numbers are not secrets, and the media range is the
+                # first thing to check when calls connect in silence.
+                echo "--- media port range (now, and in each backup) ---"
+                echo "live: $(grep -E "^RTP_(START|END)=" .env | tr "\n" " ")"
+                for b in /opt/vocivo/sip-backups/*/; do [ -f "$b.env" ] && echo "$(basename "$b"): $(grep -E "^RTP_(START|END)=" "$b.env" | tr "\n" " ")"; done 2>/dev/null || true
+                echo "rtpengine runs with: $(docker inspect --format "{{join .Args \" \"}}" sip-rtpengine-1 2>/dev/null | grep -oE "\-\-port-(min|max)=[0-9]+|\-\-interface=[^ ]+" | tr "\n" " ")"
               else
                 echo "--- flag --- (no .env in $SIP_DIR)"
               fi
