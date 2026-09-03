@@ -16,6 +16,14 @@ name: Ops · Droplets
 #   TTS_PUBLIC_BASE_URL  https URL the TTS service is reachable at (only for tts-deploy)
 
 on:
+  # The same actions can be started through the API with a token that can
+  # write the repository's contents (the "Run workflow" form has been known
+  # to fail to load while the edge was down):
+  #   POST /repos/musa263/vocivo/dispatches
+  #   {"event_type":"ops-sip-edge","client_payload":{"action":"status","host":"sip"}}
+  # The payload can only choose among the actions below, exactly like the form.
+  repository_dispatch:
+    types: [ops-sip-edge]
   workflow_dispatch:
     inputs:
       action:
@@ -50,12 +58,12 @@ on:
         type: string
 
 concurrency:
-  group: ops-droplet-${{ inputs.host }}
+  group: ops-droplet-${{ inputs.host || github.event.client_payload.host || 'sip' }}
   cancel-in-progress: false
 
 jobs:
   ssh:
-    name: ${{ inputs.action }} on ${{ inputs.host }}
+    name: ${{ inputs.action || github.event.client_payload.action }} on ${{ inputs.host || github.event.client_payload.host || 'sip' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -65,7 +73,7 @@ jobs:
       - name: Prepare SSH
         env:
           OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
-          HOST: ${{ inputs.host == 'pbx' && secrets.PBX_HOST || secrets.SIP_EDGE_HOST }}
+          HOST: ${{ (inputs.host || github.event.client_payload.host) == 'pbx' && secrets.PBX_HOST || secrets.SIP_EDGE_HOST }}
         run: |
           set -euo pipefail
           [ -n "$OPS_SSH_KEY" ] || { echo "::error::OPS_SSH_KEY secret is missing"; exit 1; }
@@ -78,7 +86,7 @@ jobs:
       # A dialplan that will not parse takes the whole switch down with it, so
       # it is checked on the runner rather than discovered by the first caller.
       - name: Check the FreeSWITCH configuration
-        if: inputs.action == 'sync-config'
+        if: (inputs.action || github.event.client_payload.action) == 'sync-config'
         run: |
           set -euo pipefail
           python3 - <<'PYCHECK'
@@ -104,7 +112,7 @@ jobs:
 
       - name: Run
         env:
-          ACTION: ${{ inputs.action }}
+          ACTION: ${{ inputs.action || github.event.client_payload.action }}
           SSH_USER: ${{ vars.OPS_SSH_USER || 'root' }}
           REPO_DIR: ${{ vars.SIP_EDGE_REPO_DIR }}
           TTS_SERVICE_SECRET: ${{ secrets.TTS_SERVICE_SECRET }}
@@ -112,7 +120,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           SIP_EDGE_SECRET: ${{ secrets.SIP_EDGE_SECRET }}
-          TRUNK_SOURCES: ${{ inputs.trunk_sources }}
+          TRUNK_SOURCES: ${{ inputs.trunk_sources || github.event.client_payload.trunk_sources }}
         run: |
           set -euo pipefail
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
@@ -287,6 +295,24 @@ jobs:
                     || { echo "::error::kamailio.cfg loads $module.so but $image does not ship it; nothing was changed"; exit 1; }
                 done
                 echo "every module kamailio.cfg loads exists in $image"
+                # Then let Kamailio itself parse the staged configuration,
+                # rendered the way the container will render it — with the
+                # trunk sources from the live .env, or a placeholder so the
+                # generated route is exercised either way. The module check
+                # above waved through a function name Kamailio did not have.
+                sources=$(sed -n "s/^VOCIVO_TRUNK_SOURCES=//p" "$TARGET/.env" 2>/dev/null | tail -1)
+                if check=$(docker run --rm --network none \
+                    -v "$STAGE/kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro" \
+                    -v "$STAGE/kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro" \
+                    -v "$STAGE/kamailio/docker-entrypoint.sh:/entrypoint.sh:ro" \
+                    -e "VOCIVO_TRUNK_SOURCES=${sources:-192.0.2.0/24,192.0.2.1}" -e KAMAILIO_CHECK_ONLY=1 \
+                    -e SIP_EDGE_SECRET=check -e VOCIVO_SIP_REALM=check -e VOCIVO_API_URL=http://127.0.0.1 -e PUBLIC_IP=127.0.0.1 \
+                    --entrypoint /bin/sh "$image" /entrypoint.sh 2>&1); then
+                  echo "$check" | { grep -E "trunk sources|config file ok" || true; }
+                else
+                  echo "$check" | { grep -Ev "^Listening on|^ *(udp|tcp):|^Aliases|^$" || true; } | tail -20
+                  echo "::error::the staged kamailio.cfg does not parse; nothing was changed"; exit 1
+                fi
               fi
               # .env holds the secrets and is not in the repository; it is the one
               # file that survives a sync.
@@ -460,6 +486,10 @@ jobs:
               docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}" || true
               curl -s -o /dev/null -w "health (no auth, expect 401 or 503): %{http_code}\n" http://127.0.0.1:8000/health || echo "not listening"
               ';;
+            *)
+              # Reached only through repository_dispatch, whose payload is
+              # free text; the form offers nothing else.
+              echo "::error::unknown action '$ACTION'"; exit 1;;
           esac
 
           # Run, and mirror the output into a check-run annotation so it is readable through the API, not only the raw log.
