@@ -58,13 +58,44 @@ export async function prerenderPrompts(items: PrerenderItem[], fetchImpl: typeof
 }
 
 /**
- * The receptionist's fixed sentences plus its greeting, in its voice.
- * Exported so the list can be checked without a store.
+ * The pieces the receptionist speaks a text in — one sentence at a time, so
+ * the first plays while the next renders. Mirrors `split_sentences` in
+ * services/receptionist/app/speech.py exactly (same boundary, same minimum,
+ * same cap): the engine's cache is keyed on the text, so what is pre-rendered
+ * here has to be what the receptionist asks for on the call.
+ */
+export function splitSpokenSentences(text: string, minimum = 12, maximumParts = 8): string[] {
+  const cleaned = text.split(/\s+/).filter(Boolean).join(' ');
+  if (!cleaned) return [];
+  const parts: string[] = [];
+  for (const piece of cleaned.split(/(?<=[.!?…])\s+/)) {
+    const trimmed = piece.trim();
+    if (!trimmed) continue;
+    if (parts.length && (parts[parts.length - 1].length < minimum || trimmed.length < minimum)) {
+      parts[parts.length - 1] = `${parts[parts.length - 1]} ${trimmed}`;
+    } else {
+      parts.push(trimmed);
+    }
+  }
+  if (parts.length > maximumParts) {
+    return [...parts.slice(0, maximumParts - 1), parts.slice(maximumParts - 1).join(' ')];
+  }
+  return parts;
+}
+
+/**
+ * The receptionist's fixed sentences plus its greeting, in its voice and in
+ * the pieces it speaks them in. Exported so the list can be checked without
+ * a store.
  */
 export function receptionistPrerenderItems(ai: PbxConfig['ai']): PrerenderItem[] {
   if (!ai?.enabled) return [];
   const voice = receptionistVoice(ai.voice);
-  return [ai.greeting, ...receptionistPhrases].map((input) => ({ input, voice }));
+  const pieces = new Set<string>();
+  for (const text of [ai.greeting, ...receptionistPhrases]) {
+    for (const piece of splitSpokenSentences(text)) pieces.add(piece);
+  }
+  return [...pieces].map((input) => ({ input, voice }));
 }
 
 /**

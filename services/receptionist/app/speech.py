@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import wave
 from pathlib import Path
 
@@ -36,6 +37,39 @@ FILLERS = (
     "Let me check that for you.",
     "Sure, one second.",
 )
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+
+
+def split_sentences(text: str, *, minimum: int = 12, maximum_parts: int = 8) -> list[str]:
+    """
+    Breaks an answer into the pieces it is spoken in.
+
+    The engine renders roughly a third of real time on the edge's share of the
+    CPU, so a three-sentence answer rendered whole is fifteen seconds of dead
+    air. Rendered a sentence at a time, the first is playing while the second
+    renders, and the caller hears the answer begin after one sentence's worth.
+    Short fragments ("Yes.") are joined to their neighbour so nothing is a
+    file of half a second, and each part is cached on its own — "Thanks for
+    calling." rendered once serves every answer that ends with it.
+    """
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return []
+    parts: list[str] = []
+    for piece in _SENTENCE_END.split(cleaned):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if parts and (len(parts[-1]) < minimum or len(piece) < minimum):
+            parts[-1] = f"{parts[-1]} {piece}"
+        else:
+            parts.append(piece)
+    if len(parts) > maximum_parts:
+        head, tail = parts[: maximum_parts - 1], " ".join(parts[maximum_parts - 1 :])
+        parts = [*head, tail]
+    return parts
 
 
 class Voice:
@@ -99,7 +133,10 @@ class Voice:
         couldn't hear you" is on disk at the engine and plays without a pause.
         """
         chosen = voice or self._settings.tts_voice
-        items = [{"input": text, "voice": chosen, "format": "wav"} for text in texts if text.strip()]
+        # Rendered in the pieces they are spoken in, so the cache the call
+        # reads is the cache this fills.
+        pieces = [part for text in texts for part in split_sentences(text)]
+        items = [{"input": part, "voice": chosen, "format": "wav"} for part in dict.fromkeys(pieces)]
         if not items:
             return
         try:

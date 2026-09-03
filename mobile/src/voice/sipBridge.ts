@@ -144,6 +144,20 @@ export class SipStackBridge implements NativeSipBridge {
     this.events.emit('registration', { state: 'none' });
   }
 
+  /**
+   * After the app comes to the front or the network changes: get the socket
+   * and the registration back if either was lost. Nothing to do when there is
+   * no registration wanted.
+   */
+  async refresh() {
+    if (!this.stack) return;
+    try {
+      await this.stack.refresh();
+    } catch (error) {
+      console.warn('Vocivo SIP refresh failed', describe(error));
+    }
+  }
+
   private async teardown() {
     const stack = this.stack;
     this.stack = null;
@@ -282,6 +296,8 @@ function registrationState(state: SipRegistererState): SipEventMap['registration
       return 'ok';
     case 'Initial':
       return 'progress';
+    case 'Reconnecting':
+      return 'reconnecting';
     case 'Unregistered':
     case 'Terminated':
       return 'none';

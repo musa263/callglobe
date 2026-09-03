@@ -17,8 +17,14 @@ import type { VoiceInviteHeader } from './voiceEngine';
 /** SIP.js `SessionState`, as strings so nothing here imports the library. */
 export type SipSessionState = 'Initial' | 'Establishing' | 'Established' | 'Terminating' | 'Terminated';
 
-/** SIP.js `RegistererState`. */
-export type SipRegistererState = 'Initial' | 'Registered' | 'Unregistered' | 'Terminated';
+/**
+ * SIP.js `RegistererState`, plus `Reconnecting`, which is not one of SIP.js's:
+ * the stack reports it when the socket to the edge dropped and is being
+ * brought back. The UI shows "reconnecting" and keeps any call up — media
+ * flows through RTPEngine regardless of the signalling socket — rather than
+ * treating a blip as a lost call.
+ */
+export type SipRegistererState = 'Initial' | 'Registered' | 'Unregistered' | 'Terminated' | 'Reconnecting';
 
 export type SipDisposition = {
   /** SIP status code of the response that ended the session, when there was one. */
@@ -58,6 +64,13 @@ export type SipStack = {
   start(): Promise<void>;
   /** Sends un-REGISTER and tears the transport down. Must not throw. */
   stop(): Promise<void>;
+  /**
+   * Makes sure the phone is reachable again after the app was in the
+   * background or the network changed: reconnects the transport if it is
+   * down and re-REGISTERs if the registration is not current. Idempotent and
+   * cheap when everything is already fine.
+   */
+  refresh(): Promise<void>;
   invite(target: string, headers: VoiceInviteHeader[]): Promise<SipSessionHandle>;
   /** Audio route. Implemented by the platform module, not by SIP.js. */
   setSpeaker(on: boolean): Promise<void>;
@@ -67,7 +80,7 @@ export type SipStackConfig = {
   username: string;
   password: string;
   domain: string;
-  /** `wss://sip.vocivo.app:7443` — Vocivo's own Kamailio, never a carrier. */
+  /** `wss://sip.vocivo.app/ws` — Vocivo's own Kamailio behind its nginx, never a carrier. */
   wsUri?: string;
   displayName?: string;
 };

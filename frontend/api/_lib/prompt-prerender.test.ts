@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { defaultPbxConfig } from './pbx-config-store.js';
-import { prerenderPrompts, receptionistPrerenderItems } from './prompt-prerender.js';
+import { prerenderPrompts, receptionistPrerenderItems, splitSpokenSentences } from './prompt-prerender.js';
 import { receptionistPhrases } from './receptionist.js';
 
 const originalUrl = process.env.TTS_SERVICE_URL;
@@ -49,11 +49,27 @@ test('an engine that is down or unconfigured costs the save nothing', async () =
   assert.equal(await prerenderPrompts([{ input: 'Hello', voice: 'af_heart' }], refused), null);
 });
 
-test('a receptionist renders its greeting and every fixed phrase in its own voice', () => {
-  const ai = { ...defaultPbxConfig().ai, enabled: true, greeting: 'Thanks for calling Acme, how can I help?', voice: 'Vocivo.Kokoro.AmAdam' };
+test('a receptionist renders its greeting and every fixed phrase in its own voice, in spoken pieces', () => {
+  const ai = { ...defaultPbxConfig().ai, enabled: true, greeting: 'Thanks for calling Acme. How can I help?', voice: 'Vocivo.Kokoro.AmAdam' };
   const items = receptionistPrerenderItems(ai);
-  assert.equal(items[0].input, 'Thanks for calling Acme, how can I help?');
+  assert.deepEqual(items.slice(0, 2).map((item) => item.input), ['Thanks for calling Acme.', 'How can I help?']);
   assert.ok(items.every((item) => item.voice === 'am_adam'), 'the catalog id is translated to the engine voice');
-  for (const phrase of receptionistPhrases) assert.ok(items.some((item) => item.input === phrase), phrase);
+  for (const phrase of receptionistPhrases) {
+    for (const piece of splitSpokenSentences(phrase)) assert.ok(items.some((item) => item.input === piece), piece);
+  }
   assert.deepEqual(receptionistPrerenderItems({ ...ai, enabled: false }), [], 'a disabled receptionist renders nothing');
+});
+
+test('sentences are split the way the receptionist speaks them', () => {
+  // The same cases as services/receptionist/tests (SentenceSplitting): the two
+  // implementations must agree or the pre-rendered cache is never hit.
+  assert.deepEqual(splitSpokenSentences('We close at five. Thanks for calling! Anything else?'), ['We close at five.', 'Thanks for calling!', 'Anything else?']);
+  assert.deepEqual(splitSpokenSentences('Yes. We are open until nine tonight.'), ['Yes. We are open until nine tonight.']);
+  assert.deepEqual(splitSpokenSentences('   '), []);
+  assert.deepEqual(splitSpokenSentences('No punctuation at all'), ['No punctuation at all']);
+  assert.deepEqual(splitSpokenSentences('Hello\n\n  there.   Bye now.'), ['Hello there. Bye now.']);
+  const many = Array.from({ length: 20 }, (_, index) => `Sentence number ${index} is here.`).join(' ');
+  const parts = splitSpokenSentences(many);
+  assert.equal(parts.length, 8);
+  assert.ok(parts[parts.length - 1].endsWith('Sentence number 19 is here.'));
 });

@@ -133,8 +133,12 @@ export class SipVoiceClient implements VoiceClient {
         const state: VoiceConnectionState =
           payload.state === 'ok' ? 'CONNECTED'
             : payload.state === 'progress' ? 'CONNECTING'
-              : payload.state === 'failed' ? 'ERROR'
-                : 'DISCONNECTED';
+              : payload.state === 'reconnecting' ? 'RECONNECTING'
+                : payload.state === 'failed' ? 'ERROR'
+                  : 'DISCONNECTED';
+        if (payload.state === 'reconnecting' && payload.reason) {
+          console.warn('Vocivo SIP transport dropped; reconnecting', payload.reason);
+        }
         if (payload.state === 'failed' && payload.reason) {
           console.warn('Vocivo SIP registration failed', payload.reason);
         }

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.brain import Assistant, Conversation, TransferTarget, decision_from_response, system_prompt, tool_definitions
 from app.esl import EslConnection, Message, parse_header_block
 from app.config import Settings
-from app.speech import Voice, recording_has_audio
+from app.speech import Voice, recording_has_audio, split_sentences
 
 RECEPTION = Assistant(
     name="Reception",
@@ -281,10 +281,11 @@ class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             voice = self._voice(directory, httpx.MockTransport(handle))
-            await voice.prerender(["One moment.", "Sure, one second.", "  "], "am_adam")
+            await voice.prerender(["One moment.", "Sure, one second.", "  ", "Sorry, I couldn't hear you. Are you still there?"], "am_adam")
             self.assertEqual(seen[0].url.path, "/v1/audio/prerender")
             body = json.loads(seen[0].content)
-            self.assertEqual([item["input"] for item in body["items"]], ["One moment.", "Sure, one second."])
+            # In the pieces they are spoken in, so the call finds them in the cache.
+            self.assertEqual([item["input"] for item in body["items"]], ["One moment.", "Sure, one second.", "Sorry, I couldn't hear you.", "Are you still there?"])
             self.assertTrue(all(item["voice"] == "am_adam" for item in body["items"]))
             # An engine that is down costs nothing but a debug line.
             await voice.prerender(["Hello."], "af_heart")
@@ -302,3 +303,24 @@ class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await voice.say("Hello", "af_heart")
             self.assertEqual(list((Path(directory) / "prompts").glob("*.wav")), [])
+
+
+class SentenceSplitting(unittest.TestCase):
+    """Answers are spoken a sentence at a time so the first plays while the rest render."""
+
+    def test_sentences_are_separated_and_tiny_ones_joined(self):
+        self.assertEqual(
+            split_sentences("We close at five. Thanks for calling! Anything else?"),
+            ["We close at five.", "Thanks for calling!", "Anything else?"],
+        )
+        # A fragment shorter than a couple of words rides with its neighbour.
+        self.assertEqual(split_sentences("Yes. We are open until nine tonight."), ["Yes. We are open until nine tonight."])
+        self.assertEqual(split_sentences("   "), [])
+        self.assertEqual(split_sentences("No punctuation at all"), ["No punctuation at all"])
+
+    def test_whitespace_is_normalised_and_long_answers_are_capped(self):
+        self.assertEqual(split_sentences("Hello\n\n  there.   Bye now."), ["Hello there. Bye now."])
+        many = " ".join(f"Sentence number {index} is here." for index in range(20))
+        parts = split_sentences(many)
+        self.assertEqual(len(parts), 8)
+        self.assertTrue(parts[-1].endswith("Sentence number 19 is here."))

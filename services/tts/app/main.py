@@ -20,6 +20,18 @@ from pydantic import BaseModel, Field
 log = logging.getLogger("vocivo.tts")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+try:  # pragma: no cover - torch is present wherever Kokoro is
+    import torch
+
+    # The container runs on a slice of the SIP edge's CPUs (--cpus 1.5). Left to
+    # itself torch starts one thread per *host* core and the cgroup throttles
+    # them all, which is slower than using the slice properly: a three-second
+    # sentence took ten seconds to render.
+    torch.set_num_threads(max(1, int(os.getenv("TTS_TORCH_THREADS", "2"))))
+    torch.set_num_interop_threads(1)
+except Exception as error:  # noqa: BLE001
+    log.warning("could not tune torch threads: %s", error)
+
 app = FastAPI(title="Vocivo Voice Engine", version="1.1.0")
 cache_dir = Path(os.getenv("TTS_CACHE_DIR", "/var/cache/vocivo-tts"))
 cache_dir.mkdir(parents=True, exist_ok=True)

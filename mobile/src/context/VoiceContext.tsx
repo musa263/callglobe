@@ -36,6 +36,13 @@ const isLiveCall = (state: VoiceCallState) => state === CallState.CONNECTING || 
 
 const VoiceContext = createContext<VoiceContextValue | null>(null);
 
+/**
+ * How long a call is kept while the signalling socket to Vocivo's edge is being
+ * reconnected. Long enough for a lift or a Wi-Fi-to-cellular handover, short
+ * enough that a caller is not left talking to a dead line for minutes.
+ */
+const signallingReconnectGraceMs = 45_000;
+
 export function VoiceProvider({ children, bootstrapSession }: { children: React.ReactNode; bootstrapSession?: VoiceLoginConfig | null }) {
   const { loading, isAuthenticated, isPreview, addHistory, profile } = useAuth();
   const [connection, setConnection] = useState(voice.currentConnectionState);
@@ -446,6 +453,18 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         }, delay);
         return;
       }
+      if (state === ConnectionState.RECONNECTING) {
+        // The signalling socket dropped and the stack is bringing it back.
+        // Media does not depend on it, so a call in progress stays up; only
+        // if the edge has not come back within the grace period is the call
+        // treated as lost.
+        if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
+        transportLossTimerRef.current = setTimeout(() => {
+          transportLossTimerRef.current = null;
+          if (voice.currentConnectionState !== ConnectionState.CONNECTED) emergencyTransportCleanup(ConnectionState.DISCONNECTED);
+        }, signallingReconnectGraceMs);
+        return;
+      }
       if (state === ConnectionState.DISCONNECTED) {
         const liveCount = voice.currentCalls.filter((call) => !isTerminalCall(call.currentState)).length;
         if (isSetupSignalingBlip(liveCount, activeCallRef.current?.id)) return;
@@ -716,7 +735,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (startAttemptRef.current === guardAttempt) startingCallRef.current = false;
       throw setupError;
     }
-    const destination = sipUsername ? `sip:${sipUsername}@sip.telnyx.com` : '';
+    // The API decides which host an extension lives on (Vocivo's own edge or
+    // the carrier) and answers with the address to dial; the bare username is
+    // enough to ask. A hard-coded carrier host here dialled the wrong edge.
+    const destination = sipUsername ? `sip:${sipUsername}` : '';
     const routeId = createRouteId();
     const attempt = ++startAttemptRef.current;
     const startedAt = Date.now();

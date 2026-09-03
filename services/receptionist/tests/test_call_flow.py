@@ -220,7 +220,11 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIn("record", applications)
         self.assertIn("hangup", applications)
         self.assertEqual(voice.said[0], "Thanks for calling Vocivo.")
-        self.assertIn("We close at five. Thanks for calling.", voice.said)
+        # Spoken a sentence at a time, so the first is playing while the second renders.
+        self.assertIn("We close at five.", voice.said)
+        self.assertIn("Thanks for calling.", voice.said)
+        playbacks = [arg for app, arg in freeswitch.applications if app == "playback"]
+        self.assertGreaterEqual(len(playbacks), 3, "greeting, then each sentence of the answer")
 
         filed = api.filed[0]
         self.assertEqual(filed["outcome"], "completed")
@@ -256,7 +260,8 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_silent_caller_is_asked_once_and_then_handed_to_a_person(self):
         freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[])
-        self.assertIn("Sorry, I couldn't hear you. Are you still there?", voice.said)
+        self.assertIn("Sorry, I couldn't hear you.", voice.said)
+        self.assertIn("Are you still there?", voice.said)
         self.assertIn("I'll put you through to someone.", voice.said)
         self.assertEqual([arg for app, arg in freeswitch.applications if app == "transfer"], ["1001 XML default"])
         self.assertEqual(api.filed[0]["outcome"], "transferred")
@@ -320,7 +325,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         texts, spoken_by = voice.prerendered[0]
         self.assertEqual(spoken_by, "am_adam")
         for phrase in CANNED.values():
-            self.assertIn(phrase, texts)
+            self.assertIn(phrase, texts)  # the fake keeps whole phrases; the real Voice splits them as it renders
 
     async def test_recognition_listens_in_the_receptionist_language(self):
         await self._run(

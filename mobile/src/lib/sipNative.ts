@@ -73,6 +73,12 @@ export async function unregisterVocivoSip() {
   await bridge.unregister();
 }
 
+/** Reconnects and re-registers if the app was away or the network moved. */
+export async function refreshVocivoSip() {
+  if (!bridge) return;
+  await bridge.refresh();
+}
+
 export async function inviteVocivoSip(target: string, headers?: Array<{ name: string; value: string }>) {
   return ensureBridge().bridge.invite(target, headers);
 }

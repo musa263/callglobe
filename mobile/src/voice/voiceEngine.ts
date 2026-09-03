@@ -93,7 +93,7 @@ export type NativeSipBridge = {
 };
 
 /** Events the native module emits through `NativeEventEmitter`. */
-export type SipRegistrationEvent = { state: 'none' | 'progress' | 'ok' | 'failed'; reason?: string };
+export type SipRegistrationEvent = { state: 'none' | 'progress' | 'ok' | 'failed' | 'reconnecting'; reason?: string };
 export type SipIncomingEvent = {
   callId: string;
   callerName?: string;

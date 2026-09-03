@@ -187,6 +187,8 @@ jobs:
             discover)
               remote="$remote"'
               echo "--- os ---"; ( . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" ) || true; uname -r
+              echo "--- cpu / memory ---"; echo "cpus: $(nproc)"; { grep -m1 "model name" /proc/cpuinfo || true; }; free -m | head -2; uptime
+              echo "--- container cpu quotas ---"; docker ps -q 2>/dev/null | xargs -r docker inspect --format "{{.Name}} cpus={{.HostConfig.NanoCpus}} mem={{.HostConfig.Memory}}" 2>/dev/null || true
               echo "--- docker containers ---"; docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "docker unavailable"
               echo "--- docker compose projects ---"; docker compose ls --all 2>/dev/null || echo "none"
               echo "--- compose files on disk ---"; { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o -name "docker-compose.y*ml" -print 2>/dev/null || true; } | head -20 || true
@@ -578,6 +580,9 @@ jobs:
                 echo "health: $(curl -s -m 10 -H "Authorization: Bearer $secret" http://127.0.0.1:8000/health || echo unreachable)"
                 echo "cached prompts: $(docker exec vocivo-tts sh -c "ls /var/cache/vocivo-tts/*.wav 2>/dev/null | wc -l" 2>/dev/null || echo "?")"
               fi
+              echo "--- cpu available to the engine ---"
+              echo "host cpus: $(nproc); quota: $(docker inspect --format "{{.HostConfig.NanoCpus}}" vocivo-tts 2>/dev/null || echo "?") nanocpus"
+              docker exec vocivo-tts python -c "import torch, os; print(\"torch threads:\", torch.get_num_threads(), \"OMP_NUM_THREADS=\", os.environ.get(\"OMP_NUM_THREADS\"))" 2>/dev/null || true
               echo "--- recent engine log ---"
               docker logs --since 6h vocivo-tts 2>&1 | grep -E "rendered|warm|pipeline|ERROR|WARNING|Traceback" | tail -40 || true
               ';;

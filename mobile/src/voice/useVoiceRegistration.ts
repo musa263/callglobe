@@ -1,10 +1,11 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import { AppState, NativeModules, Platform } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons-sdk';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { registerVocivoSip } from '../lib/sipNative';
+import { refreshVocivoSip, registerVocivoSip } from '../lib/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
@@ -49,7 +50,9 @@ export function useVoiceRegistration({
     let tokenTimer: ReturnType<typeof setInterval> | undefined;
     let sessionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     let activeRegistrationTimer: ReturnType<typeof setTimeout> | undefined;
+    let networkRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     let appStateSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
+    let networkSubscription: (() => void) | undefined;
 
     const connect = async () => {
       try {
@@ -109,7 +112,6 @@ export function useVoiceRegistration({
           const engine = telnyxEngine();
           voice.use(engine.name, engine.client, engine.platform);
         }
-        if (canceled) return;
         if (canceled) return;
         let registeredToken = pushNotificationDeviceToken;
         let registrationBusy = false;
@@ -222,12 +224,35 @@ export function useVoiceRegistration({
           if (state !== 'active' || canceled) return;
           if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
           activeRegistrationTimer = setTimeout(() => {
+            if (onSipEdge) {
+              // The socket to Vocivo's edge rarely survives a spell in the
+              // background; make sure the phone is registered again before
+              // the person tries to dial.
+              refreshVocivoSip().catch((failure) => reportVoiceError('foreground SIP refresh', failure));
+              return;
+            }
             const operation = isVoiceSessionFresh(loginConfigRef.current, 30_000)
               ? registerLatestDevice()
               : refreshSession();
             operation.catch((failure) => reportVoiceError('foreground voice session validation', failure));
           }, 250);
         });
+        if (onSipEdge) {
+          // Wi-Fi to cellular and back changes the phone's address; the old
+          // socket is dead even when the OS has not said so yet.
+          let lastNetworkKey = '';
+          networkSubscription = NetInfo.addEventListener((netState) => {
+            if (canceled) return;
+            const key = `${netState.type}:${netState.isConnected === true}`;
+            if (!lastNetworkKey) { lastNetworkKey = key; return; }
+            if (key === lastNetworkKey || netState.isConnected !== true) { lastNetworkKey = key; return; }
+            lastNetworkKey = key;
+            if (networkRefreshTimer) clearTimeout(networkRefreshTimer);
+            networkRefreshTimer = setTimeout(() => {
+              refreshVocivoSip().catch((failure) => reportVoiceError('network change SIP refresh', failure));
+            }, 1_000);
+          });
+        }
       } catch (voiceError) {
         setPushRegistration('unavailable');
         if (!canceled) setError(voiceError instanceof Error ? voiceError.message : 'Unable to connect to calling service.');
@@ -240,7 +265,9 @@ export function useVoiceRegistration({
       if (tokenTimer) clearInterval(tokenTimer);
       if (sessionRefreshTimer) clearTimeout(sessionRefreshTimer);
       if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
+      if (networkRefreshTimer) clearTimeout(networkRefreshTimer);
       appStateSubscription?.remove();
+      networkSubscription?.();
     };
   }, [activeCallRef, bootstrapSession, isAuthenticated, isPreview, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration]);
 }

@@ -1,5 +1,7 @@
-import { ConnectionState } from './voiceEngine';
-import { getVoicePushToken, voipClient } from '../lib/voipClient';
+import { ConnectionState, type VoiceConnectionState } from './voiceEngine';
+import { getVoicePushToken } from '../lib/voipClient';
+import { refreshVocivoSip } from '../lib/sipNative';
+import { voice } from './voiceClientFacade';
 import type { VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 
 export function voiceLoginConfig(response: VoiceTokenResponse, ringtone: string): VoiceLoginConfig {
@@ -25,12 +27,32 @@ export function createRouteId() {
   return `vc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function waitForVoiceConnection(timeoutMs = 12_000) {
+/**
+ * Waits for whichever engine is carrying calls to be registered.
+ *
+ * This used to watch the carrier SDK's connection state. On Vocivo's own edge
+ * that SDK is never logged in, so every call from the app waited twelve
+ * seconds and then failed with "Calling service is reconnecting" — the phone
+ * could ring but never dial. The facade reflects the engine actually in use.
+ */
+export async function waitForVoiceConnection(
+  timeoutMs = 12_000,
+  probe: { state: () => VoiceConnectionState; engine: () => string | null; refresh: () => Promise<void>; sleep?: (ms: number) => Promise<void> } = {
+    state: () => voice.currentConnectionState,
+    engine: () => voice.currentEngine,
+    refresh: refreshVocivoSip,
+  },
+) {
+  const sleep = probe.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  if (probe.state() === ConnectionState.CONNECTED) return;
+  // A phone that just came to the front may still be on a dead socket; ask the
+  // SIP edge for its registration back rather than waiting for the timer.
+  if (probe.engine() === 'sip') await probe.refresh().catch(() => undefined);
   const deadline = Date.now() + timeoutMs;
-  while (voipClient.currentConnectionState !== ConnectionState.CONNECTED && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  while (probe.state() !== ConnectionState.CONNECTED && Date.now() < deadline) {
+    await sleep(100);
   }
-  if (voipClient.currentConnectionState !== ConnectionState.CONNECTED) {
+  if (probe.state() !== ConnectionState.CONNECTED) {
     throw new Error('Calling service is reconnecting. Please try again in a moment.');
   }
 }

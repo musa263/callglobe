@@ -9,7 +9,7 @@ from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, channel_variable
-from .speech import CANNED, FILLERS, Ears, Voice, recording_has_audio
+from .speech import CANNED, FILLERS, Ears, Voice, recording_has_audio, split_sentences
 
 log = logging.getLogger("vocivo.call")
 
@@ -139,15 +139,29 @@ class CallHandler:
     # -- the two halves of a turn ---------------------------------------
 
     async def _speak(self, connection: EslConnection, text: str, voice: str) -> None:
-        if not text.strip():
+        """
+        Says `text` a sentence at a time: while one sentence plays, the next is
+        rendering, so the caller hears the answer start after one sentence's
+        worth of synthesis rather than the whole answer's.
+        """
+        parts = split_sentences(text)
+        if not parts:
             return
-        try:
-            path = await self._voice.say(text, voice)
-        except Exception as error:  # noqa: BLE001
-            # Losing the voice engine mid-call is survivable; losing the call is not.
-            log.error("could not synthesise %r: %s", text[:60], error)
-            return
-        await connection.execute("playback", str(path), timeout=self._settings.greeting_timeout + 40)
+        rendering: asyncio.Task[Path] = asyncio.create_task(self._voice.say(parts[0], voice))
+        for index, part in enumerate(parts):
+            if connection.hungup.is_set():
+                rendering.cancel()
+                return
+            try:
+                path = await rendering
+            except Exception as error:  # noqa: BLE001
+                # Losing the voice engine mid-call is survivable; losing the call is not.
+                log.error("could not synthesise %r: %s", part[:60], error)
+                path = None
+            if index + 1 < len(parts):
+                rendering = asyncio.create_task(self._voice.say(parts[index + 1], voice))
+            if path is not None:
+                await connection.execute("playback", str(path), timeout=self._settings.greeting_timeout + 40)
 
     async def _think(self, connection: EslConnection, conversation: Conversation, voice: str) -> Decision:
         """
@@ -167,10 +181,11 @@ class CallHandler:
             self._filler_index += 1
             await self._speak(connection, filler, voice)
         decision = await thinking
-        if decision.say.strip():
-            # Start rendering the answer now; _speak finds it on disk.
+        first = split_sentences(decision.say)[:1]
+        if first:
+            # Start rendering the opening sentence now; _speak finds it on disk.
             try:
-                await self._voice.say(decision.say, voice)
+                await self._voice.say(first[0], voice)
             except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
                 log.debug("early render failed: %s", error)
         return decision

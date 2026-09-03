@@ -55,9 +55,14 @@ export function useSipVoice(token, enabled, identity = {}) {
   const disconnect = useCallback(async () => {
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
-    try { await credentialsRef.current?.registerer?.unregister(); } catch (failure) { reportWebVoiceError('SIP unregister', failure); }
-    try { await credentialsRef.current?.userAgent?.stop(); } catch (failure) { reportWebVoiceError('SIP stop', failure); }
+    const connection = credentialsRef.current;
     credentialsRef.current = null;
+    if (connection?.stop) {
+      try { await connection.stop(); } catch (failure) { reportWebVoiceError('SIP stop', failure); }
+    } else {
+      try { await connection?.registerer?.unregister(); } catch (failure) { reportWebVoiceError('SIP unregister', failure); }
+      try { await connection?.userAgent?.stop(); } catch (failure) { reportWebVoiceError('SIP stop', failure); }
+    }
     sessionRef.current = null;
     incomingRef.current = null;
     setReady(false);
@@ -82,6 +87,23 @@ export function useSipVoice(token, enabled, identity = {}) {
         wsUri: credentials.wsUri,
         displayName: identity.name,
         iceServers: credentials.ice_servers,
+        // The phone's real state, not the state at sign-in: a dropped socket
+        // used to leave "Ready for calls" on screen while calls rang nobody.
+        onRegistration: (registration, reason) => {
+          if (cancelled) return;
+          if (registration === 'Registered') {
+            setReady(true);
+            setError('');
+            setStatusLabel('Ready for calls');
+          } else if (registration === 'Reconnecting') {
+            setReady(false);
+            setStatusLabel('Reconnecting…');
+          } else {
+            setReady(false);
+            setStatusLabel('SIP unavailable');
+            if (reason) setError(`The SIP phone is not registered (${reason}).`);
+          }
+        },
         onInvite: (invitation) => {
           incomingRef.current = invitation;
           setIncomingCall(invitation);
@@ -95,7 +117,7 @@ export function useSipVoice(token, enabled, identity = {}) {
         },
       });
       if (cancelled) {
-        await connection.userAgent.stop();
+        await connection.stop();
         return;
       }
       credentialsRef.current = connection;
@@ -107,8 +129,18 @@ export function useSipVoice(token, enabled, identity = {}) {
       setError(failure instanceof Error ? failure.message : 'The SIP phone could not register.');
       setStatusLabel('SIP unavailable');
     });
+    // A tab that comes back into view or a network that comes back gets the
+    // phone registered again at once rather than on the back-off timer.
+    const refresh = () => {
+      if (cancelled || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
+      credentialsRef.current?.refresh?.().catch((failure) => reportWebVoiceError('SIP refresh', failure));
+    };
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
       cancelled = true;
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', refresh);
       disconnect();
     };
   }, [disconnect, enabled, identity.name, token]);
@@ -133,6 +165,11 @@ export function useSipVoice(token, enabled, identity = {}) {
   const place = useCallback(async (destination, options) => {
     const userAgent = credentialsRef.current?.userAgent;
     if (!userAgent) throw new Error('The SIP phone is not registered yet.');
+    if (!userAgent.isConnected()) {
+      // The socket dropped while the tab was idle; get it back before dialling.
+      await credentialsRef.current?.refresh?.().catch(() => undefined);
+      if (!userAgent.isConnected()) throw new Error('The SIP phone is reconnecting. Please try again in a moment.');
+    }
     const domain = credentialsRef.current?.userAgent?.configuration?.uri?.host || '';
     const target = sipTargetUri(destination, domain);
     const session = await inviteSipTarget(userAgent, target, options.headers || [], {

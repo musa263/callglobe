@@ -57,7 +57,7 @@ function fakeStack() {
   let registration: ((state: 'Initial' | 'Registered' | 'Unregistered' | 'Terminated', reason?: string) => void) | null = null;
   let invitation: ((session: SipSessionHandle) => void) | null = null;
   const outgoing: FakeSession[] = [];
-  const state = { started: false, stopped: false, speaker: false, startError: null as Error | null, lastTarget: '', lastHeaders: [] as VoiceInviteHeader[] };
+  const state = { started: false, stopped: false, speaker: false, refreshed: 0 as number, startError: null as Error | null, lastTarget: '', lastHeaders: [] as VoiceInviteHeader[] };
 
   const stack: SipStack = {
     onRegistrationChange: (listener) => { registration = listener; },
@@ -68,6 +68,7 @@ function fakeStack() {
       registration?.('Registered');
     },
     stop: async () => { state.stopped = true; },
+    refresh: async () => { state.refreshed = (state.refreshed ?? 0) + 1; },
     invite: async (target, headers) => {
       state.lastTarget = target;
       state.lastHeaders = headers;
@@ -270,4 +271,18 @@ test('removing a listener during emit does not skip the next one', () => {
   events.addListener('callState', () => seen.push('second'));
   events.emit('callState', { callId: 'x', state: 'ACTIVE' });
   assert.deepEqual(seen, ['first', 'second']);
+});
+
+test('refresh reaches the stack while registered and is a no-op after sign-out', async () => {
+  const { stack, state } = fakeStack();
+  const events = new SipEventBus();
+  const bridge = new SipStackBridge({ events, createStack: async () => stack });
+  await bridge.refresh();
+  assert.equal(state.refreshed, 0, 'nothing to refresh before a registration');
+  await bridge.register({ username: 'u', password: 'p', domain: 'sip.vocivo.app' });
+  await bridge.refresh();
+  assert.equal(state.refreshed, 1);
+  await bridge.unregister();
+  await bridge.refresh();
+  assert.equal(state.refreshed, 1, 'a signed-out phone is not brought back');
 });

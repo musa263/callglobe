@@ -4,6 +4,7 @@ import {
   Inviter,
   Registerer,
   RegistererState,
+  RequestPendingError,
   SessionState,
   UserAgent,
   type Session,
@@ -14,6 +15,7 @@ import {
   type SessionDescriptionHandler,
   type SessionDescriptionHandlerOptions as WebSessionDescriptionHandlerOptions,
 } from 'sip.js/lib/platform/web';
+import { createRegistrationKeeper } from './sipRegistrationKeeper';
 import type {
   SipDisposition,
   SipRegistererState,
@@ -204,6 +206,8 @@ export type SipJsStackOptions = {
   setSpeaker?: (on: boolean) => Promise<void>;
   /** STUN/TURN. Defaults to Vocivo's own coturn on the SIP edge. */
   iceServers?: RTCIceServer[];
+  /** Injected by tests; defaults to setTimeout. */
+  schedule?: (callback: () => void, delayMs: number) => unknown;
 };
 
 export function createSipJsStack(config: SipStackConfig, options: SipJsStackOptions = {}): SipStack {
@@ -223,7 +227,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     authorizationUsername: config.username,
     authorizationPassword: config.password,
     transportOptions: {
-      server: config.wsUri ?? `wss://${config.domain}:7443`,
+      server: config.wsUri ?? `wss://${config.domain}/ws`,
       // A dropped socket on a moving phone is normal, not exceptional.
       keepAliveInterval: 30,
     },
@@ -244,11 +248,42 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
         const handle = new SipJsSession(invitation, uuid || nextId(), true);
         onInvitation?.(handle);
       },
+      // SIP.js itself never reconnects (reconnectionAttempts defaults to 0)
+      // and never re-REGISTERs after a reconnect; the keeper does both.
+      onConnect: () => keeper.onConnect(),
+      onDisconnect: (error) => keeper.onDisconnect(error),
     },
   });
 
   const registerer = new Registerer(userAgent, { expires: 600 });
-  registerer.stateChange.addListener((state) => onRegistration?.(toSipRegistererState(state)));
+  registerer.stateChange.addListener((state) => {
+    // A REGISTER that failed because the socket was down comes back as a
+    // synthetic 503 and an Unregistered state. While the keeper is bringing
+    // the socket back that is "reconnecting", not "signed out": the UI keeps
+    // any call up instead of closing it over a blip.
+    if (state === RegistererState.Unregistered && keeper.wanted && !userAgent.isConnected()) {
+      onRegistration?.('Reconnecting', 'registration lapsed while the connection was down');
+      return;
+    }
+    onRegistration?.(toSipRegistererState(state));
+  });
+
+  const keeper = createRegistrationKeeper({
+    isConnected: () => userAgent.isConnected(),
+    reconnect: () => userAgent.reconnect(),
+    isRegistered: () => registerer.state === RegistererState.Registered,
+    isPending: (error) => error instanceof RequestPendingError,
+    notify: (state, reason) => onRegistration?.(state, reason),
+    schedule: options.schedule,
+    register: () => registerer.register({
+      requestDelegate: {
+        onReject: (response) => {
+          if (!userAgent.isConnected()) return; // the state listener has already said "reconnecting"
+          onRegistration?.('Unregistered', `${response.message.statusCode} ${response.message.reasonPhrase}`);
+        },
+      },
+    }).then(() => undefined),
+  });
 
   return {
     onRegistrationChange: (listener) => { onRegistration = listener; },
@@ -256,16 +291,11 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
 
     start: async () => {
       await userAgent.start();
-      await registerer.register({
-        requestDelegate: {
-          onReject: (response) => {
-            onRegistration?.('Unregistered', `${response.message.statusCode} ${response.message.reasonPhrase}`);
-          },
-        },
-      });
+      await keeper.start();
     },
 
     stop: async () => {
+      keeper.stop();
       try {
         await registerer.unregister();
       } catch {
@@ -273,6 +303,8 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
       }
       await userAgent.stop();
     },
+
+    refresh: () => keeper.refresh(),
 
     invite: async (target, headers) => {
       const targetUri = UserAgent.makeURI(target.includes('@') ? `sip:${target.replace(/^sip:/, '')}` : `sip:${target}@${config.domain}`);
