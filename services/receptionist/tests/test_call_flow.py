@@ -12,6 +12,7 @@ from app.brain import Assistant, Conversation, Decision, TransferTarget
 from app.call import CallHandler
 from app.config import Settings
 from app.esl import EslConnection
+from app.speech import CANNED, FILLERS
 
 # A whole call, over a real socket, against the real EslConnection and
 # CallHandler. Only the four things that reach outside the process are faked:
@@ -30,10 +31,12 @@ class FakeFreeswitch:
     handshake the call loop waits on.
     """
 
-    def __init__(self, *, channel_uuid: str = "uuid-1", caller: str = "+15551230000", dialled: str = "+18447161777"):
+    def __init__(self, *, channel_uuid: str = "uuid-1", caller: str = "+15551230000", dialled: str = "+18447161777", answered: bool = False):
         self.channel_uuid = channel_uuid
         self.caller = caller
         self.dialled = dialled
+        #: Whether the dialplan answered before handing the call to the socket.
+        self.answered = answered
         self.applications: list[tuple[str, str]] = []
         self.recordings: list[str] = []
         #: Text of each turn the caller "says", consumed one per `record`.
@@ -47,6 +50,7 @@ class FakeFreeswitch:
             f"Caller-Caller-ID-Number: {self.caller}\n"
             f"Caller-Destination-Number: {self.dialled}\n"
             "Caller-Caller-ID-Name: Sam%20Tailor\n"
+            f"Answer-State: {'answered' if self.answered else 'ringing'}\n"
         ).encode()
         return b"Content-Type: command/reply\nReply-Text: +OK\nContent-Length: %d\n\n%s" % (len(body), body)
 
@@ -116,31 +120,42 @@ class FakeFreeswitch:
 class FakeVoice:
     def __init__(self, directory: str):
         self.said: list[str] = []
+        self.prerendered: list[tuple[list[str], str | None]] = []
         self._dir = Path(directory) / "prompts"
         self._dir.mkdir(parents=True, exist_ok=True)
 
     async def say(self, text: str, voice: str | None = None) -> Path:
-        self.said.append(text)
-        path = self._dir / f"{len(self.said)}.wav"
+        # The same text rendered twice is one file, as in the real Voice.
+        if text not in self.said:
+            self.said.append(text)
+        path = self._dir / f"{self.said.index(text) + 1}.wav"
         path.write_bytes(b"RIFF")
         return path
+
+    async def prerender(self, texts: list[str], voice: str | None = None) -> None:
+        self.prerendered.append((list(texts), voice))
 
 
 class FakeEars:
     def __init__(self, freeswitch: FakeFreeswitch):
         self._freeswitch = freeswitch
+        self.languages: list[str | None] = []
 
-    async def transcribe(self, path: Path) -> str:
+    async def transcribe(self, path: Path, language: str | None = None) -> str:
+        self.languages.append(language)
         return self._freeswitch.caller_turns.pop(0) if self._freeswitch.caller_turns else ""
 
 
 class FakeBrain:
-    def __init__(self, decisions: list[Decision]):
+    def __init__(self, decisions: list[Decision], delay: float = 0.0):
         self._decisions = decisions
+        self._delay = delay
         self.seen: list[Conversation] = []
 
     async def respond(self, conversation: Conversation) -> Decision:
         self.seen.append(conversation)
+        if self._delay:
+            await asyncio.sleep(self._delay)
         return self._decisions.pop(0) if self._decisions else Decision(action="hangup", say="Goodbye.")
 
 
@@ -166,7 +181,7 @@ RECEPTION = Assistant(
 
 
 class CallFlow(unittest.IsolatedAsyncioTestCase):
-    async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision]):
+    async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision], answered: bool = False, model_delay: float = 0.0):
         with TemporaryDirectory() as directory:
             settings = Settings(
                 audio_dir=directory,
@@ -175,11 +190,12 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
                 api_secret="x",
                 listen_seconds=2,
             )
-            freeswitch = FakeFreeswitch()
+            freeswitch = FakeFreeswitch(answered=answered)
             freeswitch.caller_turns = list(turns)
             voice = FakeVoice(directory)
             api = FakeApi(assistant)
-            handler = CallHandler(settings, voice, FakeEars(freeswitch), FakeBrain(decisions), api)  # type: ignore[arg-type]
+            self.ears = FakeEars(freeswitch)
+            handler = CallHandler(settings, voice, self.ears, FakeBrain(decisions, delay=model_delay), api)  # type: ignore[arg-type]
 
             async def on_connection(reader, writer):
                 await handler.handle(EslConnection(reader, writer))
@@ -262,6 +278,57 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         settings = dict(freeswitch.applications)
         self.assertEqual(settings.get("set"), "playback_terminators=none")
         self.assertIn(("set", "record_sample_rate=8000"), freeswitch.applications)
+
+    async def test_a_call_the_dialplan_already_answered_is_not_answered_again(self):
+        # The dialplan answers and pauses before the socket; doing both again
+        # added most of a second of dead air before every greeting.
+        freeswitch, voice, _ = await self._run(
+            assistant=RECEPTION,
+            turns=["Hi."],
+            decisions=[Decision(action="hangup", say="Bye.")],
+            answered=True,
+        )
+        applications = [app for app, _ in freeswitch.applications]
+        self.assertNotIn("answer", applications)
+        self.assertNotIn("sleep", applications)
+        self.assertEqual(voice.said[0], "Thanks for calling Vocivo.")
+
+    async def test_a_slow_model_is_covered_by_a_short_filler_and_a_fast_one_is_not(self):
+        _, slow, _ = await self._run(
+            assistant=RECEPTION,
+            turns=["What are your opening hours on Saturday?"],
+            decisions=[Decision(action="hangup", say="Nine to one on Saturdays.")],
+            model_delay=1.6,
+        )
+        answer = slow.said.index("Nine to one on Saturdays.")
+        self.assertIn(slow.said[answer - 1], FILLERS, "a filler should be spoken while the model thinks")
+
+        _, fast, _ = await self._run(
+            assistant=RECEPTION,
+            turns=["Goodbye."],
+            decisions=[Decision(action="hangup", say="Goodbye.")],
+        )
+        self.assertFalse(set(fast.said) & set(FILLERS), "a quick reply needs no filler")
+
+    async def test_canned_phrases_are_prerendered_in_the_receptionist_voice(self):
+        _, voice, _ = await self._run(
+            assistant=Assistant(name="Reception", greeting="Hello.", voice="am_adam"),
+            turns=["Hi."],
+            decisions=[Decision(action="hangup", say="Bye.")],
+        )
+        self.assertTrue(voice.prerendered)
+        texts, spoken_by = voice.prerendered[0]
+        self.assertEqual(spoken_by, "am_adam")
+        for phrase in CANNED.values():
+            self.assertIn(phrase, texts)
+
+    async def test_recognition_listens_in_the_receptionist_language(self):
+        await self._run(
+            assistant=Assistant(name="Accueil", greeting="Bonjour.", language="fr"),
+            turns=["Bonjour."],
+            decisions=[Decision(action="hangup", say="Au revoir.")],
+        )
+        self.assertEqual(self.ears.languages, ["fr"])
 
 
 if __name__ == "__main__":

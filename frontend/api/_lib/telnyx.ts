@@ -1,7 +1,27 @@
 import { requiredEnv } from './http.js';
+import { sipInboundEnabled } from './voice-provider.js';
 
 export function telnyxPstnConnectionId() {
   return requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
+}
+
+/**
+ * The carrier connection a Vocivo number must sit on for inbound calls to
+ * reach Vocivo: the SIP edge's IP connection once VOCIVO_SIP_INBOUND is on,
+ * the Call Control application before that.
+ *
+ * Null means "leave the number's connection alone": the edge is answering
+ * inbound but TELNYX_SIP_CONNECTION_ID has not been set, and moving numbers
+ * onto the Call Control application would silently undo the cut-over — which
+ * is what every voice-menu save and every "Save route" used to do.
+ */
+export function inboundConnectionId(): string | null {
+  if (sipInboundEnabled()) {
+    const sipConnection = process.env.TELNYX_SIP_CONNECTION_ID?.trim() || '';
+    if (!sipConnection) console.warn('VOCIVO_SIP_INBOUND is on but TELNYX_SIP_CONNECTION_ID is not set; number connections are left unchanged.');
+    return sipConnection || null;
+  }
+  return telnyxPstnConnectionId();
 }
 
 export function telnyxPstnConnectionPath() {

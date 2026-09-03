@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { requiredEnv } from './http.js';
-import { telnyx, telnyxPstnConnectionId } from './telnyx.js';
+import { inboundConnectionId, telnyx } from './telnyx.js';
 import { readPbxConfig, savePbxConfig, type PbxConfig } from './pbx-config-store.js';
 import { numberOrganizationId } from './tenancy.js';
 
@@ -132,10 +132,15 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
     numbers.push(...(payload.data ?? []));
     if (!payload.data?.length || page >= (payload.meta?.total_pages || 1)) break;
   }
-  const callControlId = telnyxPstnConnectionId();
-  await Promise.all(numbers
-    .filter((item) => numberOrganizationId(item.phone_number, pbx) === organizationId && item.connection_id !== callControlId)
-    .map((item) => telnyx(`/phone_numbers/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ connection_id: callControlId }) })));
+  // The tenant's numbers are kept on the connection that delivers inbound to
+  // Vocivo. That is the SIP edge when it answers inbound; before this check,
+  // every save here moved them back onto the Call Control application.
+  const inboundConnection = inboundConnectionId();
+  if (inboundConnection) {
+    await Promise.all(numbers
+      .filter((item) => numberOrganizationId(item.phone_number, pbx) === organizationId && item.connection_id !== inboundConnection)
+      .map((item) => telnyx(`/phone_numbers/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ connection_id: inboundConnection }) })));
+  }
   return config;
 }
 

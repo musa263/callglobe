@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../http.js';
-import { telnyx, telnyxPstnConnectionId } from '../telnyx.js';
+import { inboundConnectionId, telnyx, telnyxPstnConnectionId } from '../telnyx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
 import { getExtension } from '../pbx.js';
@@ -115,7 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: 'POST',
         body: JSON.stringify({
           phone_numbers: phoneNumbers.map((phone_number: string) => ({ phone_number })),
-          connection_id: access.superadmin ? text(req.body?.connectionId, 80) || telnyxPstnConnectionId() : telnyxPstnConnectionId(),
+          connection_id: access.superadmin ? text(req.body?.connectionId, 80) || inboundConnectionId() || telnyxPstnConnectionId() : inboundConnectionId() || telnyxPstnConnectionId(),
           customer_reference: access.superadmin ? text(req.body?.customerReference, 100) || `Vocivo ${activeOrganizationId} ${new Date().toISOString()}` : `Vocivo ${activeOrganizationId} ${new Date().toISOString()}`,
         }),
       });
@@ -149,7 +149,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!ownedNumber || config.numberAssignments[ownedNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
     const body: Record<string, unknown> = {};
     if (!access.superadmin && (req.body?.assignToVocivo === true || req.body?.connectionId !== undefined)) return res.status(403).json({ error: 'Only the Vocivo superadmin can change carrier connections.' });
-    if (access.superadmin && req.body?.assignToVocivo === true) body.connection_id = telnyxPstnConnectionId();
+    // "Assign to Vocivo" means the connection that delivers inbound to Vocivo
+    // today — the SIP edge once it answers inbound. Pointing at the Call
+    // Control application here used to undo the cut-over on every Save route.
+    if (access.superadmin && req.body?.assignToVocivo === true) {
+      const inbound = inboundConnectionId();
+      if (inbound) body.connection_id = inbound;
+    }
     else if (access.superadmin && req.body?.connectionId !== undefined) body.connection_id = text(req.body.connectionId, 80) || null;
     if (req.body?.messagingProfileId !== undefined) {
       const requestedProfileId = text(req.body.messagingProfileId, 80);

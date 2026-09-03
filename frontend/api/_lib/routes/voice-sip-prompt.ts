@@ -25,10 +25,15 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array> | null | undefi
   return Buffer.from(await new Response(stream).arrayBuffer());
 }
 
-async function fetchVocivoPrompt(text: string, voice: string) {
-  const vocivoUrl = await renderVocivoPrompt(text, voice);
+/** How long this function may spend rendering before the edge gives up on us. */
+const renderBudgetMs = 24_000;
+
+async function fetchVocivoPrompt(text: string, voice: string, timeoutMs: number) {
+  const started = Date.now();
+  const vocivoUrl = await renderVocivoPrompt(text, voice, timeoutMs);
   if (!vocivoUrl) return null;
-  const response = await fetch(vocivoUrl, { signal: AbortSignal.timeout(8000) });
+  const remaining = Math.max(2000, timeoutMs - (Date.now() - started));
+  const response = await fetch(vocivoUrl, { signal: AbortSignal.timeout(remaining) });
   if (!response.ok) {
     console.error('Vocivo TTS prompt fetch failed.', response.status, voice);
     return null;
@@ -36,18 +41,38 @@ async function fetchVocivoPrompt(text: string, voice: string) {
   return { audio: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') || 'audio/wav' };
 }
 
+export class PromptUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PromptUnavailableError';
+  }
+}
+
 /**
  * The tenant's own voice first; Vocivo's default voice if the engine cannot
- * speak that one (a language this deployment lacks, say); the carrier last.
- * The carrier returns mp3 while the edge asks for wav, and a wav-named file
- * holding mp3 is one FreeSWITCH cannot open — so the carrier is only ever
- * the last resort, and the format mismatch is logged when it happens.
+ * speak that one (a language this deployment lacks, say).
+ *
+ * A wav request is never answered with the carrier's mp3: FreeSWITCH names
+ * the cached file after the URL, opens an mp3 as a wav, fails, and the caller
+ * hears nothing — while the 200 made it look as though a prompt was served.
+ * A 503 is honest: the edge logs it, skips the prompt, and the dialplan's
+ * no-input path connects the caller anyway. The carrier is the voice only
+ * when the dialplan asked for mp3, which it does when no engine is configured.
  */
 async function synthesize(text: string, voice: string, format: 'wav' | 'mp3'): Promise<{ audio: Buffer; contentType: string }> {
   const preferred = promptVoice(voice);
-  const own = await fetchVocivoPrompt(text, preferred) || (preferred !== defaultVocivoVoice ? await fetchVocivoPrompt(text, defaultVocivoVoice) : null);
+  const started = Date.now();
+  if (format === 'wav') {
+    const own = await fetchVocivoPrompt(text, preferred, Math.round(renderBudgetMs * 0.6));
+    if (own) return own;
+    const remaining = renderBudgetMs - (Date.now() - started);
+    const fallback = preferred !== defaultVocivoVoice && remaining > 3000 ? await fetchVocivoPrompt(text, defaultVocivoVoice, remaining) : null;
+    if (fallback) return fallback;
+    throw new PromptUnavailableError('The Vocivo voice engine could not render this prompt in time.');
+  }
+  const own = await fetchVocivoPrompt(text, preferred, Math.round(renderBudgetMs * 0.5));
   if (own) return own;
-  console.error(`Vocivo TTS could not render a ${format} prompt; using the carrier voice.`);
+  console.error('Vocivo TTS could not render an mp3 prompt; using the carrier voice.');
   const response = await telnyx('/text-to-speech/speech', {
     method: 'POST',
     body: JSON.stringify({ text, voice: carrierFallbackVoice(voice), output_type: 'binary_output' }),
@@ -93,6 +118,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'HEAD') return res.status(200).end();
     return res.status(200).send(audio);
   } catch (error) {
+    if (error instanceof PromptUnavailableError) {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({ error: error.message });
+    }
     return res.status(500).json({ error: publicError(error) });
   }
 }

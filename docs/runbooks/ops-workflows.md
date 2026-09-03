@@ -93,6 +93,25 @@ INVITE on public 5060 when — and only when — it comes from a listed carrier 
    `route-number` for **one test DID** onto the trunk; call it; check `logs`.
 5. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id; roll
    the edge back with `disable-inbound` (and `rollback-config` if the shipped configuration itself is at fault).
+6. Ops · Vercel → `set TELNYX_SIP_CONNECTION_ID <IP trunk id>`. The API keeps a tenant's numbers on "the
+   connection that delivers inbound to Vocivo" whenever the voice menu is saved, a number is purchased, or a
+   superadmin clicks *Save route*; before this variable existed that meant the Call Control application, so any of
+   those actions quietly moved a DID back off the edge. With `VOCIVO_SIP_INBOUND=1` and this id unset the API
+   leaves connections alone and logs a warning.
 
 Known ids (this account, September 2026): Call Control application `3033560124078688149` ("Vocivo Voice System"),
 IP trunk `3035898149177656815` ("Vocivo Dedicated PBX" → 168.144.183.82). The account currently has a single DID.
+
+## Prompts and the voice engine
+
+Every sentence a caller hears on the edge is rendered by the Kokoro service (`tts-deploy`) and kept in its
+content-addressed cache. Saving the voice menu, the receptionist, or call handling in the admin asks the engine to
+render that tenant's prompts in the background (`/v1/audio/prerender`), so the first caller after a change does
+not wait for a cold render — which used to take eight to twenty seconds, longer than most callers stay silent.
+`tts-status` prints `/health` (`"ready": true` once the model is loaded and has spoken once) and the number of
+cached prompts; `tts-deploy` waits for `ready` and then times one uncached render per default voice.
+
+The receptionist answers at any hour when it is enabled. After closing time the API sends it no transfer targets,
+so it says the office is closed and takes messages instead of putting callers through to nobody; if the
+receptionist service is down, the dialplan falls back to the voice menu during hours and to the closed message
+after them. A caller who presses nothing at a menu is connected to the main line rather than sent to voicemail.

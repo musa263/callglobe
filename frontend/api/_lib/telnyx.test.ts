@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { TelnyxApiError, telnyx, telnyxCarrierHasCredit, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
+import { TelnyxApiError, inboundConnectionId, telnyx, telnyxCarrierHasCredit, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.TELNYX_API_KEY;
@@ -8,6 +8,8 @@ const originalTimeout = process.env.TELNYX_REQUEST_TIMEOUT_MS;
 const originalPstnConnectionId = process.env.TELNYX_PSTN_CONNECTION_ID;
 const originalCallControlAppId = process.env.TELNYX_CALL_CONTROL_APP_ID;
 const originalConnectionId = process.env.TELNYX_CONNECTION_ID;
+const originalSipInbound = process.env.VOCIVO_SIP_INBOUND;
+const originalSipConnectionId = process.env.TELNYX_SIP_CONNECTION_ID;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -21,6 +23,25 @@ afterEach(() => {
   else process.env.TELNYX_CALL_CONTROL_APP_ID = originalCallControlAppId;
   if (originalConnectionId === undefined) delete process.env.TELNYX_CONNECTION_ID;
   else process.env.TELNYX_CONNECTION_ID = originalConnectionId;
+  if (originalSipInbound === undefined) delete process.env.VOCIVO_SIP_INBOUND;
+  else process.env.VOCIVO_SIP_INBOUND = originalSipInbound;
+  if (originalSipConnectionId === undefined) delete process.env.TELNYX_SIP_CONNECTION_ID;
+  else process.env.TELNYX_SIP_CONNECTION_ID = originalSipConnectionId;
+});
+
+test('numbers are kept on the connection that delivers inbound to Vocivo', () => {
+  process.env.TELNYX_CALL_CONTROL_APP_ID = 'managed-call-control';
+  delete process.env.VOCIVO_SIP_INBOUND;
+  assert.equal(inboundConnectionId(), 'managed-call-control', 'the Call Control application answers inbound before the cut-over');
+
+  process.env.VOCIVO_SIP_INBOUND = '1';
+  process.env.TELNYX_SIP_CONNECTION_ID = 'sip-edge-ip-connection';
+  assert.equal(inboundConnectionId(), 'sip-edge-ip-connection', 'the SIP edge answers inbound after it');
+
+  // Without the edge connection id, moving numbers anywhere would undo the
+  // cut-over — so nothing is moved.
+  delete process.env.TELNYX_SIP_CONNECTION_ID;
+  assert.equal(inboundConnectionId(), null);
 });
 
 test('always routes managed PSTN calls through the Telnyx Call Control application', () => {

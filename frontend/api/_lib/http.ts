@@ -1,4 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { waitUntil } from '@vercel/functions';
+
+/**
+ * Runs `task` after the response has gone out, and never lets it fail the
+ * request. For work the person saving a form should not wait on — such as
+ * asking the voice engine to render their new greeting.
+ */
+export function afterResponse(label: string, task: Promise<unknown>) {
+  waitUntil(task.catch((error) => console.warn(`Vocivo background ${label} failed`, publicError(error))));
+}
 
 export function allowMobile(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');

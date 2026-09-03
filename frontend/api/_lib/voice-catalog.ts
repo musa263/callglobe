@@ -68,7 +68,7 @@ export function promptVoice(voice: string, serviceConfigured = Boolean(process.e
   return serviceConfigured ? defaultVocivoVoice : voice;
 }
 
-export async function renderVocivoPrompt(text: string, voice: string) {
+export async function renderVocivoPrompt(text: string, voice: string, timeoutMs = 12_000) {
   const definition = voiceDefinition(voice);
   const serviceUrl = process.env.TTS_SERVICE_URL?.replace(/\/$/, '');
   if (!definition || !serviceUrl) return null;
@@ -80,7 +80,7 @@ export async function renderVocivoPrompt(text: string, voice: string) {
       // Kokoro synthesises on CPU: a first render of an unseen prompt takes seconds,
       // and 3.5s was short enough to fall back to the carrier voice on every cold prompt.
       // Repeat renders are served from the content-addressed cache and return immediately.
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(Math.max(1000, timeoutMs)),
     });
     if (!response.ok) throw new Error(`TTS service returned ${response.status}`);
     const payload = await response.json() as { audio_url?: string };

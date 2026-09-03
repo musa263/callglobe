@@ -17,6 +17,9 @@ log = logging.getLogger("vocivo.brain")
 
 Action = Literal["speak", "transfer", "message", "hangup"]
 
+# The languages the admin offers for a receptionist, as the model should hear them.
+LANGUAGE_NAMES = {"en": "English", "ar": "Arabic", "fr": "French", "es": "Spanish", "it": "Italian", "pt": "Portuguese"}
+
 
 @dataclass(frozen=True)
 class TransferTarget:
@@ -36,6 +39,9 @@ class Assistant:
     transfer_enabled: bool = False
     fallback_extension: str = ""
     targets: tuple[TransferTarget, ...] = ()
+    #: False after hours: the API then also sends no transfer targets, so the
+    #: receptionist takes messages rather than putting callers through to nobody.
+    office_open: bool = True
 
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> "Assistant":
@@ -53,6 +59,7 @@ class Assistant:
             transfer_enabled=bool(payload.get("transferEnabled")),
             fallback_extension=str(payload.get("fallbackExtension") or ""),
             targets=targets,
+            office_open=payload.get("officeOpen", True) is not False,
         )
 
 
@@ -100,6 +107,9 @@ def system_prompt(assistant: Assistant) -> str:
         "Say numbers the way a person says them out loud.",
         "If you did not understand the caller, say so plainly and ask them to repeat it.",
     ]
+    language = LANGUAGE_NAMES.get((assistant.language or "en").lower()[:2])
+    if language and not assistant.language.lower().startswith("en"):
+        lines.append(f"Speak {language}: the business set its receptionist to {language}, and the caller expects it.")
     if assistant.instructions.strip():
         lines += ["", "What this business wants you to know:", assistant.instructions.strip()]
     if assistant.transfer_enabled and assistant.targets:
@@ -112,6 +122,11 @@ def system_prompt(assistant: Assistant) -> str:
         ]
     else:
         lines += ["", "You cannot transfer this call. Take a message instead when the caller needs a person."]
+    if not assistant.office_open:
+        lines += [
+            "",
+            "The office is closed right now. Say so when it matters, answer what you can, and take a message for anything that needs a person.",
+        ]
     lines += [
         "",
         "Take a message when the caller wants a call back, or when nobody is available.",

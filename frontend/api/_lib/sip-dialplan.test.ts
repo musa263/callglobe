@@ -5,6 +5,7 @@ import type { ExtensionUser } from './pbx.js';
 import { defaultPbxConfig, type PbxConfig } from './pbx-config-store.js';
 import {
   channelSafe,
+  dialplanPromptTexts,
   isLocalOrigination,
   parseXmlCurlRequest,
   promptUrl,
@@ -162,7 +163,7 @@ test('entry on a main-line DID answers, records the call context, and plays the 
   assert.ok(gather, 'menu gathers a digit');
   assert.match(gather!.data, /^1 1 2 10000 # http_cache:\/\/https:\/\/vocivo\.app\/api\/voice\/sip-prompt\/[A-Za-z0-9_-]+\.mp3\?/);
   assert.match(gather!.data, / vocivo_digit \^\[129\]\$ 3000$/, 'two departments plus 9 for extensions');
-  assert.equal(promptText(gather!.data), 'Welcome to Acme. For Sales, press 1. For Support, press 2. If you know your party extension, press 9.');
+  assert.equal(promptText(gather!.data), 'Welcome to Acme. For Sales, press 1. For Support, press 2. If you know your party extension, press 9. Or stay on the line and we will connect you.');
   assert.deepEqual(stageTransfer(xml), { stage: 'ivr-select', transfer: '${vocivo_did} XML public' });
 });
 
@@ -340,16 +341,44 @@ test('department menu selections reach the departmental extension after the wait
   assert.equal(support.find((item) => item.app === 'bridge')?.data, 'sofia/external/bob@127.0.0.1:5060');
 });
 
-test('pressing 9 collects an extension number; timeouts and bad digits fall to voicemail', () => {
+test('pressing 9 collects an extension number; bad digits fall to voicemail', () => {
   const collect = actions(renderSipDialplan(input({ request: request({ stage: 'ivr-select', digit: '9' }) })));
   const gather = collect.find((item) => item.app === 'play_and_get_digits')!;
   assert.match(gather.data, /^2 5 2 8000 # /);
   assert.match(gather.data, / vocivo_digit \^\\d\{2,5\}\$ 3000$/);
   assert.ok(collect.some((item) => item.data === 'vocivo_stage=ext-select'));
-  const timeout = actions(renderSipDialplan(input({ request: request({ stage: 'ivr-select', digit: '' }) })));
-  assert.ok(timeout.some((item) => item.app === 'record'));
   const outOfRange = actions(renderSipDialplan(input({ request: request({ stage: 'ivr-select', digit: '5' }) })));
   assert.ok(outOfRange.some((item) => item.app === 'record'));
+});
+
+test('a caller who presses nothing is connected to the main line, not sent away', () => {
+  // play_and_get_digits gives up after two tries — and at once when a prompt
+  // could not be played. The caller is still there, so the staff ring.
+  for (const stage of ['ivr-select', 'ext-select', 'cfg-ivr-select']) {
+    const list = actions(renderSipDialplan(input({ request: request({ stage, digit: '', arg: 'ivr-1' }) })));
+    const bridge = list.find((item) => item.app === 'bridge');
+    assert.ok(bridge, `${stage} without a digit rings the staff`);
+    assert.match(bridge!.data, /^sofia\/external\/alice@127\.0\.0\.1:5060/, `${stage} rings the company's active extensions`);
+    assert.ok(!list.some((item) => item.app === 'record'), `${stage} without a digit does not go straight to voicemail`);
+  }
+  // With nobody to ring, voicemail is still the answer.
+  const nobody = actions(renderSipDialplan(input({ request: request({ stage: 'ivr-select', digit: '' }), extensions: [] })));
+  assert.ok(nobody.some((item) => item.app === 'record') || nobody.some((item) => item.app === 'hangup'));
+});
+
+test('the prompt inventory lists every sentence the dialplan can play, once, in the business voice', () => {
+  const base = input();
+  const inventory = dialplanPromptTexts({ pbx: base.pbx, business: base.business, extensions: base.extensions, organizationId: base.organizationId });
+  assert.equal(inventory.voice, base.business.voice);
+  assert.ok(inventory.texts.includes('Welcome to Acme. For Sales, press 1. For Support, press 2. If you know your party extension, press 9. Or stay on the line and we will connect you.'));
+  assert.ok(inventory.texts.includes('That selection was not recognized. Please press one of these options: 1, 2, 9.'));
+  assert.ok(inventory.texts.some((text) => text.startsWith('Thanks for calling Acme. For ')), 'configured voice menus are included');
+  assert.ok(inventory.texts.includes(base.business.waitingMessage));
+  assert.ok(inventory.texts.includes(base.business.voicemailGreeting));
+  assert.ok(inventory.texts.includes('Please enter the extension number now.'));
+  assert.ok(inventory.texts.includes('No one is available to take your call right now. Please try again later.'));
+  assert.equal(new Set(inventory.texts).size, inventory.texts.length, 'no duplicates');
+  assert.ok(inventory.texts.every((text) => text.trim() === text && text.length > 0));
 });
 
 test('a dialled extension rings; an unknown one is announced and sent to the main line', () => {
@@ -414,4 +443,30 @@ test('every stage renders a well-formed document', () => {
     { stage: 'after-group', arg: 'queue:q1' }, { stage: 'queue', arg: 'queue:q1', attempt: 1 }, { stage: 'unavailable' }, { stage: 'nonsense' },
   ];
   for (const overrides of stages) assertWellFormed(renderSipDialplan(input({ request: request(overrides) })));
+});
+
+test('an enabled receptionist answers at any hour, and its fallback follows the hours', () => {
+  const withAi = pbx();
+  withAi.ai = { ...withAi.ai, enabled: true };
+  const open = actions(renderSipDialplan(input({ pbx: withAi })));
+  assert.equal(open[0].app, 'answer');
+  const socket = open.find((item) => item.app === 'socket');
+  assert.ok(socket, 'the call is handed to the receptionist over the Event Socket');
+  assert.equal(socket!.data, '127.0.0.1:8084 async full');
+  assert.ok(open.some((item) => item.app === 'play_and_get_digits'), 'if the receptionist is down during the day the menu takes over');
+
+  const closed = pbx();
+  closed.ai = { ...closed.ai, enabled: true };
+  closed.officeHours.weekdays.Wednesday = { enabled: false, start: '09:00', end: '17:00' };
+  const afterHours = actions(renderSipDialplan(input({ pbx: closed })));
+  assert.ok(afterHours.some((item) => item.app === 'socket'), 'after hours the receptionist still answers — it takes messages');
+  assert.ok(!afterHours.some((item) => item.app === 'play_and_get_digits'), 'but a down receptionist falls to the closed message, not a menu nobody staffs');
+  assert.ok(afterHours.some((item) => item.app === 'record' || item.app === 'hangup'));
+
+  // A number pointed at a specific extension is a direct line and stays one.
+  const direct = pbx({ numberAssignments: { [did]: { organizationId: 'acme', destinationType: 'extension', destinationId: 'e1' } } });
+  direct.ai = { ...direct.ai, enabled: true };
+  const rung = actions(renderSipDialplan(input({ pbx: direct })));
+  assert.ok(!rung.some((item) => item.app === 'socket'));
+  assert.equal(rung.find((item) => item.app === 'bridge')?.data, 'sofia/external/alice@127.0.0.1:5060');
 });

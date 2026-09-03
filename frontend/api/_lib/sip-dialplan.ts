@@ -282,7 +282,7 @@ function unavailableActions(input: SipDialplanInput, voicemailEnabled: boolean) 
   const useVoicemail = business.voicemailEnabled && voicemailEnabled;
   if (!useVoicemail) {
     return [
-      playback(input, 'No one is available to take your call right now. Please try again later.'),
+      playback(input, fixedPrompts.nobodyAvailable),
       action('hangup', 'NORMAL_CLEARING'),
     ];
   }
@@ -387,17 +387,68 @@ function groupActions(input: SipDialplanInput, kind: GroupKind, id: string, atte
   return actions;
 }
 
+const fixedPrompts = {
+  nobodyAvailable: 'No one is available to take your call right now. Please try again later.',
+  extensionPrompt: 'Please enter the extension number now.',
+  extensionInvalid: 'That extension was not recognized.',
+  extensionUnavailable: 'That extension is not available. We will connect you to the main line.',
+};
+
 function menuPrompt(input: SipDialplanInput) {
   const business = input.business;
   const hasExtensions = activeExtensions(input).length > 0;
   const options = business.departments.map((department, index) => `For ${department}, press ${index + 1}.`).join(' ');
   const validDigits = `${business.departments.map((_, index) => String(index + 1)).join('')}${hasExtensions ? '9' : ''}`;
   return {
-    prompt: `${business.greeting} ${options}${hasExtensions ? ' If you know your party extension, press 9.' : ''}`,
+    prompt: `${business.greeting} ${options}${hasExtensions ? ' If you know your party extension, press 9. Or stay on the line and we will connect you.' : ''}`,
     invalid: `That selection was not recognized. Please press one of these options: ${validDigits.split('').join(', ')}.`,
     validDigits,
     hasExtensions,
   };
+}
+
+function configuredIvrPrompt(input: SipDialplanInput, ivr: PbxConfig['callHandling']['ivrs'][number]) {
+  const entries = Object.entries(ivr.options || {}).filter(([digit, target]) => /^\d$/.test(digit) && Boolean(target)).slice(0, 10);
+  const label = (target: string) => {
+    const [type, id] = target.includes(':') ? target.split(':', 2) : ['extension', target];
+    if (type === 'extension') return input.extensions.find((item) => item.id === id)?.name || 'an extension';
+    const collection = type === 'ring_group' ? input.pbx.callHandling.ringGroups : type === 'queue' ? input.pbx.callHandling.queues : [];
+    return collection.find((item) => item.id === id)?.name || 'a team';
+  };
+  const digits = entries.map(([digit]) => digit).join('');
+  return {
+    entries,
+    digits,
+    prompt: `${ivr.greeting} ${entries.map(([digit, target]) => `For ${label(target)}, press ${digit}.`).join(' ')}`,
+    invalid: `That selection was not recognized. Please press one of these options: ${digits.split('').join(', ')}.`,
+  };
+}
+
+/**
+ * Every sentence this dialplan can play for a tenant, in the tenant's voice.
+ *
+ * The API hands this list to the voice engine when a tenant saves a greeting,
+ * menu or voice, so each prompt is rendered before the first caller asks for
+ * it: a cold render took eight to twenty seconds on the edge, longer than the
+ * carrier's timeout and longer than most callers wait in silence.
+ */
+export function dialplanPromptTexts(input: Pick<SipDialplanInput, 'pbx' | 'business' | 'extensions' | 'organizationId'>): { texts: string[]; voice: string } {
+  const full = input as SipDialplanInput;
+  const texts = new Set<string>();
+  const add = (text: string) => { if (text && text.trim()) texts.add(text.trim()); };
+  const menu = menuPrompt(full);
+  add(menu.prompt);
+  add(menu.invalid);
+  add(input.business.waitingMessage);
+  add(input.business.voicemailGreeting);
+  for (const text of Object.values(fixedPrompts)) add(text);
+  for (const ivr of input.pbx.callHandling.ivrs) {
+    const configured = configuredIvrPrompt(full, ivr);
+    if (!configured.entries.length) continue;
+    add(configured.prompt);
+    add(configured.invalid);
+  }
+  return { texts: [...texts], voice: input.business.voice };
 }
 
 function gatherActions(input: SipDialplanInput, options: { prompt: string; invalid: string; minDigits: number; maxDigits: number; regex: string; timeoutMs: number; next: string; vars?: Record<string, string> }) {
@@ -420,25 +471,32 @@ function configuredTargetActions(input: SipDialplanInput, target: string, depth:
 
 function configuredIvrActions(input: SipDialplanInput, ivrId: string) {
   const ivr = input.pbx.callHandling.ivrs.find((item) => item.id === ivrId);
-  const entries = Object.entries(ivr?.options || {}).filter(([digit, target]) => /^\d$/.test(digit) && Boolean(target)).slice(0, 10);
-  if (!ivr || !entries.length) return unavailableActions(input, true);
-  const label = (target: string) => {
-    const [type, id] = target.includes(':') ? target.split(':', 2) : ['extension', target];
-    if (type === 'extension') return input.extensions.find((item) => item.id === id)?.name || 'an extension';
-    const collection = type === 'ring_group' ? input.pbx.callHandling.ringGroups : type === 'queue' ? input.pbx.callHandling.queues : [];
-    return collection.find((item) => item.id === id)?.name || 'a team';
-  };
-  const digits = entries.map(([digit]) => digit).join('');
+  if (!ivr) return unavailableActions(input, true);
+  const configured = configuredIvrPrompt(input, ivr);
+  if (!configured.entries.length) return unavailableActions(input, true);
   return gatherActions(input, {
-    prompt: `${ivr.greeting} ${entries.map(([digit, target]) => `For ${label(target)}, press ${digit}.`).join(' ')}`,
-    invalid: `That selection was not recognized. Please press one of these options: ${digits.split('').join(', ')}.`,
+    prompt: configured.prompt,
+    invalid: configured.invalid,
     minDigits: 1,
     maxDigits: 1,
-    regex: `^[${digits}]$`,
+    regex: `^[${configured.digits}]$`,
     timeoutMs: 10000,
     next: 'cfg-ivr-select',
     vars: { arg: ivr.id },
   });
+}
+
+/**
+ * A caller who pressed nothing is connected rather than sent away.
+ *
+ * `play_and_get_digits` gives up after two tries, and it gives up at once
+ * when a prompt could not be played at all. Either way the caller is still
+ * there and has heard the company name — so ring the staff, and only when
+ * nobody can be rung fall back to voicemail or the closing message.
+ */
+function noInputActions(input: SipDialplanInput) {
+  if (activeExtensions(input).length) return mainLineActions(input);
+  return unavailableActions(input, true);
 }
 
 function fsCauseToVocivo(disposition: string) {
@@ -476,6 +534,13 @@ function entryActions(input: SipDialplanInput) {
   if (owned && assignment?.destinationType === 'extension' && assignment.destinationId) {
     return [...prelude, ...configuredTargetActions(input, `extension:${assignment.destinationId}`, 0, [])];
   }
+  // The receptionist answers at any hour: after closing it tells callers so
+  // and takes a message, which is the point of having one. It used to sit
+  // behind the office-hours check, so a call at ten past five got the
+  // closed message and a hangup — "rings once and disconnects".
+  if (input.pbx.ai?.enabled && !(owned && assignment?.destinationId && ['ring_group', 'queue', 'ivr'].includes(assignment.destinationType || ''))) {
+    return [...prelude, ...receptionistActions(input)];
+  }
   if (!officeHoursDecision(pbx.officeHours, input.now).open) {
     return [...prelude, ...unavailableActions(input, true)];
   }
@@ -485,7 +550,6 @@ function entryActions(input: SipDialplanInput) {
   if (owned && assignment?.destinationType === 'ivr' && assignment.destinationId) {
     return [...prelude, ...configuredIvrActions(input, assignment.destinationId)];
   }
-  if (input.pbx.ai?.enabled) return [...prelude, ...receptionistActions(input)];
   if (!input.business.enabled) return [...prelude, ...mainLineActions(input)];
   return [...prelude, ...menuFallbackActions(input)];
 }
@@ -503,12 +567,13 @@ function entryActions(input: SipDialplanInput) {
  */
 function receptionistActions(input: SipDialplanInput): Action[] {
   const address = input.receptionist || defaultReceptionist;
+  const open = officeHoursDecision(input.pbx.officeHours, input.now).open;
   return [
     set('vocivo_did', channelSafe(input.did)),
     set('vocivo_org', channelSafe(input.organizationId)),
     action('socket', `${address} async full`),
-    action('log', 'WARNING Vocivo receptionist did not answer; falling back to the voice menu'),
-    ...menuFallbackActions(input),
+    action('log', `WARNING Vocivo receptionist did not answer; falling back to the ${open ? 'voice menu' : 'closed message'}`),
+    ...(open ? menuFallbackActions(input) : unavailableActions(input, true)),
   ];
 }
 
@@ -528,10 +593,11 @@ function menuFallbackActions(input: SipDialplanInput): Action[] {
 function ivrSelectActions(input: SipDialplanInput) {
   const menu = menuPrompt(input);
   const digit = input.request.digit;
+  if (!digit) return noInputActions(input);
   if (digit === '9' && menu.hasExtensions) {
     return gatherActions(input, {
-      prompt: 'Please enter the extension number now.',
-      invalid: 'That extension was not recognized.',
+      prompt: fixedPrompts.extensionPrompt,
+      invalid: fixedPrompts.extensionInvalid,
       minDigits: 2,
       maxDigits: 5,
       regex: '^\\d{2,5}$',
@@ -548,15 +614,17 @@ function ivrSelectActions(input: SipDialplanInput) {
 }
 
 function extensionSelectActions(input: SipDialplanInput) {
+  if (!input.request.digit) return noInputActions(input);
   const extension = activeExtensions(input).find((item) => item.extension === input.request.digit);
   if (extension) return ringExtensionActions(input, extension, { announceWaiting: true, depth: 0, visited: [] });
   const fallback = departmentDestination(input, input.business.companyName);
-  const notice = playback(input, 'That extension is not available. We will connect you to the main line.');
+  const notice = playback(input, fixedPrompts.extensionUnavailable);
   if (!fallback) return [notice, ...unavailableActions(input, true)];
   return [notice, ...ringExtensionActions(input, fallback, { announceWaiting: true, depth: 0, visited: [] })];
 }
 
 function configuredIvrSelectActions(input: SipDialplanInput) {
+  if (!input.request.digit) return noInputActions(input);
   const ivr = input.pbx.callHandling.ivrs.find((item) => item.id === input.request.arg);
   const target = ivr?.options[input.request.digit.slice(0, 1)];
   if (!target) return unavailableActions(input, true);

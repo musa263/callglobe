@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
-import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
+import { afterResponse, allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
+import { prerenderTenantPrompts } from '../prompt-prerender.js';
 import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice } from '../voice-catalog.js';
 import { findExtension, listExtensions } from '../pbx.js';
@@ -63,6 +64,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     }, { expectedUpdatedAt: current.updatedAt });
     const saved = pbxForOrganization(config, organizationId).ai;
+    // The greeting and the receptionist's fixed phrases are rendered in the
+    // chosen voice now, so the next caller hears them without a cold render.
+    afterResponse('receptionist prompt pre-render', prerenderTenantPrompts(organizationId, { config }));
     return res.status(200).json({ ai: saved, synced: syncedWithCarrier, engine: sipInboundEnabled() ? 'vocivo' : 'carrier' });
   } catch (error) {
     if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });

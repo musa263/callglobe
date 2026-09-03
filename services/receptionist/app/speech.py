@@ -17,6 +17,27 @@ log = logging.getLogger("vocivo.speech")
 # already on the SIP edge, reached over loopback.
 
 
+# Everything the receptionist says that is not the tenant's greeting or the
+# model's answer. Kept in one place so the API can have them rendered in the
+# tenant's voice when the receptionist is saved (frontend/api/_lib/receptionist.ts
+# carries the same list), and the first caller never waits for them.
+CANNED = {
+    "not_heard": "Sorry, I couldn't hear you. Are you still there?",
+    "transfer_fallback": "I'll put you through to someone.",
+    "goodbye_no_speech": "I'll let the team know you called. Goodbye.",
+    "turn_limit": "Let me pass this on to the team. Thanks for calling.",
+}
+
+# Said while the language model and the voice engine work on the real answer:
+# three to eight seconds of dead air after a question is what makes callers
+# hang up or repeat themselves. Short, so the answer follows almost at once.
+FILLERS = (
+    "One moment.",
+    "Let me check that for you.",
+    "Sure, one second.",
+)
+
+
 class Voice:
     """
     Turns text into a file FreeSWITCH can play.
@@ -30,7 +51,10 @@ class Voice:
         self._settings = settings
         self._dir = Path(settings.audio_dir) / "prompts"
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0))
+        # A prompt the engine has never rendered can take several seconds on
+        # the SIP edge's share of the CPU; giving up at twenty meant a long
+        # answer was sometimes replaced by silence.
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=5.0))
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -38,6 +62,9 @@ class Voice:
     def _path_for(self, text: str, voice: str) -> Path:
         digest = hashlib.sha256(f"{voice}\n{text}".encode("utf-8")).hexdigest()[:32]
         return self._dir / f"{digest}.wav"
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._settings.tts_secret}"}
 
     async def say(self, text: str, voice: str | None = None) -> Path:
         chosen = voice or self._settings.tts_voice
@@ -49,7 +76,7 @@ class Voice:
         # JSON into a .wav and every word the receptionist said was silence.)
         response = await self._client.post(
             f"{self._settings.tts_url}/v1/audio/speech",
-            headers={"Authorization": f"Bearer {self._settings.tts_secret}"},
+            headers=self._headers(),
             json={"input": text, "voice": chosen, "format": "wav"},
         )
         response.raise_for_status()
@@ -62,6 +89,29 @@ class Voice:
         staging.write_bytes(response.content)
         staging.replace(path)
         return path
+
+    async def prerender(self, texts: list[str], voice: str | None = None) -> None:
+        """
+        Asks the engine to have these ready, without waiting for it.
+
+        Used for the canned phrases in a tenant's voice the moment a call for
+        that tenant arrives: by the time the greeting has been said, "Sorry, I
+        couldn't hear you" is on disk at the engine and plays without a pause.
+        """
+        chosen = voice or self._settings.tts_voice
+        items = [{"input": text, "voice": chosen, "format": "wav"} for text in texts if text.strip()]
+        if not items:
+            return
+        try:
+            await self._client.post(
+                f"{self._settings.tts_url}/v1/audio/prerender",
+                headers=self._headers(),
+                json={"items": items},
+                timeout=httpx.Timeout(5.0, connect=2.0),
+            )
+        except httpx.HTTPError as error:
+            # Purely an optimisation; the phrases render on demand if this fails.
+            log.debug("could not pre-render %d phrases: %s", len(items), error)
 
 
 class Ears:
@@ -97,15 +147,21 @@ class Ears:
         """Loads the model at start-up rather than during the first call."""
         await self._load()
 
-    async def transcribe(self, path: Path) -> str:
+    async def transcribe(self, path: Path, language: str | None = None) -> str:
+        """
+        The caller's words. `language` is the tenant's receptionist language
+        (en, fr, es, ...); without it recognition was pinned to English and a
+        French receptionist heard nonsense.
+        """
         if not path.exists() or path.stat().st_size == 0:
             return ""
         model = await self._load()
+        spoken = (language or self._settings.stt_language or "").strip().lower()[:2] or None
 
         def run() -> str:
             segments, _ = model.transcribe(
                 str(path),
-                language=self._settings.stt_language or None,
+                language=spoken,
                 beam_size=1,
                 # Phone audio is narrowband and noisy; the VAD filter keeps
                 # line noise from being transcribed as words.

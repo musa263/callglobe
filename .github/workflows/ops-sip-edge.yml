@@ -506,11 +506,18 @@ jobs:
               secret=$(sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env)
               curl -s -o /dev/null -m 30 -w "health authorised (expect 200): %{http_code}\n" -H "Authorization: Bearer $secret" http://127.0.0.1:8000/health
               curl -s -o /dev/null -m 30 -w "health unauthenticated (expect 401): %{http_code}\n" http://127.0.0.1:8000/health
-              echo "--- warming voices; the first synthesis downloads the model ---"
+              echo "--- waiting for the engine to load its model and speak once ---"
+              for attempt in $(seq 1 36); do
+                health=$(curl -s -m 10 -H "Authorization: Bearer $secret" http://127.0.0.1:8000/health || true)
+                case "$health" in *\"ready\":true*) echo "ready after $((attempt * 5))s: $health"; break;; esac
+                [ "$attempt" -lt 36 ] || echo "::warning::engine still cold after 180s: $health"
+                sleep 5
+              done
+              # An unseen sentence, so this measures a real render rather than a cache hit.
               for voice in af_heart am_adam; do
-                curl -s -o /dev/null -m 600 -w "  $voice: %{http_code} in %{time_total}s\n" -X POST http://127.0.0.1:8000/v1/audio/render \
+                curl -s -o /dev/null -m 120 -w "  $voice uncached render: %{http_code} in %{time_total}s\n" -X POST http://127.0.0.1:8000/v1/audio/speech \
                   -H "Authorization: Bearer $secret" -H "Content-Type: application/json" \
-                  -d "{\"input\":\"Thank you for calling. Please hold.\",\"voice\":\"$voice\"}"
+                  -d "{\"input\":\"Deploy check $(date +%s). Thank you for calling.\",\"voice\":\"$voice\"}"
               done
               ';;
             receptionist-deploy)
@@ -566,6 +573,13 @@ jobs:
               remote="$remote"'
               docker ps --filter name=vocivo-tts --format "{{.Names}} {{.Status}}" || true
               curl -s -o /dev/null -w "health (no auth, expect 401 or 503): %{http_code}\n" http://127.0.0.1:8000/health || echo "not listening"
+              secret=$( { sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env 2>/dev/null || true; } | tail -1 )
+              if [ -n "$secret" ]; then
+                echo "health: $(curl -s -m 10 -H "Authorization: Bearer $secret" http://127.0.0.1:8000/health || echo unreachable)"
+                echo "cached prompts: $(docker exec vocivo-tts sh -c "ls /var/cache/vocivo-tts/*.wav 2>/dev/null | wc -l" 2>/dev/null || echo "?")"
+              fi
+              echo "--- recent engine log ---"
+              docker logs --since 6h vocivo-tts 2>&1 | grep -E "rendered|warm|pipeline|ERROR|WARNING|Traceback" | tail -40 || true
               ';;
             *)
               # Reached only through repository_dispatch, whose payload is

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -8,7 +9,7 @@ from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, channel_variable
-from .speech import Ears, Voice, recording_has_audio
+from .speech import CANNED, FILLERS, Ears, Voice, recording_has_audio
 
 log = logging.getLogger("vocivo.call")
 
@@ -24,6 +25,7 @@ class CallHandler:
         self._ears = ears
         self._brain = brain
         self._api = api
+        self._filler_index = 0
 
     async def handle(self, connection: EslConnection) -> None:
         channel = await connection.connect()
@@ -38,10 +40,18 @@ class CallHandler:
             await connection.hangup("NO_ROUTE_DESTINATION")
             return
 
-        await connection.execute("answer")
-        # The carrier's media takes a moment to arrive after the answer; a
-        # greeting that starts before it does loses its first word or two.
-        await connection.execute("sleep", "400", timeout=5)
+        # Everything this receptionist may say besides the greeting and the
+        # model's answers is rendered now, in the background, so none of it is
+        # a cold render later in the call.
+        asyncio.create_task(self._voice.prerender([*CANNED.values(), *FILLERS], assistant.voice))
+
+        if channel_variable(channel, "Answer-State").lower() != "answered":
+            await connection.execute("answer")
+            # The carrier's media takes a moment to arrive after the answer; a
+            # greeting that starts before it does loses its first word or two.
+            # The dialplan usually answers before handing the call over, and
+            # then this pause has already happened.
+            await connection.execute("sleep", "400", timeout=5)
         # Narrowband is what the caller hears anyway, and it keeps recordings
         # small enough that transcription starts the moment they stop talking.
         await connection.set("record_sample_rate", "8000")
@@ -62,28 +72,31 @@ class CallHandler:
                     outcome = "caller_hung_up"
                     break
 
-                heard = await self._listen(connection, call_id)
+                heard = await self._listen(connection, call_id, assistant.language)
+                if connection.hungup.is_set():
+                    outcome = "caller_hung_up"
+                    break
                 if not heard:
                     silent_turns += 1
                     if silent_turns == 1:
-                        await self._speak(connection, "Sorry, I couldn't hear you. Are you still there?", assistant.voice)
+                        await self._speak(connection, CANNED["not_heard"], assistant.voice)
                         continue
                     # Twice in a row is a bad line or an empty room. Hand the
                     # caller to a person rather than asking a third time.
                     outcome = "no_speech"
                     if assistant.transfer_enabled and assistant.fallback_extension:
-                        await self._speak(connection, "I'll put you through to someone.", assistant.voice)
+                        await self._speak(connection, CANNED["transfer_fallback"], assistant.voice)
                         transferred_to = assistant.fallback_extension
                         await self._transfer(connection, assistant.fallback_extension)
                         outcome = "transferred"
                     else:
-                        await self._speak(connection, "I'll let the team know you called. Goodbye.", assistant.voice)
+                        await self._speak(connection, CANNED["goodbye_no_speech"], assistant.voice)
                         await connection.hangup()
                     break
 
                 silent_turns = 0
                 conversation.add("caller", heard)
-                decision = await self._brain.respond(conversation)
+                decision = await self._think(connection, conversation, assistant.voice)
                 conversation.add("assistant", decision.say)
                 await self._act(connection, assistant, decision)
 
@@ -101,7 +114,7 @@ class CallHandler:
                 # The turn budget exists so a stuck conversation cannot hold a
                 # line open indefinitely.
                 outcome = "turn_limit"
-                await self._speak(connection, "Let me pass this on to the team. Thanks for calling.", assistant.voice)
+                await self._speak(connection, CANNED["turn_limit"], assistant.voice)
                 await connection.hangup()
         except Exception as error:  # noqa: BLE001 - never leave a caller on a dead line
             log.exception("call %s failed: %s", call_id[:8], error)
@@ -136,7 +149,33 @@ class CallHandler:
             return
         await connection.execute("playback", str(path), timeout=self._settings.greeting_timeout + 40)
 
-    async def _listen(self, connection: EslConnection, call_id: str) -> str:
+    async def _think(self, connection: EslConnection, conversation: Conversation, voice: str) -> Decision:
+        """
+        Asks the model while saying a short filler.
+
+        The model and the voice engine together take a few seconds; the filler
+        covers most of that, and tells the caller they were heard. The answer's
+        own synthesis starts as soon as the model replies, before the filler
+        has finished, so the two overlap rather than add up.
+        """
+        thinking = asyncio.create_task(self._brain.respond(conversation))
+        # A quick reply ("yes", "goodbye") comes back before a filler would be
+        # worth saying, and "one moment" before "goodbye" sounds wrong.
+        done, _ = await asyncio.wait({thinking}, timeout=1.2)
+        if not done:
+            filler = FILLERS[self._filler_index % len(FILLERS)]
+            self._filler_index += 1
+            await self._speak(connection, filler, voice)
+        decision = await thinking
+        if decision.say.strip():
+            # Start rendering the answer now; _speak finds it on disk.
+            try:
+                await self._voice.say(decision.say, voice)
+            except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
+                log.debug("early render failed: %s", error)
+        return decision
+
+    async def _listen(self, connection: EslConnection, call_id: str, language: str) -> str:
         path = Path(self._settings.audio_dir) / "turns" / f"{call_id}-{int(time.time() * 1000)}.wav"
         path.parent.mkdir(parents=True, exist_ok=True)
         argument = " ".join([
@@ -149,7 +188,7 @@ class CallHandler:
         if not recording_has_audio(path):
             self._discard(path)
             return ""
-        heard = await self._ears.transcribe(path)
+        heard = await self._ears.transcribe(path, language)
         self._discard(path)
         log.info("call %s heard %r", call_id[:8], heard[:120])
         return heard

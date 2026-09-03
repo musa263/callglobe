@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ExtensionUser } from './pbx.js';
-import type { PbxConfig } from './pbx-config-store.js';
+import { defaultPbxConfig, type PbxConfig } from './pbx-config-store.js';
 import { parseConversation, receptionistFor, receptionistVoice, transferTargets } from './receptionist.js';
 
 function extension(overrides: Partial<ExtensionUser> = {}): ExtensionUser {
@@ -24,6 +24,7 @@ function config(overrides: Record<string, unknown> = {}) {
   return {
     numberAssignments: { '+18447161777': { organizationId: 'org-1' } },
     organizationSettings: {},
+    officeHours: defaultPbxConfig().officeHours,
     ai: {
       enabled: true,
       assistantId: '',
@@ -166,4 +167,19 @@ test('a transcript is bounded, because a caller can talk for a long time', () =>
   const conversation = parseConversation({ callId: 'abc', transcript: 'x'.repeat(50_000) });
   assert.ok(conversation);
   assert.equal(conversation.transcript.length, 20_000);
+});
+
+test('after hours the receptionist still answers, but takes messages instead of transferring', async () => {
+  const base = config();
+  const closed = { ...base, officeHours: { ...base.officeHours, weekdays: Object.fromEntries(Object.keys(base.officeHours.weekdays).map((day) => [day, { enabled: false, start: '09:00', end: '17:00' }])) } } as PbxConfig;
+  const profile = await receptionistFor({ ...inputFor(closed), tenantFor: () => closed });
+  assert.ok(profile, 'a closed office is exactly when a receptionist is needed');
+  assert.equal(profile!.officeOpen, false);
+  assert.equal(profile!.transferEnabled, false, 'nobody is at their desk to transfer to');
+  assert.deepEqual(profile!.targets, []);
+  assert.equal(profile!.fallbackExtension, '');
+
+  const open = await receptionistFor(inputFor(base));
+  assert.equal(open!.officeOpen, true);
+  assert.equal(open!.transferEnabled, true);
 });

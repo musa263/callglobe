@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import io
+import logging
 import os
+import queue
+import threading
 import time
 from pathlib import Path
 
@@ -14,13 +17,32 @@ from fastapi.responses import FileResponse, Response
 from kokoro import KPipeline
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Vocivo Voice Engine", version="1.0.0")
+log = logging.getLogger("vocivo.tts")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+app = FastAPI(title="Vocivo Voice Engine", version="1.1.0")
 cache_dir = Path(os.getenv("TTS_CACHE_DIR", "/var/cache/vocivo-tts"))
 cache_dir.mkdir(parents=True, exist_ok=True)
 public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 cache_ttl_seconds = max(1, int(os.getenv("TTS_CACHE_TTL_DAYS", "30"))) * 86400
 service_secret = os.getenv("TTS_SERVICE_SECRET", "")
+# Languages whose pipeline is built when the process starts rather than on the
+# first caller's greeting. American English is what every default prompt uses.
+warm_languages = [code for code in os.getenv("TTS_WARM_LANGUAGES", "a").split(",") if code.strip()]
 pipelines: dict[str, KPipeline] = {}
+pipelines_lock = threading.Lock()
+
+# Kokoro runs on a slice of the SIP edge's CPU and its pipeline is not
+# documented as thread-safe, so synthesis is serialised. Two callers arriving
+# together wait for each other rather than both slowing to a crawl.
+synth_lock = threading.Lock()
+# One render per prompt even when several calls ask for the same unseen text
+# at once: the second waits for the first and then reads the cached file.
+render_locks: dict[str, threading.Lock] = {}
+render_locks_guard = threading.Lock()
+
+ready = threading.Event()
+warm_error = ""
 
 # Kokoro's voice packs, the same 37 the API offers as Vocivo.Kokoro.<Name>.
 # The first letter of a voice id is its language: a American English,
@@ -58,6 +80,12 @@ class SpeechRequest(BaseModel):
     format: str = "wav"
 
 
+class PrerenderRequest(BaseModel):
+    """A batch of prompts to have ready before anyone calls."""
+
+    items: list[SpeechRequest] = Field(min_length=1, max_length=64)
+
+
 def authorize(authorization: str | None = Header(default=None)) -> None:
     # Fail closed: an unset TTS_SERVICE_SECRET must never mean an open service.
     if not service_secret:
@@ -68,23 +96,31 @@ def authorize(authorization: str | None = Header(default=None)) -> None:
 
 
 def pipeline_for(lang_code: str) -> KPipeline:
-    if lang_code not in pipelines:
-        try:
-            pipelines[lang_code] = KPipeline(lang_code=lang_code)
-        except Exception as error:  # noqa: BLE001 - a language this image cannot speak is a clear answer, not a crash
-            raise HTTPException(status_code=503, detail=f"This deployment cannot speak language '{lang_code}': {error}") from error
-    return pipelines[lang_code]
+    with pipelines_lock:
+        if lang_code not in pipelines:
+            try:
+                started = time.monotonic()
+                pipelines[lang_code] = KPipeline(lang_code=lang_code)
+                log.info("pipeline for language %s ready in %.1fs", lang_code, time.monotonic() - started)
+            except Exception as error:  # noqa: BLE001 - a language this image cannot speak is a clear answer, not a crash
+                raise HTTPException(status_code=503, detail=f"This deployment cannot speak language '{lang_code}': {error}") from error
+        return pipelines[lang_code]
 
 
 def synthesize(request: SpeechRequest) -> bytes:
     voice = voices.get(request.voice)
     if not voice:
         raise HTTPException(status_code=400, detail="Unknown voice")
-    chunks = [audio for _, _, audio in pipeline_for(voice["lang_code"])(request.input, voice=request.voice, speed=request.speed)]
+    pipeline = pipeline_for(voice["lang_code"])
+    started = time.monotonic()
+    with synth_lock:
+        chunks = [audio for _, _, audio in pipeline(request.input, voice=request.voice, speed=request.speed)]
     if not chunks:
         raise HTTPException(status_code=500, detail="Voice engine returned no audio")
+    audio = np.concatenate(chunks)
+    log.info("rendered %d chars as %s in %.1fs (%.1fs of audio)", len(request.input), request.voice, time.monotonic() - started, len(audio) / 24000)
     buffer = io.BytesIO()
-    sf.write(buffer, np.concatenate(chunks), 24000, format="WAV", subtype="PCM_16")
+    sf.write(buffer, audio, 24000, format="WAV", subtype="PCM_16")
     return buffer.getvalue()
 
 
@@ -103,9 +139,110 @@ def cache_key(request: SpeechRequest) -> str:
     return hashlib.sha256(f"{request.voice}|{request.speed}|{request.input}".encode()).hexdigest()
 
 
+def cached_path(request: SpeechRequest) -> Path:
+    return cache_dir / f"{cache_key(request)}.wav"
+
+
+def is_cached(request: SpeechRequest) -> bool:
+    path = cached_path(request)
+    try:
+        return path.is_file() and path.stat().st_size > 44
+    except OSError:
+        return False
+
+
+def _render_lock(key: str) -> threading.Lock:
+    with render_locks_guard:
+        lock = render_locks.get(key)
+        if lock is None:
+            lock = render_locks[key] = threading.Lock()
+            # Keep the table small: locks are only needed while a render is in flight.
+            if len(render_locks) > 512:
+                for stale in [name for name, held in render_locks.items() if not held.locked()][:256]:
+                    render_locks.pop(stale, None)
+        return lock
+
+
+def render_to_cache(request: SpeechRequest) -> Path:
+    """
+    Every endpoint speaks through here, so a greeting rendered once for the
+    receptionist is the same file the dialplan and the admin preview play. The
+    first caller after a deploy used to pay for the model download and the
+    render; now the render happens once, and ideally before the call.
+    """
+    path = cached_path(request)
+    if is_cached(request):
+        path.touch()
+        return path
+    with _render_lock(path.stem):
+        if is_cached(request):
+            return path
+        audio_bytes = synthesize(request)
+        temp_path = path.with_name(f".{path.stem}.{os.urandom(4).hex()}.tmp")
+        temp_path.write_bytes(audio_bytes)
+        os.replace(temp_path, path)  # atomic publish: readers never see a partial file
+    return path
+
+
+# -- background rendering ------------------------------------------------
+
+prerender_queue: queue.Queue[SpeechRequest] = queue.Queue()
+prerender_pending: set[str] = set()
+prerender_guard = threading.Lock()
+
+
+def _prerender_worker() -> None:
+    while True:
+        request = prerender_queue.get()
+        key = cache_key(request)
+        try:
+            if not is_cached(request):
+                render_to_cache(request)
+        except Exception as error:  # noqa: BLE001 - a prompt that cannot be pre-rendered is rendered at call time instead
+            log.warning("could not pre-render %r as %s: %s", request.input[:60], request.voice, error)
+        finally:
+            with prerender_guard:
+                prerender_pending.discard(key)
+            prerender_queue.task_done()
+
+
+def _warm_up() -> None:
+    global warm_error
+    try:
+        for code in warm_languages:
+            pipeline_for(code)
+        # A first synthesis loads the voice pack and primes torch; without it
+        # the first caller's greeting still starts several seconds late.
+        render_to_cache(SpeechRequest(input="Thank you for calling.", voice="af_heart"))
+        ready.set()
+        log.info("voice engine warm")
+    except Exception as error:  # noqa: BLE001 - the service still answers; /health says why it is cold
+        warm_error = str(error)[:300]
+        log.error("voice engine warm-up failed: %s", error)
+
+
+@app.on_event("startup")
+def start_background_work() -> None:
+    threading.Thread(target=_prerender_worker, name="prerender", daemon=True).start()
+    threading.Thread(target=_warm_up, name="warm-up", daemon=True).start()
+
+
+# -- HTTP ----------------------------------------------------------------
+
+
 @app.get("/health")
 def health(_: None = Depends(authorize)) -> dict:
-    return {"status": "healthy", "engine": "Kokoro-82M", "license": "Apache-2.0"}
+    return {
+        "status": "healthy",
+        "engine": "Kokoro-82M",
+        "license": "Apache-2.0",
+        # ready means the model is loaded and a synthesis has completed, so a
+        # prompt that is not cached still starts within a couple of seconds.
+        "ready": ready.is_set(),
+        "warmError": warm_error,
+        "languages": sorted(pipelines.keys()),
+        "prerenderQueue": prerender_queue.qsize(),
+    }
 
 
 @app.get("/v1/voices")
@@ -115,7 +252,8 @@ def list_voices(_: None = Depends(authorize)) -> dict:
 
 @app.post("/v1/audio/speech")
 def speech(request: SpeechRequest, _: None = Depends(authorize)) -> Response:
-    return Response(synthesize(request), media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
+    path = render_to_cache(request)
+    return Response(path.read_bytes(), media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.post("/v1/audio/render")
@@ -123,14 +261,34 @@ def render(request: SpeechRequest, _: None = Depends(authorize)) -> dict:
     if not public_base_url.startswith("https://"):
         raise HTTPException(status_code=503, detail="PUBLIC_BASE_URL must be configured with HTTPS")
     evict_stale_cache_entries()
-    key = cache_key(request)
-    path = cache_dir / f"{key}.wav"
-    if not path.exists():
-        audio_bytes = synthesize(request)
-        temp_path = path.with_name(f".{key}.{os.urandom(4).hex()}.tmp")
-        temp_path.write_bytes(audio_bytes)
-        os.replace(temp_path, path)  # atomic publish: readers never see a partial file
-    return {"id": key, "audio_url": f"{public_base_url}/v1/audio/{key}.wav", "cached": True}
+    was_cached = is_cached(request)
+    path = render_to_cache(request)
+    return {"id": path.stem, "audio_url": f"{public_base_url}/v1/audio/{path.stem}.wav", "cached": was_cached}
+
+
+@app.post("/v1/audio/prerender", status_code=202)
+def prerender(request: PrerenderRequest, _: None = Depends(authorize)) -> dict:
+    """
+    Queues prompts so they are on disk before the first call needs them. Saving
+    a greeting in the admin calls this; the caller who rings a minute later
+    hears it at once instead of after a cold render.
+    """
+    queued = 0
+    cached = 0
+    for item in request.items:
+        if item.voice not in voices:
+            continue
+        if is_cached(item):
+            cached += 1
+            continue
+        key = cache_key(item)
+        with prerender_guard:
+            if key in prerender_pending:
+                continue
+            prerender_pending.add(key)
+        prerender_queue.put(item)
+        queued += 1
+    return {"queued": queued, "cached": cached}
 
 
 @app.get("/v1/audio/{audio_id}.wav")

@@ -80,13 +80,15 @@ test('a closed business is told so rather than ringing somebody at midnight', as
   assert.match(lookup.prompt ?? '', /closed/i);
 });
 
-test('closed wins over the receptionist', async () => {
-  // Otherwise a business that is shut answers every call with an assistant
-  // cheerfully offering to put people through to nobody.
+test('the receptionist answers even when the office is closed', async () => {
+  // After hours is exactly when a receptionist earns its keep: it tells the
+  // caller the office is shut and takes a message. (The API's receptionist
+  // profile drops the transfer targets meanwhile, so it never offers to put
+  // people through to nobody.)
   const config = closedAllHours(assigned(defaultPbxConfig()));
   config.ai.enabled = true;
   const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, new Date(), directory(staff)));
-  assert.equal(lookup.action, 'closed');
+  assert.equal(lookup.action, 'ai');
 });
 
 test("the receptionist answers when the tenant has one switched on", async () => {

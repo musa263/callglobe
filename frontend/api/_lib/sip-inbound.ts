@@ -75,8 +75,16 @@ export async function lookupSipInbound(
   const unique = [...new Set(usernames.filter(Boolean))];
   const bridge = unique.map((username) => `sofia/external/${username}@127.0.0.1:5060`).join(',');
 
-  // Closed comes first: a business that is shut should not ring a colleague's
-  // phone at midnight because a number happens to point at their extension.
+  // Vocivo's own receptionist answers at any hour — after closing it says so
+  // and takes a message. The edge hands the call to the receptionist service,
+  // which transfers back into this same dialplan when the caller asks for a
+  // person — so a receptionist can never reach somewhere a colleague could not.
+  if (tenant.ai?.enabled) {
+    return { enabled: true, organizationId, usernames: unique, bridge, action: 'ai' };
+  }
+
+  // Closed before ringing anyone: a business that is shut should not ring a
+  // colleague's phone at midnight because a number points at their extension.
   if (!officeHoursDecision(tenant.officeHours, now).open) {
     return {
       enabled: true,
@@ -86,14 +94,6 @@ export async function lookupSipInbound(
       action: 'closed',
       prompt: closedPrompt(tenant),
     };
-  }
-
-  // Vocivo's own receptionist. The edge hands the call to the receptionist
-  // service, which transfers back into this same dialplan when the caller asks
-  // for a person — so a receptionist can never reach somewhere a colleague
-  // could not.
-  if (tenant.ai?.enabled) {
-    return { enabled: true, organizationId, usernames: unique, bridge, action: 'ai' };
   }
 
   if (!unique.length) {

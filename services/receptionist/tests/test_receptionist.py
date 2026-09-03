@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import json
 import unittest
 import wave
 from pathlib import Path
@@ -116,6 +117,18 @@ class SystemPrompt(unittest.TestCase):
 
     def test_it_forbids_formatting_that_would_be_read_aloud(self):
         self.assertIn("markdown", system_prompt(RECEPTION))
+
+    def test_after_hours_it_is_told_the_office_is_closed(self):
+        closed = Assistant.from_api({"name": "Reception", "officeOpen": False, "transferEnabled": True, "targets": []})
+        self.assertFalse(closed.office_open)
+        self.assertIn("closed right now", system_prompt(closed))
+        # The default, and anything but an explicit false, is open.
+        self.assertTrue(Assistant.from_api({"name": "Reception"}).office_open)
+        self.assertNotIn("closed right now", system_prompt(RECEPTION))
+
+    def test_a_non_english_receptionist_is_told_which_language_to_speak(self):
+        self.assertIn("Speak French", system_prompt(Assistant(language="fr")))
+        self.assertNotIn("Speak English", system_prompt(Assistant(language="en")))
 
 
 class Tools(unittest.TestCase):
@@ -254,6 +267,27 @@ class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
             # The second time round nothing is synthesised.
             await voice.say("Thanks for calling.", "am_adam")
             self.assertEqual(len(seen), 1)
+
+    async def test_prerender_queues_the_phrases_at_the_engine_and_never_raises(self):
+        import httpx
+
+        seen: list[httpx.Request] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            if len(seen) == 1:
+                return httpx.Response(202, json={"queued": 2, "cached": 0})
+            raise httpx.ConnectError("engine down")
+
+        with TemporaryDirectory() as directory:
+            voice = self._voice(directory, httpx.MockTransport(handle))
+            await voice.prerender(["One moment.", "Sure, one second.", "  "], "am_adam")
+            self.assertEqual(seen[0].url.path, "/v1/audio/prerender")
+            body = json.loads(seen[0].content)
+            self.assertEqual([item["input"] for item in body["items"]], ["One moment.", "Sure, one second."])
+            self.assertTrue(all(item["voice"] == "am_adam" for item in body["items"]))
+            # An engine that is down costs nothing but a debug line.
+            await voice.prerender(["Hello."], "af_heart")
 
     async def test_json_from_the_render_endpoint_is_not_mistaken_for_audio(self):
         import httpx

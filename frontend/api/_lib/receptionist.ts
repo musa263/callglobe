@@ -2,6 +2,7 @@ import type { ExtensionUser } from './pbx.js';
 import { vocivoVoices, voiceDefinition } from './voice-catalog.js';
 import type { PbxConfig } from './pbx-config-store.js';
 import { normalizeE164 } from './tenancy.js';
+import { officeHoursDecision } from './office-hours.js';
 
 /**
  * The control plane for Vocivo's own AI receptionist.
@@ -30,6 +31,8 @@ export type ReceptionistProfile = {
   transferEnabled: boolean;
   fallbackExtension: string;
   targets: ReceptionistTarget[];
+  /** Whether the business is open right now: closed, the receptionist takes messages rather than transferring. */
+  officeOpen: boolean;
 };
 
 export type ReceptionistOutcome =
@@ -75,6 +78,22 @@ const voiceAliases: Record<string, string> = {
 const kokoroVoiceIds = new Set(vocivoVoices.map((voice) => voice.sourceVoice));
 
 /**
+ * What the receptionist says besides the greeting and the model's answers.
+ * Mirrors CANNED and FILLERS in services/receptionist/app/speech.py, so the
+ * API can have them rendered in the tenant's voice the moment the receptionist
+ * is saved, rather than the first caller waiting for each of them.
+ */
+export const receptionistPhrases = [
+  "Sorry, I couldn't hear you. Are you still there?",
+  "I'll put you through to someone.",
+  "I'll let the team know you called. Goodbye.",
+  'Let me pass this on to the team. Thanks for calling.',
+  'One moment.',
+  'Let me check that for you.',
+  'Sure, one second.',
+];
+
+/**
  * The Kokoro voice id the speech engine wants, from whatever the tenant's
  * record holds: a catalog id (`Vocivo.Kokoro.AmAdam`), the engine's own id,
  * the carrier's copy of a Kokoro voice, or one of the old carrier voices.
@@ -112,6 +131,7 @@ export type ProfileInput = {
   /** Organization-scoped view, as `pbxForOrganization` returns it. */
   tenantFor: (organizationId: string) => PbxConfig;
   extensionsFor: (organizationId: string) => Promise<ExtensionUser[]>;
+  now?: Date;
 };
 
 /**
@@ -131,7 +151,10 @@ export async function receptionistFor(input: ProfileInput): Promise<Receptionist
   if (!ai?.enabled) return null;
 
   const extensions = await input.extensionsFor(assignment.organizationId);
-  const targets = ai.transferEnabled ? transferTargets(extensions) : [];
+  // Nobody is at their desk after hours: the receptionist answers, but it
+  // takes messages instead of putting callers through to an empty office.
+  const officeOpen = officeHoursDecision(tenant.officeHours, input.now || new Date()).open;
+  const targets = ai.transferEnabled && officeOpen ? transferTargets(extensions) : [];
   const fallback = ai.fallbackExtension && targets.some((target) => target.extension === ai.fallbackExtension)
     ? ai.fallbackExtension
     : '';
@@ -149,6 +172,7 @@ export async function receptionistFor(input: ProfileInput): Promise<Receptionist
     transferEnabled: Boolean(ai.transferEnabled) && targets.length > 0,
     fallbackExtension: fallback,
     targets,
+    officeOpen,
   };
 }
 
