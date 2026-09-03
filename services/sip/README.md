@@ -48,10 +48,12 @@ Two switches, both off by default, and a call is only accepted when both are on:
 
 Telnyx publishes its SIP signalling ranges per region
 ([support.telnyx.com](https://support.telnyx.com/en/articles/1130687-whitelisting-telnyx-ip-addresses)).
-For a US account:
+For a US account the calls actually arrive from the region's **SIP IPs** — the first
+inbound call came from `192.76.120.10`, which is not inside the address pools —
+so list those as well as the pools:
 
 ```
-VOCIVO_TRUNK_SOURCES=192.76.120.128/26,192.76.120.192/27,64.16.250.0/24
+VOCIVO_TRUNK_SOURCES=192.76.120.10,64.16.250.10,192.76.120.128/26,192.76.120.192/27,64.16.250.0/24
 ```
 
 Add the EMEA (`185.246.41.0/26`) or APAC (`103.115.244.0/26`) range only if the

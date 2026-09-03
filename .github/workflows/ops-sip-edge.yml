@@ -342,7 +342,7 @@ jobs:
               docker compose ps
               kamailio_ps=$(docker compose ps kamailio)
               grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back — run rollback-config"; exit 1; }
-              docker compose logs --tail=30 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" || echo "no Kamailio errors in the last 30 lines"; }
+              docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -v "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "no Kamailio errors in the last 400 lines"; }
               docker compose logs --tail=30 --no-color freeswitch | { grep -Ei "error|crit|cannot|failed" || echo "no FreeSWITCH errors in the last 30 lines"; }
               ';;
             enable-inbound|disable-inbound)
@@ -370,7 +370,8 @@ jobs:
               # to route it. Kamailio first, so the edge is ready before the
               # switch behind it is.
               docker compose up -d --force-recreate kamailio && sleep 5
-              docker compose logs --tail=30 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL|error" || echo "kamailio: no errors in the last 30 lines"; }
+              # A scanner hammering 5060 can push the start-up lines out of a short tail within seconds.
+              docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -v "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "kamailio: no errors in the last 400 lines"; }
               kamailio_ps=$(docker compose ps kamailio)
               echo "$kamailio_ps"
               grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back"; exit 1; }
