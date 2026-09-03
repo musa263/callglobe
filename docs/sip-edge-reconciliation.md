@@ -151,3 +151,41 @@ carrier's included — so the `X-Vocivo-Flow: inbound` tag Kamailio adds is now 
 corrected and its `ai` branch ringing the staff when the receptionist is unreachable. Prompts on the edge are
 spoken by Vocivo's own voice: a tenant whose voice is still a carrier id gets `Vocivo.Kokoro.AfHeart`.
 
+
+## Update — 3 September 2026, evening
+
+### Why callers heard half a prompt, or nothing
+
+Every sentence was rendered the moment a caller needed it, on the engine's 1.5-CPU share of a two-vCPU shared
+droplet, and each restart re-downloaded the model. A cold render took eight to twenty seconds — longer than
+the API's twelve-second budget — so the prompt fell back to the carrier's mp3, which FreeSWITCH cannot open
+under a `.wav` name: one sentence (already cached) played, the next was silence. The receptionist paid the same
+render before its greeting, and most callers hung up into the dead air.
+
+The engine now bakes the model into its image, loads it at start-up, keeps one content-addressed cache for
+every endpoint, and takes pre-render batches; the API asks for a tenant's whole prompt inventory after each
+save. A wav prompt is never answered with mp3 any more (503, and the dialplan's no-input path connects the
+caller). The receptionist speaks a sentence at a time so the first plays while the next renders, and torch is
+pinned to the container's CPU quota. What remains is the machine: the engine renders at roughly a third of
+real time here (`tts-deploy` prints an uncached render time; ~10 s for ~3 s of speech), so a bigger droplet —
+or a lighter engine — is the next step for conversational latency, not more code.
+
+### Three things that were quietly wrong
+
+- `saveBusinessVoiceConfig`, number purchase and the superadmin's *Save route* moved a tenant's DIDs onto the
+  Call Control application — undoing the cut-over on every voice-menu save. They now target
+  `TELNYX_SIP_CONNECTION_ID` while the edge answers inbound, and touch nothing when it is unset.
+- The AI receptionist sat behind the office-hours check: after closing, a call got the closed message and a
+  hangup. It now answers at any hour and takes messages after closing (the API sends it no transfer targets).
+- SIP.js never reconnects and never re-REGISTERs after a reconnect. On mobile a phone that changed networks
+  once stopped ringing until the app restarted, and `waitForVoiceConnection` watched the carrier SDK — never
+  logged in on the edge — so the app could not dial at all. Both apps now keep their registration
+  (`sipRegistrationKeeper`), report a dropped socket as *reconnecting* (calls stay up), and refresh on
+  foreground and network change.
+
+### Call records
+
+Nothing recorded a call on the edge. FreeSWITCH now posts `mod_json_cdr` records and Kamailio queues records
+for the extension-to-extension calls it relays itself; `/api/voice/sip-cdr` turns both into the events the
+call history, Reports, the Event log and the apps' Recents already read. Receptionist conversations are stored
+with their transcript. See the runbook's *Call records from the edge*.
