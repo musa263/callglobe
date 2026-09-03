@@ -38,6 +38,15 @@ Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INB
 
 ## Inbound over the trunk
 
+Kamailio tags a call it accepted from the carrier with `X-Vocivo-Flow: inbound` and forwards it to FreeSWITCH
+on loopback, like every other call. FreeSWITCH asks the API for the dialplan through `mod_xml_curl`
+(`autoload_configs/xml_curl.conf.xml`, installed by the entrypoint while `VOCIVO_SIP_INBOUND=1`): office
+hours, voice menus, ring groups, queues, the receptionist and voicemail are rendered by
+`frontend/api/_lib/sip-dialplan.ts`, prompts stream from `/api/voice/sip-prompt` in Vocivo's own voice, and
+voicemail is pushed back with `http_put`. When the binding gives no answer the static `vocivo-inbound-*`
+extensions in `dialplan/public.xml` ask `/api/voice/sip-inbound` for a single routing decision instead.
+`Ops · Droplets → status` lists the FreeSWITCH modules this needs; each must say `true`.
+
 Two switches, both off by default, and a call is only accepted when both are on:
 
 - `VOCIVO_SIP_INBOUND=1` — also set on the API (Vercel), which is what makes

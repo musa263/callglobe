@@ -55,6 +55,11 @@ services:
     volumes:
       - freeswitch-etc:/etc/freeswitch
       - ./freeswitch:/opt/vocivo-fs:ro
+      # The image ships no CA bundle, so nothing in FreeSWITCH could speak
+      # HTTPS to the API. The host's bundle stands in; the entrypoint also
+      # copies it to /etc/freeswitch/tls/cacert.pem, where FreeSWITCH's own
+      # modules look for one.
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
       # Shared with the receptionist container, which is deployed separately
       # by Ops · Droplets → receptionist-deploy: it writes the prompts
       # FreeSWITCH plays and reads the turns FreeSWITCH records, so the two

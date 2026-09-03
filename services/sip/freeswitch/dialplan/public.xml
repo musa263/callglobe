@@ -28,14 +28,22 @@
         <action application="bridge" data="sofia/gateway/telnyx/${destination_number}@sip.telnyx.com"/>
       </condition>
     </extension>
+    <!-- Inbound over the trunk. Kamailio tags what it accepted from the
+         carrier with X-Vocivo-Flow: inbound. The API normally renders the
+         whole plan for these calls through mod_xml_curl (see
+         autoload_configs/xml_curl.conf.xml), and this static plan is only
+         reached when that binding gave no answer: it asks the API for a
+         routing decision once and executes it. mod_curl splits its arguments
+         on spaces and honours single quotes, so the header and the body are
+         quoted; the response body lands in curl_response_data as-is. -->
     <extension name="vocivo-inbound-did">
       <condition field="${sip_h_X-Vocivo-Flow}" expression="^inbound$"/>
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="vocivo_did=+$1"/>
         <action application="set" data="curl_timeout=8"/>
-        <action application="set" data="curl_add_header=Authorization: Bearer $${SIP_EDGE_SECRET}"/>
-        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {&quot;to&quot;:&quot;${vocivo_did}&quot;}"/>
-        <action application="log" data="INFO Vocivo inbound lookup ${curl_response_data}"/>
+        <action application="set" data="curl_connect_timeout=5"/>
+        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound content-type application/json append_headers 'Authorization: Bearer $${SIP_EDGE_SECRET}' post '{&quot;to&quot;:&quot;${vocivo_did}&quot;}'"/>
+        <action application="log" data="INFO Vocivo inbound lookup ${curl_response_code} ${curl_response_data}"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>
     </extension>
@@ -53,35 +61,37 @@
          this droplet, which answers, listens, thinks and speaks with our own
          speech recognition and voice, and transfers back into this dialplan
          when the caller asks for a person. The actions after it run only when
-         that service could not be reached. -->
+         that service could not be reached: the call then rings the staff the
+         API listed, and is told the business is unavailable if there are none. -->
     <extension name="vocivo-inbound-ai">
       <condition field="destination_number" expression="^vocivo-inbound-result$"/>
-      <condition field="${vocivo_gathered}" expression="^$"/>
+      <condition field="${vocivo_ai_unavailable}" expression="^$"/>
       <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;ai&quot;">
         <action application="socket" data="127.0.0.1:8084 async full"/>
-        <action application="log" data="WARNING Vocivo receptionist did not answer; falling back to the menu"/>
+        <action application="log" data="WARNING Vocivo receptionist did not answer; ringing the staff instead"/>
         <action application="set" data="vocivo_ai_unavailable=true"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>
     </extension>
-    <extension name="vocivo-inbound-menu">
+    <extension name="vocivo-inbound-ai-fallback-bridge">
       <condition field="destination_number" expression="^vocivo-inbound-result$"/>
-      <condition field="${vocivo_gathered}" expression="^$"/>
-      <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;(ivr|ai)&quot;">
+      <condition field="${vocivo_ai_unavailable}" expression="^true$"/>
+      <condition field="${curl_response_data}" expression="&quot;bridge&quot;\s*:\s*&quot;sofia/">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_timeout=30"/>
+        <action application="bridge" data="${regex(${curl_response_data}|&quot;bridge&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
         <action application="answer"/>
-        <action application="sleep" data="300"/>
-        <action application="set" data="vocivo_prompt=${regex(${curl_response_data}|&quot;prompt&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
-        <action application="set" data="vocivo_digits=${regex(${curl_response_data}|&quot;digits&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
-        <action application="set" data="vocivo_tries=${regex(${curl_response_data}|&quot;tries&quot;\s*:\s*(\d+)|%1)}"/>
-        <action application="set" data="vocivo_timeout=${regex(${curl_response_data}|&quot;timeoutMs&quot;\s*:\s*(\d+)|%1)}"/>
-        <action application="speak" data="flite|kal|${vocivo_prompt}"/>
-        <action application="play_and_get_digits" data="1 1 ${vocivo_tries} ${vocivo_timeout} # silence_stream://2000 silence_stream://250 vocivo_digit [${vocivo_digits}]"/>
-        <action application="set" data="vocivo_gathered=true"/>
-        <action application="set" data="curl_timeout=8"/>
-        <action application="set" data="curl_add_header=Authorization: Bearer $${SIP_EDGE_SECRET}"/>
-        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {&quot;to&quot;:&quot;${vocivo_did}&quot;,&quot;digit&quot;:&quot;${vocivo_digit}&quot;}"/>
-        <action application="log" data="INFO Vocivo inbound digit ${vocivo_digit} ${curl_response_data}"/>
-        <action application="transfer" data="vocivo-inbound-result XML public"/>
+        <action application="speak" data="flite|kal|No one is available to take your call right now. Please try again later."/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-inbound-ai-fallback-closed">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${vocivo_ai_unavailable}" expression="^true$">
+        <action application="answer"/>
+        <action application="sleep" data="400"/>
+        <action application="speak" data="flite|kal|No one is available to take your call right now. Please try again later."/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
       </condition>
     </extension>
     <extension name="vocivo-inbound-queue">

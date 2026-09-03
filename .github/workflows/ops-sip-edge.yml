@@ -242,7 +242,7 @@ jobs:
               # The inbound dialplan speaks with flite and could play cached
               # HTTP audio; neither module is in the vanilla autoload list.
               echo "--- freeswitch modules the dialplan relies on ---"
-              for module in mod_flite mod_http_cache mod_shout mod_curl mod_sofia mod_conference; do
+              for module in mod_xml_curl mod_http_cache mod_shout mod_curl mod_flite mod_sofia mod_conference mod_verto; do
                 printf "%s: " "$module"; docker compose exec -T freeswitch fs_cli -x "module_exists $module" 2>/dev/null || echo "unknown"
               done
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true

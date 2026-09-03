@@ -26,6 +26,8 @@ export type XmlCurlRequest = {
   networkAddr: string;
   switchAddr: string;
   vocivoCallerIdHeader: string;
+  /** `X-Vocivo-Flow`, which Kamailio sets to `inbound` on a call the carrier delivered. */
+  vocivoFlowHeader: string;
   stage: string;
   organizationId: string;
   did: string;
@@ -64,6 +66,7 @@ export function parseXmlCurlRequest(body: unknown): XmlCurlRequest {
     networkAddr: field(source, 'Caller-Network-Addr', 'Hunt-Network-Addr'),
     switchAddr: field(source, 'FreeSWITCH-IPv4'),
     vocivoCallerIdHeader: field(source, 'variable_sip_h_X-Vocivo-Caller-ID'),
+    vocivoFlowHeader: field(source, 'variable_sip_h_X-Vocivo-Flow').toLowerCase(),
     stage: field(source, 'variable_vocivo_stage').toLowerCase(),
     organizationId: field(source, 'variable_vocivo_org'),
     did: field(source, 'variable_vocivo_did'),
@@ -79,9 +82,18 @@ export function parseXmlCurlRequest(body: unknown): XmlCurlRequest {
   };
 }
 
-/** Calls hairpinned from our own Kamailio (outbound origination) never get an inbound plan. */
+/**
+ * Calls hairpinned from our own Kamailio (outbound origination, conferences,
+ * internal calls) never get an inbound plan.
+ *
+ * Every call reaches FreeSWITCH from Kamailio on loopback — the carrier's too,
+ * because the edge only accepts a DID on public 5060 and forwards it inside —
+ * so the address alone cannot tell them apart. Kamailio tags what it accepted
+ * from the carrier with `X-Vocivo-Flow: inbound`, and that tag decides.
+ */
 export function isLocalOrigination(request: XmlCurlRequest) {
-  if (request.vocivoCallerIdHeader) return true;
+  if (request.vocivoFlowHeader === 'inbound') return false;
+  if (request.vocivoFlowHeader || request.vocivoCallerIdHeader) return true;
   const addr = request.networkAddr;
   return Boolean(addr) && (addr === '127.0.0.1' || addr === '::1' || (Boolean(request.switchAddr) && addr === request.switchAddr));
 }

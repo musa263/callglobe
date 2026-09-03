@@ -129,3 +129,24 @@ every `sofia/gateway/telnyx/+E164` bridge — every outbound PSTN call placed th
 The gateway now lives on a second profile, `trunk`, bound to the public address on 5082 and locked with
 `apply-inbound-acl=loopback.auto`, so it only ever carries calls it started itself. `external` is unchanged.
 
+### The static inbound plan could never have run, and the API-driven one now does
+
+Adding a module check to `Ops · Droplets → status` settled the question the import left open. The image loads
+neither `mod_curl` (the static plan's `curl` application did not exist), nor `mod_flite` (its prompts would have
+been silent), and it ships no CA bundle at all, so nothing in FreeSWITCH could speak HTTPS to the API — the
+`mod_signalwire` curl error 77 in every log was the same fault. The `curl` line itself was also wrong: mod_curl
+splits its arguments on spaces, so the JSON body was an unknown option, the request went out as a GET with no
+body, and the `curl_add_header` variable it relied on does not exist.
+
+So the reconciliation is decided the other way round from the import's first instinct: the `mod_xml_curl`
+design is finished and is the primary path. `xml_curl.conf.xml` is back, the entrypoint rebuilds the module
+list from vanilla at every start (adding `mod_xml_curl` while inbound is on, `mod_http_cache`, `mod_shout`,
+`mod_curl`, `mod_flite`; dropping `mod_verto`, which listened on the public address, and `mod_signalwire`),
+the host's CA bundle is mounted in and copied to `/etc/freeswitch/tls/cacert.pem`, and the Event Socket
+listens on loopback only. One API-side fix was needed: `isLocalOrigination` treated every call from
+127.0.0.1 as a hairpinned origination, and on this edge *every* call arrives from Kamailio on loopback — the
+carrier's included — so the `X-Vocivo-Flow: inbound` tag Kamailio adds is now what decides. The static
+`vocivo-inbound-*` plan stays as the fallback for when the binding gives no answer, with its `curl` call
+corrected and its `ai` branch ringing the staff when the receptionist is unreachable. Prompts on the edge are
+spoken by Vocivo's own voice: a tenant whose voice is still a carrier id gets `Vocivo.Kokoro.AfHeart`.
+

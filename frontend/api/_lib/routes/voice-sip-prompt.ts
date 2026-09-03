@@ -4,7 +4,7 @@ import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { get, put } from '../object-store.js';
 import { verifyPromptSignature } from '../sip-dialplan.js';
 import { telnyx } from '../telnyx.js';
-import { carrierFallbackVoice, renderVocivoPrompt } from '../voice-catalog.js';
+import { carrierFallbackVoice, promptVoice, renderVocivoPrompt } from '../voice-catalog.js';
 
 /**
  * Prompt audio for the SIP-edge dialplan. FreeSWITCH fetches these through
@@ -26,7 +26,7 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array> | null | undefi
 }
 
 async function synthesize(text: string, voice: string): Promise<{ audio: Buffer; contentType: string }> {
-  const vocivoUrl = await renderVocivoPrompt(text, voice);
+  const vocivoUrl = await renderVocivoPrompt(text, promptVoice(voice));
   if (vocivoUrl) {
     const response = await fetch(vocivoUrl, { signal: AbortSignal.timeout(8000) });
     if (response.ok) return { audio: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') || 'audio/wav' };

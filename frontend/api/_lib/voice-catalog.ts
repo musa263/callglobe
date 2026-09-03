@@ -55,6 +55,19 @@ export function isVocivoVoice(voice: string) { return vocivoVoices.some((item) =
 export function voiceDefinition(voice: string) { return vocivoVoices.find((item) => item.id === voice); }
 export function carrierFallbackVoice(voice: string) { return voiceDefinition(voice)?.fallbackVoice || voice; }
 
+/**
+ * The voice a tenant chose before the switch to Vocivo's own speech is a
+ * carrier voice id. On the SIP edge that must not turn into a carrier
+ * synthesis on every prompt, so anything that is not one of Vocivo's voices
+ * is spoken by Vocivo's default voice while the service is configured.
+ */
+export const defaultVocivoVoice = 'Vocivo.Kokoro.AfHeart';
+
+export function promptVoice(voice: string, serviceConfigured = Boolean(process.env.TTS_SERVICE_URL?.trim())) {
+  if (voiceDefinition(voice)) return voice;
+  return serviceConfigured ? defaultVocivoVoice : voice;
+}
+
 export async function renderVocivoPrompt(text: string, voice: string) {
   const definition = voiceDefinition(voice);
   const serviceUrl = process.env.TTS_SERVICE_URL?.replace(/\/$/, '');

@@ -65,7 +65,7 @@ function pbx(overrides: Partial<PbxConfig> = {}): PbxConfig {
 function request(overrides: Partial<XmlCurlRequest> = {}): XmlCurlRequest {
   return {
     section: 'dialplan', context: 'public', destinationNumber: did, callerNumber: '+15559876543', callerName: 'Jane Caller',
-    uuid: 'call-uuid-1', networkAddr: '192.0.2.10', switchAddr: '203.0.113.5', vocivoCallerIdHeader: '',
+    uuid: 'call-uuid-1', networkAddr: '192.0.2.10', switchAddr: '203.0.113.5', vocivoCallerIdHeader: '', vocivoFlowHeader: '',
     stage: '', organizationId: '', did: '', arg: '', digit: '', disposition: '', depth: 0, visited: [], attempt: 0,
     waitingAnnounced: false, callerFrom: '', callerDisplay: '',
     ...overrides,
@@ -131,7 +131,18 @@ test('recognises hairpinned outbound origination so the static dialplan keeps ha
   assert.equal(isLocalOrigination(request({ networkAddr: '127.0.0.1' })), true);
   assert.equal(isLocalOrigination(request({ networkAddr: '203.0.113.5', switchAddr: '203.0.113.5' })), true);
   assert.equal(isLocalOrigination(request({ networkAddr: '192.0.2.10' })), false);
+  assert.equal(isLocalOrigination(request({ networkAddr: '127.0.0.1', vocivoFlowHeader: 'outbound' })), true);
+  assert.equal(isLocalOrigination(request({ networkAddr: '127.0.0.1', vocivoFlowHeader: 'conference' })), true);
   assert.match(xmlCurlNotFound(), /result status="not found"/);
+});
+
+test('a call Kamailio tagged as inbound is not local, even though it arrives from loopback', () => {
+  // Every call reaches FreeSWITCH from Kamailio on 127.0.0.1, the carrier's
+  // included; the tag is what separates a DID from a hairpinned origination.
+  assert.equal(isLocalOrigination(request({ networkAddr: '127.0.0.1', vocivoFlowHeader: 'inbound' })), false);
+  const parsed = parseXmlCurlRequest({ section: 'dialplan', 'Caller-Network-Addr': '127.0.0.1', 'variable_sip_h_X-Vocivo-Flow': 'Inbound' });
+  assert.equal(parsed.vocivoFlowHeader, 'inbound');
+  assert.equal(isLocalOrigination(parsed), false);
 });
 
 test('channel-safe values cannot smuggle FreeSWITCH expansions or delimiters', () => {

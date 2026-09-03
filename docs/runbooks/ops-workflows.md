@@ -56,7 +56,7 @@ them from the secrets store.
 | action | effect |
 |---|---|
 | `discover` | Read-only survey of an unfamiliar droplet: OS, containers, compose projects and files, git checkouts, listening ports, host services, firewall. Run this first when `status` reports `repo: NOT FOUND`. |
-| `status` | Current commit, `VOCIVO_SIP_INBOUND` flag, env key names, container state, `sofia status`. |
+| `status` | Current commit, `VOCIVO_SIP_INBOUND` flag, env key names, container state, `sofia status`, the Telnyx gateway's state (must be `UP`), whether the FreeSWITCH modules the inbound plan needs exist (`mod_xml_curl`, `mod_http_cache`, `mod_curl`, `mod_flite` must be `true` while inbound is on), and the live call count. |
 | `logs` | Last 200 lines from FreeSWITCH, Kamailio and RTPEngine. |
 | `deploy` | Pulls images and `docker compose up -d`. On `vocivo-sip` there is **no git checkout**, so nothing is pulled from source and config changes are not delivered this way — the action says so in its output. |
 | `sync-config` | Ships `services/sip` from the checked-out commit to `/opt/vocivo/sip`, keeping the droplet's `.env`. Before anything is swapped it checks that every module `kamailio.cfg` loads exists in the pinned Kamailio image, and it backs the live tree up to `/opt/vocivo/sip-backups/<timestamp>` first; a compose file the droplet rejects is rolled back automatically, and Kamailio's own parser must accept the rendered configuration. FreeSWITCH and then Kamailio are recreated so the shipped files are live (the config is bind-mounted, so compose alone would not restart them). This is how configuration reaches `vocivo-sip`. |
