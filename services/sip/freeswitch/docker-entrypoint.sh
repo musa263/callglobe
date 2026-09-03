@@ -46,12 +46,27 @@ fi
 #   mod_shout      mp3 prompts, when the API has no wav to give
 #   mod_curl       the static fallback dialplan's API lookup
 #   mod_flite      the static fallback dialplan's voice
+#   mod_json_cdr   every finished leg is posted to the API as the tenant's call record
 # mod_verto and mod_signalwire go: verto listens on the public address for a
 # WebRTC client this edge does not use, and signalwire phones home every minute.
 modules_conf=/etc/freeswitch/autoload_configs/modules.conf.xml
 cp "$vanilla/autoload_configs/modules.conf.xml" "$modules_conf"
 sed -i -e '/<load module="mod_verto"\/>/d' -e '/<load module="mod_signalwire"\/>/d' "$modules_conf"
 wanted="mod_http_cache mod_shout mod_curl mod_flite"
+if [ -n "${SIP_EDGE_SECRET:-}" ]; then
+  # Call records go to the API whether inbound is on this edge or not: the
+  # outbound and internal legs are here either way.
+  cp /opt/vocivo-fs/autoload_configs/json_cdr.conf.xml /etc/freeswitch/autoload_configs/json_cdr.conf.xml
+  sed -i \
+    -e 's#$${VOCIVO_API_URL}#'"${VOCIVO_API_URL:-https://vocivo.app}"'#g' \
+    -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET}"'#g' \
+    /etc/freeswitch/autoload_configs/json_cdr.conf.xml
+  mkdir -p /var/log/freeswitch/json_cdr
+  wanted="$wanted mod_json_cdr"
+else
+  rm -f /etc/freeswitch/autoload_configs/json_cdr.conf.xml
+  echo "Vocivo: SIP_EDGE_SECRET is not set; call records are not posted to the API" >&2
+fi
 if [ "${VOCIVO_SIP_INBOUND:-0}" = "1" ]; then
   : "${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required for the inbound dialplan binding}"
   cp /opt/vocivo-fs/autoload_configs/xml_curl.conf.xml /etc/freeswitch/autoload_configs/xml_curl.conf.xml

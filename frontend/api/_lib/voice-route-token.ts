@@ -42,7 +42,13 @@ export function createVoiceRouteToken(route: Omit<VoiceRouteAuthorization, 'expi
   return `${payload}.${signature(payload)}`;
 }
 
-export function verifyVoiceRouteToken(token: string): VoiceRouteAuthorization | null {
+/**
+ * Checks a route token. `allowExpired` is for reading a call record after the
+ * call: the token authorised the call when it was placed, and the record of
+ * who placed it and where is still true an hour later even though the token
+ * could no longer place another call. The signature is always checked.
+ */
+export function verifyVoiceRouteToken(token: string, options: { allowExpired?: boolean } = {}): VoiceRouteAuthorization | null {
   try {
     const [payload, suppliedSignature, extra] = token.split('.');
     if (!payload || !suppliedSignature || extra) return null;
@@ -52,7 +58,7 @@ export function verifyVoiceRouteToken(token: string): VoiceRouteAuthorization | 
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
     if (typeof decoded.r !== 'string' || typeof decoded.o !== 'string' || typeof decoded.d !== 'string' || !decoded.d
       || !['outbound', 'internal'].includes(String(decoded.f)) || typeof decoded.e !== 'number'
-      || decoded.e < Math.floor(Date.now() / 1000)) return null;
+      || (!options.allowExpired && decoded.e < Math.floor(Date.now() / 1000))) return null;
     const authorization: VoiceRouteAuthorization = {
       routeId: decoded.r,
       organizationId: decoded.o,

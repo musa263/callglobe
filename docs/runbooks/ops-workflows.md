@@ -102,6 +102,24 @@ INVITE on public 5060 when — and only when — it comes from a listed carrier 
 Known ids (this account, September 2026): Call Control application `3033560124078688149` ("Vocivo Voice System"),
 IP trunk `3035898149177656815` ("Vocivo Dedicated PBX" → 168.144.183.82). The account currently has a single DID.
 
+## Call records from the edge
+
+Before inbound moved to the edge, the carrier's webhooks fed the tenant's call history, Reports, the Event log and
+the apps' Recents; on the edge nothing did. Now every call is recorded twice over, by whichever component carried it:
+
+- FreeSWITCH posts a `mod_json_cdr` record per finished leg to `/api/voice/sip-cdr` (basic auth with the edge
+  secret; `json_cdr.conf.xml`, installed by the entrypoint whenever `SIP_EDGE_SECRET` is set). Inbound DIDs,
+  outbound calls and the legs that ring a phone all pass through it. Records the API refused are kept under
+  `/var/log/freeswitch/json_cdr` in the container; `status` counts them.
+- Kamailio relays extension-to-extension calls itself, so it queues one line per event (INVITE, 200 OK, BYE, CANCEL,
+  final failure) in an in-memory `mqueue` and a one-second `rtimer` posts them through the local nginx proxy
+  (`127.0.0.1:8081/sip-cdr`), which adds the secret. `sync-config` adds that nginx location when it is missing.
+- The receptionist's conversations arrive as `receptionist.<outcome>` events with the transcript, in the same session
+  as the call's own records, and show in the admin Event log's *Detail* column.
+
+The API turns all of these into the same `call.initiated` / `call.answered` / `call.hangup` events the webhooks
+produced, attributed to the tenant by `vocivo_org`, the route token the app carried, or the extension involved.
+
 ## Prompts and the voice engine
 
 Every sentence a caller hears on the edge is rendered by the Kokoro service (`tts-deploy`) and kept in its

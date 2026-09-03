@@ -23,6 +23,7 @@ import sipInbound from './_lib/routes/voice-sip-inbound.js';
 import sipWakeup from './_lib/routes/voice-sip-wakeup.js';
 import sipNonce from './_lib/routes/voice-sip-nonce.js';
 import sipDialplan from './_lib/routes/voice-sip-dialplan.js';
+import sipCdr from './_lib/routes/voice-sip-cdr.js';
 import sipPrompt from './_lib/routes/voice-sip-prompt.js';
 import sipVoicemail from './_lib/routes/voice-sip-voicemail.js';
 
@@ -53,6 +54,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   'sip-wakeup': sipWakeup,
   'sip-nonce': sipNonce,
   'sip-dialplan': sipDialplan,
+  'sip-cdr': sipCdr,
   'sip-prompt': sipPrompt,
   'sip-voicemail': sipVoicemail,
 });

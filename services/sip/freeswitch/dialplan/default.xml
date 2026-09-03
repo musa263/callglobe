@@ -16,6 +16,10 @@
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="effective_caller_id_number=${outbound_caller_id_number}"/>
         <action application="set" data="hangup_after_bridge=true"/>
+        <!-- The carrier leg's call record has to say whose call it was: the
+             route the API issued for it names the tenant and the caller. -->
+        <action application="export" data="nolocal:vocivo_route_token=${sip_h_X-Vocivo-Route-Token}"/>
+        <action application="export" data="nolocal:vocivo_flow=outbound"/>
         <action application="bridge" data="sofia/gateway/telnyx/+$1"/>
       </condition>
     </extension>

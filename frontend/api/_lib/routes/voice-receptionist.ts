@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { allowMobile, methodNotAllowed, publicError } from '../http.js';
+import { storeCallEvent } from '../call-event-store.js';
+import { afterResponse, allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { listExtensions } from '../pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { parseConversation, receptionistFor } from '../receptionist.js';
@@ -45,7 +46,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       transferredTo: conversation.transferredTo,
       seconds: conversation.seconds,
     }));
-    return res.status(202).json({ recorded: true });
+    // Into the tenant's event log, beside the call's own records: the
+    // transcript is what the tenant sees of a conversation their receptionist
+    // had. The call id is the FreeSWITCH leg, so it lands in the same session.
+    const config = await readPbxConfig();
+    const organizationId = config.numberAssignments[conversation.number]?.organizationId || '';
+    if (organizationId) {
+      afterResponse('receptionist conversation record', storeCallEvent({
+        id: `${conversation.callId}:receptionist`,
+        name: `receptionist.${conversation.outcome}`,
+        type: 'webhook',
+        event_timestamp: new Date().toISOString(),
+        call_session_id: conversation.callId,
+        call_leg_id: conversation.callId,
+        direction: 'incoming',
+        from: conversation.caller,
+        to: conversation.number,
+        organizationId,
+        flow: 'receptionist',
+        destinationExtension: conversation.transferredTo || undefined,
+        note: conversation.note,
+        transcript: conversation.transcript,
+      }));
+    }
+    return res.status(202).json({ recorded: Boolean(organizationId) });
   } catch (error) {
     return res.status(500).json({ error: publicError(error), enabled: false });
   }

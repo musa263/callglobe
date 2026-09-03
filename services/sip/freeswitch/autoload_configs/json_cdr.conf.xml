@@ -1,0 +1,30 @@
+<!--
+  Vocivo call records.
+
+  FreeSWITCH posts one JSON record per call leg to the Vocivo API when the leg
+  ends; the API turns it into the tenant's call history and event log — the
+  same records the carrier's webhooks used to provide before inbound moved to
+  this edge. Records that cannot be delivered are kept on disk and retried by
+  hand from err-log-dir. $${...} placeholders are substituted by
+  docker-entrypoint.sh.
+-->
+<configuration name="json_cdr.conf" description="Vocivo call records">
+  <settings>
+    <param name="url" value="$${VOCIVO_API_URL}/api/voice/sip-cdr"/>
+    <param name="cred" value="vocivo:$${SIP_EDGE_SECRET}"/>
+    <param name="auth-scheme" value="basic"/>
+    <!-- Values as they are, not percent-encoded: the API reads them as JSON. -->
+    <param name="encode-values" value="false"/>
+    <param name="log-b-leg" value="true"/>
+    <param name="prefix-a-leg" value="false"/>
+    <param name="retries" value="2"/>
+    <param name="delay" value="3"/>
+    <param name="disable-100-continue" value="true"/>
+    <param name="enable-cacert-check" value="true"/>
+    <param name="ssl-cacert-file" value="/etc/freeswitch/tls/cacert.pem"/>
+    <param name="enable-ssl-verifyhost" value="true"/>
+    <param name="log-dir" value="/var/log/freeswitch/json_cdr"/>
+    <param name="err-log-dir" value="/var/log/freeswitch/json_cdr"/>
+    <param name="log-http-and-disk" value="false"/>
+  </settings>
+</configuration>

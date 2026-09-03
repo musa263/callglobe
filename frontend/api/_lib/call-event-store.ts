@@ -24,6 +24,9 @@ export type StoredCallEvent = {
   destinationExtensionId?: string;
   destinationExtension?: string;
   destinationName?: string;
+  /** A receptionist conversation: how it ended and what was said, for the event log. */
+  note?: string;
+  transcript?: string;
 };
 
 function key() { return createHash('sha256').update(`${requiredEnv('AUTH_SECRET')}:call-events`).digest(); }

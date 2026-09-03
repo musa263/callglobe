@@ -257,9 +257,11 @@ jobs:
               # The inbound dialplan speaks with flite and could play cached
               # HTTP audio; neither module is in the vanilla autoload list.
               echo "--- freeswitch modules the dialplan relies on ---"
-              for module in mod_xml_curl mod_http_cache mod_shout mod_curl mod_flite mod_sofia mod_conference mod_verto; do
+              for module in mod_xml_curl mod_http_cache mod_shout mod_curl mod_flite mod_json_cdr mod_sofia mod_conference mod_verto; do
                 printf "%s: " "$module"; docker compose exec -T freeswitch fs_cli -x "module_exists $module" 2>/dev/null || echo "unknown"
               done
+              echo "--- call records the API did not accept (json_cdr err-log-dir) ---"
+              docker compose exec -T freeswitch sh -c "ls /var/log/freeswitch/json_cdr 2>/dev/null | wc -l" 2>/dev/null || echo "?"
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
               echo "--- freeswitch log levels (core / console) ---"
               # Never "fsctl loglevel" with no argument: it passes -1 and DISABLES the core log.
@@ -386,6 +388,28 @@ jobs:
               grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back — run rollback-config"; exit 1; }
               docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -v "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "no Kamailio errors in the last 400 lines"; }
               docker compose logs --tail=30 --no-color freeswitch | { grep -Ei "error|crit|cannot|failed" || echo "no FreeSWITCH errors in the last 30 lines"; }
+              # Kamailio posts its call records through the local nginx proxy
+              # (127.0.0.1:8081), which was installed by hand and adds the edge
+              # secret. Give it the /sip-cdr location if it lacks one; the
+              # proxy snippet it already uses for /sip-auth carries the secret.
+              edge=$( { grep -RlE "listen[[:space:]]+127\.0\.0\.1:8081" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || true; } | head -1 || true )
+              if [ -z "$edge" ]; then
+                echo "::warning::no nginx server on 127.0.0.1:8081 found; Kamailio call records will not reach the API"
+              elif grep -q "location = /sip-cdr" "$edge"; then
+                echo "nginx edge proxy already routes /sip-cdr ($edge)"
+              else
+                snippet=$( { grep -m1 -oE "include [^;]+;" "$edge" || true; } )
+                install -d /etc/vocivo/nginx-backups
+                backup="/etc/vocivo/nginx-backups/$(basename "$edge").$(date +%Y%m%d%H%M%S)"
+                cp "$edge" "$backup"
+                # Insert before the last closing brace, which ends the server block.
+                awk -v snip="$snippet" "BEGIN { n = 0 } { lines[++n] = \$0 } END { last = n; while (last > 0 && lines[last] !~ /^[[:space:]]*}[[:space:]]*\$/) last--; for (i = 1; i < last; i++) print lines[i]; print \"\"; print \"    location = /sip-cdr {\"; print \"        proxy_pass https://vocivo.app/api/voice/sip-cdr;\"; if (snip != \"\") print \"        \" snip; print \"    }\"; for (i = last; i <= n; i++) print lines[i] }" "$backup" > "$edge"
+                if nginx -t >/dev/null 2>&1; then
+                  systemctl reload nginx && echo "nginx edge proxy now routes /sip-cdr ($edge)"
+                else
+                  cp "$backup" "$edge"; echo "::warning::nginx rejected the /sip-cdr location; edge proxy restored from $backup"
+                fi
+              fi
               ';;
             enable-inbound|disable-inbound)
               flag=$([ "$ACTION" = enable-inbound ] && echo 1 || echo 0)
