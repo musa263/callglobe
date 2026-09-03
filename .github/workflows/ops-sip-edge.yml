@@ -330,8 +330,19 @@ jobs:
                 exit 1
               fi
               docker compose up -d --remove-orphans
+              # The configuration is bind-mounted, so a changed file does not
+              # make compose recreate anything: the two containers that read it
+              # at start are restarted here, or the sync would not be live.
+              # FreeSWITCH first, then Kamailio, so the edge is back before the
+              # switch behind it is needed.
+              docker compose up -d --force-recreate --no-deps freeswitch
               sleep 8
+              docker compose up -d --force-recreate --no-deps kamailio
+              sleep 5
               docker compose ps
+              kamailio_ps=$(docker compose ps kamailio)
+              grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back — run rollback-config"; exit 1; }
+              docker compose logs --tail=30 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" || echo "no Kamailio errors in the last 30 lines"; }
               docker compose logs --tail=30 --no-color freeswitch | { grep -Ei "error|crit|cannot|failed" || echo "no FreeSWITCH errors in the last 30 lines"; }
               ';;
             enable-inbound|disable-inbound)
@@ -494,7 +505,10 @@ jobs:
 
           # Run, and mirror the output into a check-run annotation so it is readable through the API, not only the raw log.
           set +e
-          out=$(ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" 'bash -s' <<< "$remote" 2>&1); rc=$?
+          # The script is read whole before it runs. Fed to `bash -s` line by line,
+          # the first `docker compose exec` swallowed the rest of the script as its
+          # stdin, and `status` silently stopped after `sofia status`.
+          out=$(ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" 'script=$(cat); exec bash -c "$script"' <<< "$remote" 2>&1); rc=$?
           set -e
           printf '%s\n' "$out"
           { echo "### \`$ACTION\` on \`$HOST\` — exit $rc"; echo; echo '```'; printf '%s\n' "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

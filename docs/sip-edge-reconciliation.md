@@ -117,3 +117,15 @@ to a language model. Telephony, speech recognition and the voice are all local. 
 carrier service, which is the intended arrangement — the point was never to stop buying numbers, it was to stop
 paying per minute for calls that never leave the tenant.
 
+### The Telnyx gateway was down, and had been
+
+The imported `external.xml` binds FreeSWITCH to `127.0.0.1:5080` — deliberately, so nothing on the internet can
+reach the switch — and carries the `telnyx` gateway on that same profile with `ping=30`. A socket bound to
+loopback cannot send to a public address (the kernel answers `EINVAL`), so every OPTIONS ping failed with an
+internal 503 and the gateway sat at `state DOWN`; `sofia_outgoing_channel` refuses a gateway that is not UP, so
+every `sofia/gateway/telnyx/+E164` bridge — every outbound PSTN call placed through the edge — failed with
+`GATEWAY_DOWN`. Inbound does not touch the gateway and was unaffected.
+
+The gateway now lives on a second profile, `trunk`, bound to the public address on 5082 and locked with
+`apply-inbound-acl=loopback.auto`, so it only ever carries calls it started itself. `external` is unchanged.
+

@@ -122,7 +122,8 @@ jobs:
                 for kind in ip_connections fqdn_connections credential_connections call_control_applications; do
                   if body=$(api "$base/$kind/$CONNECTION_ID" 2>/dev/null); then
                     echo "== $kind/$CONNECTION_ID =="
-                    echo "$body" | jq '.data | {connection_name, application_name, active, transport_protocol, inbound: (.inbound // {}), outbound: (.outbound // {}), webhook_event_url, anchorsite_override, default_on_hold_comfort_noise_enabled} | with_entries(select(.value != null))'
+                    # The outbound block carries the trunk's authentication token; it is a credential and stays out of the log.
+                    echo "$body" | jq '.data | {connection_name, application_name, active, transport_protocol, inbound: (.inbound // {}), outbound: ((.outbound // {}) | if .ip_authentication_token then .ip_authentication_token = "<set>" else . end), webhook_event_url, anchorsite_override, default_on_hold_comfort_noise_enabled} | with_entries(select(.value != null))'
                     case "$kind" in
                       ip_connections)
                         echo "-- authorised IPs (Telnyx sends inbound INVITEs here) --"

@@ -1,17 +1,7 @@
+<!-- The Kamailio-facing side of FreeSWITCH: bound to loopback, so the switch
+     cannot be reached from the internet. The carrier gateway is on the `trunk`
+     profile, which is the one bound to the public address. -->
 <profile name="external">
-  <gateways>
-    <gateway name="telnyx">
-      <param name="proxy" value="$${TELNYX_SIP_HOST}"/>
-      <param name="realm" value="$${TELNYX_SIP_REALM}"/>
-      <param name="username" value="$${TELNYX_SIP_USERNAME}"/>
-      <param name="password" value="$${TELNYX_SIP_PASSWORD}"/>
-      <param name="register" value="false"/>
-      <param name="caller-id-in-from" value="true"/>
-      <param name="from-domain" value="sip.telnyx.com"/>
-      <param name="extension-in-contact" value="true"/>
-      <param name="ping" value="30"/>
-    </gateway>
-  </gateways>
   <settings>
     <param name="sip-port" value="5080"/>
     <param name="dialplan" value="XML"/>

@@ -1,0 +1,40 @@
+<!-- The carrier-facing side of FreeSWITCH.
+
+     The `external` profile is bound to loopback on purpose: only Kamailio can
+     reach it, so nothing on the internet can hairpin PSTN through the switch.
+     But a socket bound to 127.0.0.1 cannot send to the carrier either — the
+     kernel refuses it — so the Telnyx gateway pinged itself DOWN every thirty
+     seconds and every outbound bridge failed with "Gateway is down". The
+     gateway therefore lives here, on the public address, and this profile is
+     locked so that the only things it will ever take from outside are the
+     replies and in-dialog requests for calls it started itself: a new INVITE
+     from anywhere but loopback is refused before the dialplan sees it. -->
+<profile name="trunk">
+  <gateways>
+    <gateway name="telnyx">
+      <param name="proxy" value="$${TELNYX_SIP_HOST}"/>
+      <param name="realm" value="$${TELNYX_SIP_REALM}"/>
+      <param name="username" value="$${TELNYX_SIP_USERNAME}"/>
+      <param name="password" value="$${TELNYX_SIP_PASSWORD}"/>
+      <param name="register" value="false"/>
+      <param name="caller-id-in-from" value="true"/>
+      <param name="from-domain" value="sip.telnyx.com"/>
+      <param name="extension-in-contact" value="true"/>
+      <param name="ping" value="30"/>
+    </gateway>
+  </gateways>
+  <settings>
+    <param name="sip-ip" value="$${PUBLIC_IP}"/>
+    <param name="sip-port" value="5082"/>
+    <param name="rtp-ip" value="$${PUBLIC_IP}"/>
+    <param name="dialplan" value="XML"/>
+    <param name="context" value="public"/>
+    <param name="auth-calls" value="false"/>
+    <!-- Inbound from the carrier arrives at Kamailio on 5060, never here. -->
+    <param name="apply-inbound-acl" value="loopback.auto"/>
+    <param name="inbound-codec-prefs" value="PCMU,PCMA,OPUS"/>
+    <param name="outbound-codec-prefs" value="PCMU,PCMA,OPUS"/>
+    <param name="manage-presence" value="false"/>
+    <param name="sip-trace" value="no"/>
+  </settings>
+</profile>

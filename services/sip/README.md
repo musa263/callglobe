@@ -22,6 +22,13 @@ docker compose up -d
 
 Create an FQDN or IP connection in Mission Control pointing at this host. Put the SIP username/password (or IP ACL) in `.env`. Outbound E.164 from registered clients is bridged to `sofia/gateway/telnyx/+E164`.
 
+The gateway lives on the `trunk` sofia profile (`sip_profiles/trunk.xml`), bound to `PUBLIC_IP:5082`, not on
+`external`: `external` is bound to loopback so the switch cannot be reached from the internet, and a socket bound
+to loopback cannot send to the carrier either — with the gateway there it pinged itself DOWN and every outbound
+bridge failed with "Gateway is down". `trunk` refuses any new INVITE that does not come from loopback
+(`apply-inbound-acl=loopback.auto`); it only ever carries the calls it started. Inbound from the carrier arrives
+at Kamailio on 5060. `sofia status gateway telnyx` should say `State UP`.
+
 Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INBOUND=1` on both Vercel and this host. See [ADR 0003](../../docs/adr/0003-self-hosted-sip-edge.md).
 
 ## Clients
