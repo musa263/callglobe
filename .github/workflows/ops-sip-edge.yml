@@ -460,7 +460,10 @@ jobs:
             set-rtp-range)
               [[ "$RTP_RANGE" =~ ^([0-9]{4,5})-([0-9]{4,5})$ ]] || { echo "::error::rtp_range must look like 30000-39999"; exit 1; }
               rtp_start=${BASH_REMATCH[1]}; rtp_end=${BASH_REMATCH[2]}
-              [ "$rtp_start" -ge 1024 ] && [ "$rtp_end" -le 65535 ] && [ $((rtp_end - rtp_start)) -ge 400 ] || { echo "::error::the range must lie within 1024-65535 and span at least 400 ports"; exit 1; }
+              # Four ports per call, so 100 ports is 25 calls: enough for a
+              # small business, and the size of the range the cloud firewall
+              # was opened for on day one. Widen the firewall before widening this.
+              [ "$rtp_start" -ge 1024 ] && [ "$rtp_end" -le 65535 ] && [ $((rtp_end - rtp_start)) -ge 100 ] || { echo "::error::the range must lie within 1024-65535 and span at least 100 ports"; exit 1; }
               # FreeSWITCH's own media ports (switch.conf.xml) and the SIP/TURN ports stay out of it.
               if [ "$rtp_start" -le 24999 ] && [ "$rtp_end" -ge 20000 ]; then echo "::error::the range overlaps FreeSWITCH's 20000-24999"; exit 1; fi
               remote="$remote"'
