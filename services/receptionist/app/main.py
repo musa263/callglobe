@@ -28,7 +28,7 @@ async def serve() -> None:
     api = VocivoApi(settings)
     handler = CallHandler(settings, voice, ears, brain, api)
 
-    log.info("language model %s at %s; voice engine at %s", settings.llm_model, settings.llm_base_url, settings.tts_url)
+    log.info("language model %s at %s (workspace %s); voice engine at %s", settings.llm_model, settings.llm_base_url, settings.llm_workspace_id or "not set", settings.tts_url)
     log.info("warming the speech recogniser")
     await ears.warm()
 

@@ -120,7 +120,15 @@ class FakeFreeswitch:
             handle.setnchannels(1)
             handle.setsampwidth(2)
             handle.setframerate(8000)
-            handle.writeframes(b"\x00\x00" * int(8000 * seconds))
+            if seconds < 0.5:
+                handle.writeframes(b"\x00\x00" * int(8000 * seconds))
+            else:
+                # A voice, as far as the energy check is concerned: a tone.
+                import math
+                import struct
+
+                frames = int(8000 * seconds)
+                handle.writeframes(b"".join(struct.pack("<h", int(3000 * math.sin(2 * math.pi * 440 * index / 8000))) for index in range(frames)))
 
 
 class FakeVoice:

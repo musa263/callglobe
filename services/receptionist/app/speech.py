@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import re
+import struct
 import wave
 from pathlib import Path
 
@@ -220,18 +222,37 @@ class Ears:
             return ""
 
 
-def recording_has_audio(path: Path, *, minimum_seconds: float = 0.35) -> bool:
+def recording_has_audio(path: Path, *, minimum_seconds: float = 0.35, minimum_rms: int = 120) -> bool:
     """
     Cheap guard before spending a transcription on silence.
 
-    FreeSWITCH writes a valid but almost empty file when a caller says nothing,
-    and running the model over it costs a second of the caller's patience for a
-    result that is always the empty string.
+    FreeSWITCH's recorder stops after its silence window whether or not the
+    caller ever spoke, so a caller who has not started yet produces a
+    two-second file of line noise. Its length says nothing; its energy does.
+    A file that is long enough *and* louder than line noise is worth a
+    transcription; anything else is "nothing yet" and is listened for again.
     """
     try:
         with wave.open(str(path), "rb") as handle:
             frames = handle.getnframes()
             rate = handle.getframerate() or 8000
-            return frames / rate >= minimum_seconds
+            if frames / rate < minimum_seconds:
+                return False
+            width = handle.getsampwidth()
+            samples = handle.readframes(frames)
     except (wave.Error, OSError):
         return path.exists() and path.stat().st_size > 4096
+    if width != 2 or not samples:
+        return True
+    return _rms(samples) >= minimum_rms
+
+
+def _rms(samples: bytes) -> float:
+    """Root mean square of 16-bit little-endian PCM, without numpy."""
+    count = len(samples) // 2
+    if not count:
+        return 0.0
+    total = 0
+    for value in struct.unpack(f"<{count}h", samples[: count * 2]):
+        total += value * value
+    return math.sqrt(total / count)

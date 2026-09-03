@@ -244,13 +244,16 @@ class Brain:
             # spoke before hearing anything is context, not a turn.
             messages.insert(0, {"role": "user", "content": "(the caller has not said anything yet)"})
         try:
+            headers = {
+                "x-api-key": self._settings.llm_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            if self._settings.llm_workspace_id:
+                headers["anthropic-workspace-id"] = self._settings.llm_workspace_id
             response = await self._client.post(
                 f"{self._settings.llm_base_url}/v1/messages",
-                headers={
-                    "x-api-key": self._settings.llm_api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 content=json.dumps({
                     "model": self._settings.llm_model,
                     "max_tokens": self._settings.llm_max_tokens,

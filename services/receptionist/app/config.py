@@ -43,6 +43,11 @@ class Settings:
     llm_model: str = "claude-haiku-4-5"
     llm_base_url: str = "https://api.anthropic.com"
     llm_max_tokens: int = 300
+    #: Required by identity-linked API keys: the workspace the requests act in
+    #: (console → Settings → Workspaces). A key of that kind without it is
+    #: refused with 400 on every turn, and the receptionist could only ever
+    #: apologise and transfer.
+    llm_workspace_id: str = ""
 
     #: Vocivo's API, for the assistant's configuration and for logging the
     #: conversation back to the tenant.
@@ -88,6 +93,7 @@ class Settings:
             llm_model=text("LLM_MODEL", cls.llm_model),
             llm_base_url=text("LLM_BASE_URL", cls.llm_base_url).rstrip("/"),
             llm_max_tokens=number("LLM_MAX_TOKENS", cls.llm_max_tokens),
+            llm_workspace_id=text("LLM_WORKSPACE_ID", ""),
             api_url=text("VOCIVO_API_URL", cls.api_url).rstrip("/"),
             api_secret=text("SIP_EDGE_SECRET", ""),
             greeting_timeout=float(number("RECEPTIONIST_GREETING_TIMEOUT", int(cls.greeting_timeout))),

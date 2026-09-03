@@ -210,12 +210,16 @@ class Transcripts(unittest.TestCase):
 
 
 class Recordings(unittest.TestCase):
-    def _write(self, path: Path, seconds: float) -> None:
+    def _write(self, path: Path, seconds: float, *, amplitude: int = 3000) -> None:
+        import math
+        import struct
+
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(1)
             handle.setsampwidth(2)
             handle.setframerate(8000)
-            handle.writeframes(b"\x00\x00" * int(8000 * seconds))
+            frames = int(8000 * seconds)
+            handle.writeframes(b"".join(struct.pack("<h", int(amplitude * math.sin(2 * math.pi * 440 * index / 8000))) for index in range(frames)))
 
     def test_a_caller_who_said_nothing_is_not_sent_to_the_recogniser(self):
         with TemporaryDirectory() as directory:
@@ -228,6 +232,17 @@ class Recordings(unittest.TestCase):
             path = Path(directory) / "turn.wav"
             self._write(path, 1.5)
             self.assertTrue(recording_has_audio(path))
+
+    def test_two_seconds_of_line_noise_is_not_a_turn(self):
+        # The recorder stops after its silence window whether or not the caller
+        # ever spoke: a caller still drawing breath produced a two-second file
+        # that used to be transcribed as nothing and answered with an apology.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "turn.wav"
+            self._write(path, 2.0, amplitude=40)
+            self.assertFalse(recording_has_audio(path))
+            self._write(path, 2.0, amplitude=0)
+            self.assertFalse(recording_has_audio(path))
 
     def test_a_missing_file_is_not_an_error(self):
         self.assertFalse(recording_has_audio(Path("/nonexistent/turn.wav")))

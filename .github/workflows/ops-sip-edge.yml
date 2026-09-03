@@ -65,6 +65,10 @@ on:
         description: set-rtp-range only — rtpengine's media port range, e.g. 30000-39999 (four ports per call; must not overlap FreeSWITCH's 20000-24999)
         required: false
         type: string
+      workspace_id:
+        description: receptionist-deploy only — the Anthropic workspace id (wrkspc_…) an identity-linked API key must name; kept on the droplet once given
+        required: false
+        type: string
 
 concurrency:
   group: ops-droplet-${{ inputs.host || github.event.client_payload.host || 'sip' }}
@@ -132,6 +136,7 @@ jobs:
           TRUNK_SOURCES: ${{ inputs.trunk_sources || github.event.client_payload.trunk_sources }}
           SINCE: ${{ inputs.since || github.event.client_payload.since }}
           RTP_RANGE: ${{ inputs.rtp_range || github.event.client_payload.rtp_range }}
+          LLM_WORKSPACE_ID: ${{ inputs.workspace_id || github.event.client_payload.workspace_id }}
         run: |
           set -euo pipefail
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
@@ -569,6 +574,9 @@ jobs:
               # /etc/vocivo/tts.env), and are read there — a secret that
               # exists in one place is one that cannot drift.
               [ -n "$LLM_API_KEY" ] || { echo "::error::LLM_API_KEY secret is required"; exit 1; }
+              # An identity-linked Anthropic key is refused (400) on every
+              # request unless it names its workspace. The id is not a secret.
+              if [ -n "${LLM_WORKSPACE_ID:-}" ] && ! [[ "$LLM_WORKSPACE_ID" =~ ^[A-Za-z0-9_-]{6,80}$ ]]; then echo "::error::workspace_id does not look like an Anthropic workspace id"; exit 1; fi
               echo "shipping services/receptionist to the droplet"
               tar czf - -C services receptionist | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
                 'set -e; install -d -m 755 /opt/vocivo; rm -rf /opt/vocivo/receptionist.new; install -d /opt/vocivo/receptionist.new; tar xzf - -C /opt/vocivo/receptionist.new; rm -rf /opt/vocivo/receptionist; mv /opt/vocivo/receptionist.new/receptionist /opt/vocivo/receptionist; rmdir /opt/vocivo/receptionist.new'
@@ -582,8 +590,12 @@ jobs:
               [ -n "$tts_secret" ] || tts_secret=$( { sed -n "s/^TTS_SERVICE_SECRET=//p" /etc/vocivo/tts.env 2>/dev/null || true; } | tail -1 )
               [ -n "$tts_secret" ] || { echo "::error::TTS_SERVICE_SECRET is neither a repository secret nor in /etc/vocivo/tts.env (run tts-deploy first)"; exit 1; }
               api_url=$( { sed -n "s/^VOCIVO_API_URL=//p" "$SIP_DIR/.env" 2>/dev/null || true; } | tail -1 )
-              printf "TTS_SERVICE_SECRET=%s\nLLM_API_KEY=%s\nLLM_MODEL=%s\nSIP_EDGE_SECRET=%s\nVOCIVO_API_URL=%s\nSTT_MODEL=%s\n" \
-                "$tts_secret" "'"$LLM_API_KEY"'" "'"${LLM_MODEL:-claude-haiku-4-5}"'" "$edge_secret" "${api_url:-https://vocivo.app}" "base" > /etc/vocivo/receptionist.env
+              # The workspace id survives deploys that do not repeat it.
+              workspace="'"${LLM_WORKSPACE_ID:-}"'"
+              [ -n "$workspace" ] || workspace=$( { sed -n "s/^LLM_WORKSPACE_ID=//p" /etc/vocivo/receptionist.env 2>/dev/null || true; } | tail -1 )
+              printf "TTS_SERVICE_SECRET=%s\nLLM_API_KEY=%s\nLLM_MODEL=%s\nLLM_WORKSPACE_ID=%s\nSIP_EDGE_SECRET=%s\nVOCIVO_API_URL=%s\nSTT_MODEL=%s\n" \
+                "$tts_secret" "'"$LLM_API_KEY"'" "'"${LLM_MODEL:-claude-haiku-4-5}"'" "$workspace" "$edge_secret" "${api_url:-https://vocivo.app}" "base" > /etc/vocivo/receptionist.env
+              echo "language model workspace: ${workspace:-not set}"
               # Niced and capped for the same reason the voice engine is: this
               # box carries live audio and must not be starved by a build.
               cd /opt/vocivo/receptionist && nice -n 19 docker build --memory 2g --progress plain -t vocivo-receptionist . 2>&1 | tail -25
