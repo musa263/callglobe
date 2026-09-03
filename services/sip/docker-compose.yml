@@ -26,6 +26,10 @@ services:
       VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
       SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+      # Inbound over the trunk is refused unless both of these are set: the
+      # flag, and the carrier signalling addresses it may arrive from.
+      VOCIVO_SIP_INBOUND: ${VOCIVO_SIP_INBOUND:-0}
+      VOCIVO_TRUNK_SOURCES: ${VOCIVO_TRUNK_SOURCES:-}
     volumes:
       - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
       - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro
