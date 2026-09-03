@@ -166,29 +166,23 @@ jobs:
               ;;
             call-records)
               # What the carrier saw for every call today: the fastest way to
-              # tell "never reached the edge" from "the edge hung up".
+              # tell "never reached the edge" from "the edge hung up". The
+              # carrier's search API files calls by product (call-control for
+              # the Call Control application, webrtc for its SDK clients), so
+              # every kind that answers is printed; SIP-trunk calls do not
+              # appear here at all.
               {
-                # The carrier's search API names its record types inconsistently
-                # across products (messaging, webrtc, conference...); the one for
-                # SIP-trunk calls is found by asking.
-                body=""
-                for kind in sip voice call calls call_control call-control sip_trunking elastic_sip webrtc; do
-                  if candidate=$(api "$base/detail_records?filter[record_type]=$kind&filter[date_range]=today&page[size]=50" 2>/dev/null) \
-                     && printf '%s' "$candidate" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
-                    count=$(printf '%s' "$candidate" | jq '.data | length')
-                    echo "record_type=$kind: accepted, $count record(s) today"
-                    if [ -z "$body" ] && [ "$count" -gt 0 ]; then body=$candidate; fi
-                  else
-                    echo "record_type=$kind: not accepted"
-                  fi
+                for kind in call-control webrtc sip messaging; do
+                  body=$(api "$base/detail_records?filter[record_type]=$kind&filter[date_range]=today&page[size]=50" 2>/dev/null) || { echo "record_type=$kind: not accepted"; continue; }
+                  printf '%s' "$body" | jq -e '.data | type == "array"' >/dev/null 2>&1 || { echo "record_type=$kind: not accepted"; continue; }
+                  count=$(printf '%s' "$body" | jq '.data | length')
+                  echo "== record_type=$kind: $count record(s) today =="
+                  [ "$count" -gt 0 ] || continue
+                  printf '%-21s %-9s %-16s %-44s %-5s %-4s %-5s %s\n' STARTED DIR FROM TO SECS CONN ATT CONNECTION
+                  printf '%s' "$body" | jq -r '.data | sort_by(.started_at // .start_time // .created_at // "") | reverse | .[] | [(.started_at // .start_time // .created_at // "-"), (.direction // "-"), (.cli // .caller_number // .from // "-"), ((.cld // .dest_number // .to // "-") | tostring | .[0:44]), ((.call_sec // .duration_sec // 0) | tostring), ((.connected // "-") | tostring), ((.attempted // "-") | tostring), (.connection_name // .connection_id // "-")] | @tsv' \
+                    | awk -F'\t' '{ printf "%-21s %-9s %-16s %-44s %-5s %-4s %-5s %s\n", $1, $2, $3, $4, $5, $6, $7, $8 }'
+                  echo
                 done
-                [ -n "$body" ] || { echo "no call records for today under any known record type"; exit 0; }
-                echo
-                printf '%-25s %-9s %-16s %-16s %-11s %-6s %-24s %-10s %s\n' START DIR FROM TO STATUS SECS HANGUP_CAUSE SOURCE CONNECTION
-                printf '%s' "$body" | jq -r '.data | sort_by(.start_time // .started_at // .created_at // "") | reverse | .[] | [(.start_time // .started_at // .created_at // "-"), (.direction // "-"), (.from // .cli // .caller_number // "-"), (.to // .cld // .dest_number // "-"), (.status // "-"), ((.duration_sec // .call_sec // .billed_sec // 0) | tostring), (.hangup_cause // .sip_hangup_cause // "-"), (.hangup_source // "-"), (.connection_name // .connection_id // "-")] | @tsv' \
-                  | awk -F'\t' '{ printf "%-25s %-9s %-16s %-16s %-11s %-6s %-24s %-10s %s\n", $1, $2, $3, $4, $5, $6, $7, $8, $9 }'
-                echo; echo "-- newest record, every field (to see what else the carrier reports) --"
-                printf '%s' "$body" | jq -c '(.data | sort_by(.start_time // .started_at // .created_at // "") | last) // {}'
               } | report "call records today"
               ;;
             route-number)
