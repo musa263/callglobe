@@ -51,38 +51,14 @@ services:
     volumes:
       - freeswitch-etc:/etc/freeswitch
       - ./freeswitch:/opt/vocivo-fs:ro
-      # Shared with the receptionist: it writes the prompts FreeSWITCH plays
-      # and reads the turns FreeSWITCH records, so both must see one path.
+      # Shared with the receptionist container, which is deployed separately
+      # by Ops · Droplets → receptionist-deploy: it writes the prompts
+      # FreeSWITCH plays and reads the turns FreeSWITCH records, so the two
+      # must see one path. It is not a compose service because its secrets
+      # would then be required to bring up the whole stack — and a missing one
+      # makes `docker compose config` reject the file, taking SIP down with it.
       - receptionist-audio:/var/lib/vocivo-receptionist
     entrypoint: ["/bin/sh", "/opt/vocivo-fs/docker-entrypoint.sh"]
-
-  # Vocivo's own AI receptionist. FreeSWITCH hands it a call over the Event
-  # Socket on loopback; it answers with faster-whisper for what the caller
-  # said and the Kokoro service for what it says back. Only the language-model
-  # turn leaves this machine.
-  receptionist:
-    build: ../receptionist
-    image: vocivo-receptionist:latest
-    restart: unless-stopped
-    network_mode: host
-    depends_on:
-      - freeswitch
-    environment:
-      RECEPTIONIST_PORT: ${RECEPTIONIST_PORT:-8084}
-      TTS_SERVICE_URL: ${RECEPTIONIST_TTS_URL:-http://127.0.0.1:8000}
-      TTS_SERVICE_SECRET: ${TTS_SERVICE_SECRET:?TTS_SERVICE_SECRET is required}
-      STT_MODEL: ${STT_MODEL:-base}
-      STT_COMPUTE_TYPE: ${STT_COMPUTE_TYPE:-int8}
-      LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY is required}
-      LLM_MODEL: ${LLM_MODEL:-claude-3-5-haiku-latest}
-      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
-      SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
-    # Speech recognition is CPU-bound and must never crowd out the processes
-    # carrying live audio.
-    cpus: 1.5
-    mem_limit: 2g
-    volumes:
-      - receptionist-audio:/var/lib/vocivo-receptionist
 
   coturn:
     image: coturn/coturn:4.6

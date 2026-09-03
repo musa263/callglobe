@@ -121,22 +121,23 @@ jobs:
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
           first_match() { head -1 || true; }
+          # A staging or backup copy of the stack has a compose file too, and
+          # picking one of those up is how sync-config came to delete the tree
+          # it had just shipped.
+          not_a_copy() { grep -v -e "/sip-backups/" -e "/vocivo-stage/" -e "/sip.new/" || true; }
           REPO_DIR="'"$REPO_DIR"'"
           COMPOSE=""
           [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/services/sip/docker-compose.yml" ] && COMPOSE="$REPO_DIR/services/sip/docker-compose.yml"
           if [ -z "$COMPOSE" ]; then
             # 1. a deployment or checkout in the usual places
-            COMPOSE=$( { find /opt /root /home /srv /var /usr/local -maxdepth 6 \( -path "*/services/sip/docker-compose.yml" -o -path "*/vocivo*/sip/docker-compose.yml" \) 2>/dev/null || true; } | first_match)
+            COMPOSE=$( { find /opt /root /home /srv /var /usr/local -maxdepth 6 \( -path "*/services/sip/docker-compose.yml" -o -path "*/vocivo*/sip/docker-compose.yml" \) 2>/dev/null || true; } | not_a_copy | first_match)
             # 2. failing that, ask Docker where the running stack was started from
             if [ -z "$COMPOSE" ]; then
-              COMPOSE=$( { docker compose ls --all --format json 2>/dev/null || true; } | tr "," "\n" | { grep -o "/[^\"]*/services/sip/docker-compose.yml" || true; } | first_match)
+              COMPOSE=$( { docker compose ls --all --format json 2>/dev/null || true; } | tr "," "\n" | { grep -o "/[^\"]*/services/sip/docker-compose.yml" || true; } | not_a_copy | first_match)
             fi
             # 3. failing that, sweep the disk once (slow, but only when nothing else worked)
             if [ -z "$COMPOSE" ]; then
-              # Staging and backup copies of the stack contain a compose file
-              # too. Picking one of those up made sync-config delete the copy it
-              # had just shipped and leave the live directory alone.
-              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker -o -path "*/sip-backups" -o -path "*/vocivo-stage" \) -prune -o \( -path "*/services/sip/docker-compose.yml" -o -path "*/sip/docker-compose.yml" \) -print 2>/dev/null || true; } | { grep -v -e "sip-backups" -e "vocivo-stage" -e "\.new/" || true; } | first_match)
+              COMPOSE=$( { find / -xdev \( -path /proc -o -path /sys -o -path /var/lib/docker \) -prune -o \( -path "*/services/sip/docker-compose.yml" -o -path "*/sip/docker-compose.yml" \) -print 2>/dev/null || true; } | not_a_copy | first_match)
             fi
           fi
           # SIP_DIR is wherever docker-compose.yml actually lives; on a droplet deployed by
@@ -269,8 +270,12 @@ jobs:
               latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
               rm -rf "$TARGET" && mv "$STAGE" "$TARGET" && rmdir /opt/vocivo-stage
               cd "$TARGET"
-              if ! docker compose config >/dev/null 2>&1; then
+              if ! why=$(docker compose config 2>&1 >/dev/null); then
+                # Say what compose objected to. The first failure here was a
+                # required variable that is not in .env, and "not valid" alone
+                # sent me looking in the wrong place.
                 echo "::error::the shipped compose file is not valid; rolling back"
+                echo "$why" | tail -5
                 rm -rf "$TARGET" && cp -a "$latest" "$TARGET"
                 exit 1
               fi
