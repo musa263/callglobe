@@ -168,12 +168,17 @@ jobs:
               # What the carrier saw for every call today: the fastest way to
               # tell "never reached the edge" from "the edge hung up".
               {
+                if ! body=$(api "$base/detail_records?filter[record_type]=voice&filter[date_range]=today&page[size]=50" 2>&1); then
+                  echo "::error::detail_records request failed"; printf '%s\n' "$body" | head -c 800; echo; exit 1
+                fi
+                if ! printf '%s' "$body" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
+                  echo "::error::unexpected detail_records response"; printf '%s\n' "$body" | head -c 800; echo; exit 1
+                fi
                 printf '%-25s %-9s %-16s %-16s %-11s %-6s %-24s %-10s %s\n' START DIR FROM TO STATUS SECS HANGUP_CAUSE SOURCE CONNECTION
-                api "$base/detail_records?filter[record_type]=voice&filter[date_range]=today&page[size]=50&sort=-start_time" \
-                  | jq -r '.data[] | [(.start_time // "-"), (.direction // "-"), (.from // .cli // "-"), (.to // .cld // "-"), (.status // "-"), ((.duration_sec // .billed_duration_sec // 0) | tostring), (.hangup_cause // "-"), (.hangup_source // "-"), (.connection_name // .connection_id // "-")] | @tsv' \
+                printf '%s' "$body" | jq -r '.data | sort_by(.start_time // .created_at // "") | reverse | .[] | [(.start_time // .created_at // "-"), (.direction // "-"), (.from // .cli // "-"), (.to // .cld // "-"), (.status // "-"), ((.duration_sec // .billed_duration_sec // 0) | tostring), (.hangup_cause // "-"), (.hangup_source // "-"), (.connection_name // .connection_id // "-")] | @tsv' \
                   | awk -F'\t' '{ printf "%-25s %-9s %-16s %-16s %-11s %-6s %-24s %-10s %s\n", $1, $2, $3, $4, $5, $6, $7, $8, $9 }'
                 echo; echo "-- newest record, every field (to see what else the carrier reports) --"
-                api "$base/detail_records?filter[record_type]=voice&filter[date_range]=today&page[size]=1&sort=-start_time" | jq -c '.data[0] // {}'
+                printf '%s' "$body" | jq -c '(.data | sort_by(.start_time // .created_at // "") | last) // {}'
               } | report "call records today"
               ;;
             route-number)
