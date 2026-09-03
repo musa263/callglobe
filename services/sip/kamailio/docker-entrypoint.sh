@@ -13,7 +13,8 @@ fi
 # is exactly what toll fraud looks like — so the allowed sources are written
 # out explicitly rather than matched against a pattern at run time.
 #
-# VOCIVO_TRUNK_SOURCES is a comma- or space-separated list of IPv4 addresses.
+# VOCIVO_TRUNK_SOURCES is a comma- or space-separated list of IPv4 addresses
+# and CIDR ranges.
 # Empty means no source is trusted, which is the safe default: inbound over the
 # trunk stays refused until somebody names the addresses it may arrive from.
 sources_file=/etc/kamailio/trunk-sources.cfg
@@ -24,14 +25,23 @@ sources_file=/etc/kamailio/trunk-sources.cfg
   printf '%s' "${VOCIVO_TRUNK_SOURCES:-}" | tr ', ' '\n\n' | while read -r address; do
     [ -n "$address" ] || continue
     case "$address" in
-      *[!0-9.]*) echo "# ignored, not an IPv4 address: $address" >&2; continue;;
+      # A range, which is what carriers actually publish: Telnyx's signalling
+      # is 192.76.120.128/26 and friends, never a list of single hosts.
+      *[0-9].[0-9]*/[0-9]*)
+        printf '    if (is_ip_in_subnet($si, "%s")) { $var(from_trunk) = 1; }\n' "$address"
+        ;;
+      *[!0-9.]*)
+        echo "kamailio: ignoring trunk source, not an address or range: $address" >&2
+        ;;
+      *)
+        printf '    if ($si == "%s") { $var(from_trunk) = 1; }\n' "$address"
+        ;;
     esac
-    printf '    if ($si == "%s") { $var(from_trunk) = 1; }\n' "$address"
   done
   echo '}'
 } > "$sources_file"
 # grep -c prints 0 and exits 1 when it matches nothing; || true keeps that from
 # ending the script and from printing the count twice.
-echo "kamailio: trunk sources -> $(grep -c 'from_trunk) = 1' "$sources_file" || true) address(es)"
+echo "kamailio: trunk sources -> $(grep -c 'from_trunk) = 1' "$sources_file" || true) entr(ies)"
 
 exec kamailio -DD -E

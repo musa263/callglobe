@@ -28,3 +28,29 @@ Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INB
 
 - Web: SIP.js over `VOCIVO_SIP_WSS_URI` when `VOCIVO_VOICE_EDGE=sip`.
 - iOS: Telnyx SDK remains the default. Vocivo SIP + CallKit is used only when the native module is linked.
+
+## Inbound over the trunk
+
+Two switches, both off by default, and a call is only accepted when both are on:
+
+- `VOCIVO_SIP_INBOUND=1` — also set on the API (Vercel), which is what makes
+  `/api/voice/sip-inbound` return a routing `action` instead of `call_control`.
+- `VOCIVO_TRUNK_SOURCES` — the carrier's signalling addresses and ranges,
+  comma- or space-separated. Anything not on this list sending an E.164 INVITE
+  to public 5060 is refused, because that is what toll fraud looks like.
+
+Telnyx publishes its SIP signalling ranges per region
+([support.telnyx.com](https://support.telnyx.com/en/articles/1130687-whitelisting-telnyx-ip-addresses)).
+For a US account:
+
+```
+VOCIVO_TRUNK_SOURCES=192.76.120.128/26,192.76.120.192/27,64.16.250.0/24
+```
+
+Add the EMEA (`185.246.41.0/26`) or APAC (`103.115.244.0/26`) range only if the
+account's numbers are anchored there — every range added is a range that may
+originate a call on the account.
+
+The list is rendered into `/etc/kamailio/trunk-sources.cfg` at container start
+and included by `kamailio.cfg`, so `docker compose logs kamailio` reports how
+many entries were accepted and names any it could not parse.
