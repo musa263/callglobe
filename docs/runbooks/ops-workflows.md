@@ -44,7 +44,9 @@ them from the secrets store.
 | `status` | Current commit, `VOCIVO_SIP_INBOUND` flag, env key names, container state, `sofia status`. |
 | `logs` | Last 200 lines from FreeSWITCH, Kamailio and RTPEngine. |
 | `deploy` | Pulls images and `docker compose up -d`. On `vocivo-sip` there is **no git checkout**, so nothing is pulled from source and config changes are not delivered this way — the action says so in its output. |
-| `enable-inbound` / `disable-inbound` | Flips `VOCIVO_SIP_INBOUND` in the edge `.env` and recreates FreeSWITCH, then shows the module/binding log lines. Flip the same flag on Vercel. |
+| `sync-config` | Ships `services/sip` from the checked-out commit to `/opt/vocivo/sip`, keeping the droplet's `.env`. Before anything is swapped it checks that every module `kamailio.cfg` loads exists in the pinned Kamailio image, and it backs the live tree up to `/opt/vocivo/sip-backups/<timestamp>` first; a compose file the droplet rejects is rolled back automatically. This is how configuration reaches `vocivo-sip`. |
+| `rollback-config` | Restores the newest backup over `/opt/vocivo/sip` (keeping `.env`) and recreates the containers. |
+| `enable-inbound` / `disable-inbound` | Flips `VOCIVO_SIP_INBOUND` in the edge `.env` and recreates Kamailio and then FreeSWITCH, checking that Kamailio came back. `enable-inbound` also needs `trunk_sources`: the carrier's SIP signalling addresses and ranges, comma-separated (Telnyx US: `192.76.120.128/26,192.76.120.192/27,64.16.250.0/24`). They are validated on the runner and written to `VOCIVO_TRUNK_SOURCES`; Kamailio accepts an E.164 INVITE on public 5060 only from those sources, and only while the flag is `1`. Flip the same flag on Vercel. |
 | `tts-deploy` | Ships `services/tts` to the droplet (it is not a checkout), builds it, writes `/etc/vocivo/tts.env` from secrets, and runs the container on `127.0.0.1:8000` capped at 1.5 CPU / 2 GB so synthesis cannot starve the real-time SIP processes. When `TTS_PUBLIC_BASE_URL` has a path, it also adds an nginx `location` under the edge's existing TLS vhost, backing the vhost up and rolling back if `nginx -t` rejects it, then warms two voices (the first synthesis downloads the model and is slow). |
 | `tts-status` | Container state and an unauthenticated health probe (expects 401). |
 
@@ -53,7 +55,7 @@ them from the secrets store.
 | action | effect |
 |---|---|
 | `list-connections` | Call Control applications, FQDN/IP trunks, credential connections — with ids. |
-| `show-connection` | One connection's inbound/outbound settings, its authorised IPs or FQDNs (where Telnyx will send inbound INVITEs), and the numbers on it. Run this on the trunk **before** the first `route-number` and confirm the IP is the SIP edge on port 5080. |
+| `show-connection` | One connection's inbound/outbound settings, its authorised IPs or FQDNs (where Telnyx will send inbound INVITEs), and the numbers on it. Run this on the trunk **before** the first `route-number` and confirm the authorised IP is the SIP edge on port **5060** (Kamailio), not 5080. |
 | `set-trunk-port` | Moves every authorised IP entry on an IP trunk to `port` (5060/5061/5080). **Do not use this to move inbound to 5080 on vocivo-sip:** FreeSWITCH there binds `127.0.0.1:5080` and is unreachable from the internet, so the carrier must keep delivering to Kamailio on **5060**. See `docs/sip-edge-reconciliation.md`. |
 | `list-numbers` | Every number with its current connection. |
 | `show-number` | One number's routing and messaging profile. |
@@ -61,19 +63,20 @@ them from the secrets store.
 
 ## Cut-over order for inbound
 
-**Blocked.** Inbound cannot be cut over until the two competing inbound designs are resolved and Kamailio learns
-to accept the carrier — see `docs/sip-edge-reconciliation.md`. In particular the live FreeSWITCH inbound dialplan
-expects an `action` field that `/api/voice/sip-inbound` does not return, and Kamailio answers `403` to E.164
-INVITEs arriving on public 5060, which is where Telnyx delivers. Moving a DID today would fail the call.
-
-Once that is settled the order is:
+The two inbound designs are reconciled (`docs/sip-edge-reconciliation.md`, update of 3 September 2026):
+`/api/voice/sip-inbound` returns the `action` the deployed dialplan branches on, and Kamailio accepts an E.164
+INVITE on public 5060 when — and only when — it comes from a listed carrier address and `VOCIVO_SIP_INBOUND=1`.
 
 1. Ops · Vercel → `show VOCIVO_VOICE_EDGE`; set to `sip` and verify a browser call (internal, then outbound).
-2. Ops · Droplets → `deploy`, then `status` (confirm Kamailio on 5060 and FreeSWITCH on 127.0.0.1:5080).
-3. Ops · Droplets → `enable-inbound`; Ops · Vercel → `set VOCIVO_SIP_INBOUND 1`.
-4. Ops · Telnyx → `route-number` for **one test DID** onto the IP trunk (which already points at 5060); call it;
-   check `logs`.
-5. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id.
+2. Ops · Droplets → `sync-config` (ships the Kamailio config that knows about the carrier), then `status`
+   (confirm Kamailio on 5060 and FreeSWITCH on 127.0.0.1:5080).
+3. Ops · Droplets → `enable-inbound` with `trunk_sources` set to the carrier's ranges; the Kamailio log line
+   `trunk sources -> N entr(ies)` in the output confirms they were rendered. Then Ops · Vercel →
+   `set VOCIVO_SIP_INBOUND 1`.
+4. Ops · Telnyx → `show-connection` on the IP trunk: the authorised IP must be the edge on port 5060. Then
+   `route-number` for **one test DID** onto the trunk; call it; check `logs`.
+5. Repeat `route-number` per DID. Roll back a DID by routing it back to the Call Control application id; roll
+   the edge back with `disable-inbound` (and `rollback-config` if the shipped configuration itself is at fault).
 
 Known ids (this account, September 2026): Call Control application `3033560124078688149` ("Vocivo Voice System"),
 IP trunk `3035898149177656815` ("Vocivo Dedicated PBX" → 168.144.183.82). The account currently has a single DID.

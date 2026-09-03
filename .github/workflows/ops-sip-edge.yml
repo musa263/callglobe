@@ -31,6 +31,7 @@ on:
           - logs
           - deploy
           - sync-config
+          - rollback-config
           - enable-inbound
           - disable-inbound
           - tts-deploy
@@ -43,6 +44,10 @@ on:
         type: choice
         default: sip
         options: [sip, pbx]
+      trunk_sources:
+        description: enable-inbound only — the carrier's SIP signalling addresses and ranges, comma-separated (e.g. 192.76.120.128/26,64.16.250.0/24)
+        required: false
+        type: string
 
 concurrency:
   group: ops-droplet-${{ inputs.host }}
@@ -107,6 +112,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           SIP_EDGE_SECRET: ${{ secrets.SIP_EDGE_SECRET }}
+          TRUNK_SOURCES: ${{ inputs.trunk_sources }}
         run: |
           set -euo pipefail
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
@@ -264,6 +270,24 @@ jobs:
               # keeps finding two stacks.
               rm -rf /opt/vocivo/sip.new
               [ -d "$STAGE" ] || { echo "::error::nothing was staged at $STAGE"; exit 1; }
+              # A loadmodule for a module the image does not ship stops Kamailio
+              # from starting at all, and the sync would only notice once every
+              # registration had gone with it. Check the staged config against
+              # the real image before anything is swapped.
+              image=$(sed -nE "s/^\s*image:\s*(ghcr.io\/kamailio[^ ]*).*/\1/p" "$STAGE/docker-compose.yml" | head -1)
+              if [ -n "$image" ]; then
+                # Where the modules live differs between the Alpine and Debian
+                # builds, so list every place they could be rather than assume one.
+                shipped=$(docker run --rm --network none --entrypoint sh "$image" -c "ls /usr/lib/kamailio/modules /usr/lib/*/kamailio/modules /usr/lib64/kamailio/modules /usr/local/lib/kamailio/modules 2>/dev/null" || true)
+                # Here-strings, not pipes: grep -q closes its input early, and
+                # under pipefail the writer dying of SIGPIPE would abort the sync.
+                grep -q "\.so$" <<< "$shipped" || { echo "::error::could not list the modules in $image; nothing was changed"; exit 1; }
+                for module in $(sed -nE "s/^loadmodule \"([a-z_0-9]+)\.so\".*/\1/p" "$STAGE/kamailio/kamailio.cfg"); do
+                  grep -qx "$module.so" <<< "$shipped" \
+                    || { echo "::error::kamailio.cfg loads $module.so but $image does not ship it; nothing was changed"; exit 1; }
+                done
+                echo "every module kamailio.cfg loads exists in $image"
+              fi
               # .env holds the secrets and is not in the repository; it is the one
               # file that survives a sync.
               if [ -f "$TARGET/.env" ]; then cp "$TARGET/.env" "$STAGE/.env"; fi
@@ -286,12 +310,47 @@ jobs:
               ';;
             enable-inbound|disable-inbound)
               flag=$([ "$ACTION" = enable-inbound ] && echo 1 || echo 0)
+              # The carrier's signalling addresses. Validated here, on the
+              # runner, because this list is the one thing between an open
+              # 5060 and a toll-fraud bill: only dotted IPv4, optionally /n.
+              sources=""
+              if [ "$ACTION" = enable-inbound ]; then
+                [ -n "$TRUNK_SOURCES" ] || { echo "::error::enable-inbound needs trunk_sources — the carrier's signalling ranges. Without them every inbound INVITE is refused."; exit 1; }
+                for entry in $(printf '%s' "$TRUNK_SOURCES" | tr ',' ' '); do
+                  [[ "$entry" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$ ]] || { echo "::error::not an IPv4 address or range: $entry"; exit 1; }
+                done
+                sources=$(printf '%s' "$TRUNK_SOURCES" | tr -d ' ')
+              fi
               remote="$remote"'
               cd "$SIP_DIR"
-              if grep -qE "^VOCIVO_SIP_INBOUND=" .env; then sed -i -E "s/^VOCIVO_SIP_INBOUND=.*/VOCIVO_SIP_INBOUND='"$flag"'/" .env; else echo "VOCIVO_SIP_INBOUND='"$flag"'" >> .env; fi
-              grep -E "^VOCIVO_SIP_INBOUND=" .env
+              set_env() {
+                if grep -qE "^$1=" .env; then sed -i -E "s#^$1=.*#$1=$2#" .env; else echo "$1=$2" >> .env; fi
+              }
+              set_env VOCIVO_SIP_INBOUND "'"$flag"'"
+              if [ "'"$ACTION"'" = enable-inbound ]; then set_env VOCIVO_TRUNK_SOURCES "'"$sources"'"; fi
+              grep -E "^VOCIVO_SIP_INBOUND=|^VOCIVO_TRUNK_SOURCES=" .env
+              # Both read the flag: Kamailio to accept the INVITE, FreeSWITCH
+              # to route it. Kamailio first, so the edge is ready before the
+              # switch behind it is.
+              docker compose up -d --force-recreate kamailio && sleep 5
+              docker compose logs --tail=30 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL|error" || echo "kamailio: no errors in the last 30 lines"; }
+              kamailio_ps=$(docker compose ps kamailio)
+              echo "$kamailio_ps"
+              grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back"; exit 1; }
               docker compose up -d --force-recreate freeswitch && sleep 8 && docker compose ps freeswitch
               docker compose logs --tail=40 --no-color freeswitch | { grep -E "Vocivo:|xml_curl|mod_http_cache|mod_shout|ERR|CRIT" || true; }
+              ';;
+            rollback-config)
+              remote="$remote"'
+              latest=$( { ls -1d /opt/vocivo/sip-backups/* 2>/dev/null || true; } | tail -1)
+              [ -n "$latest" ] || { echo "::error::there is no backup to roll back to"; exit 1; }
+              echo "rolling back to $latest"
+              # .env is the one file a sync keeps; a rollback keeps it too.
+              rm -f /tmp/vocivo-env.keep
+              if [ -f /opt/vocivo/sip/.env ]; then cp /opt/vocivo/sip/.env /tmp/vocivo-env.keep; fi
+              rm -rf /opt/vocivo/sip && cp -a "$latest" /opt/vocivo/sip
+              if [ -f /tmp/vocivo-env.keep ]; then cp /tmp/vocivo-env.keep /opt/vocivo/sip/.env; fi
+              cd /opt/vocivo/sip && docker compose up -d --force-recreate && sleep 8 && docker compose ps
               ';;
             tts-deploy)
               [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is required"; exit 1; }
