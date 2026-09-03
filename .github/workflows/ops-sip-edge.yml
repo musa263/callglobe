@@ -233,6 +233,8 @@ jobs:
               for d in kamailio freeswitch nginx; do [ -d "$d" ] && { echo "[$d]"; find "$d" -maxdepth 3 -type f -printf "  %p (%s bytes)\n" 2>/dev/null | head -30; }; done
               echo "--- freeswitch sip profiles in the container ---"
               docker compose exec -T freeswitch sh -c "ls /etc/freeswitch/sip_profiles 2>/dev/null; grep -hE \"sip-port|sip-ip|ext-sip-ip\" /etc/freeswitch/sip_profiles/*.xml 2>/dev/null" 2>/dev/null || echo "(could not read profiles)"
+              echo "--- freeswitch loggers in the container ---"
+              docker compose exec -T freeswitch sh -c "for f in logfile console; do echo \"[\$f.conf.xml]\"; grep -vE \"^\\s*(<!--|-->|$)\" /etc/freeswitch/autoload_configs/\$f.conf.xml 2>/dev/null | head -40; done" 2>/dev/null || echo "(could not read logger config)"
               ';;
             status)
               remote="$remote"'
@@ -258,7 +260,8 @@ jobs:
               done
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
               echo "--- freeswitch log levels (core / console) ---"
-              docker compose exec -T freeswitch fs_cli -x "fsctl loglevel" 2>/dev/null || true
+              # Never "fsctl loglevel" with no argument: it passes -1 and DISABLES the core log.
+              docker compose exec -T freeswitch fs_cli -x "fsctl loglevel debug" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "console loglevel" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "module_exists mod_console" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "module_exists mod_logfile" 2>/dev/null || true
