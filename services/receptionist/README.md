@@ -71,9 +71,12 @@ failing halfway through a stranger's call.
 
 ## Where it listens
 
-Loopback only. The Event Socket has no authentication in outbound mode, so
-nothing outside the droplet should be able to reach port 8084 — the firewall
-matters here as much as the code does.
+`127.0.0.1:8084`, and that is the default rather than something the deployment
+has to remember. The Event Socket has no authentication in outbound mode, so a
+process that can reach this port can answer calls — and the SIP droplet has no
+host firewall, so binding `0.0.0.0` would have put it on the public internet.
+Both this service and FreeSWITCH run with host networking, so loopback is all
+either of them needs.
 
 ## Tests
 

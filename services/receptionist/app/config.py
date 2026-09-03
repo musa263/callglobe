@@ -14,8 +14,11 @@ class Settings:
     required; the rest describe where things live.
     """
 
-    #: Where FreeSWITCH's outbound Event Socket connects.
-    listen_host: str = "0.0.0.0"
+    #: Where FreeSWITCH's outbound Event Socket connects. Loopback, and not
+    #: configurable to anything else by accident: the Event Socket has no
+    #: authentication in outbound mode, so a process that can reach this port
+    #: can answer calls. The droplet has no host firewall.
+    listen_host: str = "127.0.0.1"
     listen_port: int = 8084
 
     #: Vocivo's own speech engine. Loopback on the SIP edge; the public URL
