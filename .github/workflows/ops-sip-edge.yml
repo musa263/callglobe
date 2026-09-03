@@ -257,6 +257,12 @@ jobs:
                 printf "%s: " "$module"; docker compose exec -T freeswitch fs_cli -x "module_exists $module" 2>/dev/null || echo "unknown"
               done
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
+              echo "--- freeswitch log levels (core / console) ---"
+              docker compose exec -T freeswitch fs_cli -x "fsctl loglevel" 2>/dev/null || true
+              docker compose exec -T freeswitch fs_cli -x "console loglevel" 2>/dev/null || true
+              docker compose exec -T freeswitch fs_cli -x "module_exists mod_console" 2>/dev/null || true
+              docker compose exec -T freeswitch fs_cli -x "module_exists mod_logfile" 2>/dev/null || true
+              docker compose exec -T freeswitch sh -c "ls -la /var/log/freeswitch/ 2>/dev/null | head -5; readlink -f /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null || true
               ';;
             logs)
               since="${SINCE:-30m}"
