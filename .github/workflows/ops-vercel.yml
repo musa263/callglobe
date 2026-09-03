@@ -14,6 +14,13 @@ name: Ops · Vercel
 # read from the secrets store, never typed into a dispatch form.
 
 on:
+  # Also startable through the API with a token that can write the
+  # repository's contents, for when the "Run workflow" form will not load:
+  #   POST /repos/musa263/vocivo/dispatches
+  #   {"event_type":"ops-vercel","client_payload":{"action":"...", ...}}
+  # The payload keys mirror the inputs below and are validated the same way.
+  repository_dispatch:
+    types: [ops-vercel]
   workflow_dispatch:
     inputs:
       action:
@@ -51,7 +58,7 @@ env:
 
 jobs:
   vercel:
-    name: ${{ inputs.action }} ${{ inputs.name }}
+    name: ${{ (inputs.action || github.event.client_payload.action) }} ${{ (inputs.name || github.event.client_payload.name) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -62,11 +69,15 @@ jobs:
 
       - name: Validate inputs
         env:
-          ACTION: ${{ inputs.action }}
-          NAME: ${{ inputs.name }}
-          VALUE: ${{ inputs.value }}
+          ACTION: ${{ (inputs.action || github.event.client_payload.action) }}
+          NAME: ${{ (inputs.name || github.event.client_payload.name) }}
+          VALUE: ${{ (inputs.value || github.event.client_payload.value) }}
         run: |
           set -euo pipefail
+          case "$ACTION" in
+            show|set|delete|redeploy|sync-push-credentials|sync-tts) ;;
+            *) echo "::error::unknown action '$ACTION'"; exit 1;;
+          esac
           if [ "$ACTION" != "redeploy" ] && [ "$ACTION" != "sync-push-credentials" ] && [ "$ACTION" != "sync-tts" ]; then
             [[ "$NAME" =~ ^[A-Z][A-Z0-9_]{1,80}$ ]] || { echo "::error::name must look like VOCIVO_VOICE_EDGE"; exit 1; }
           fi
@@ -75,11 +86,11 @@ jobs:
           if [ -n "$VALUE" ]; then echo "::add-mask::$VALUE"; fi
 
       - name: Show
-        if: inputs.action == 'show'
+        if: (inputs.action || github.event.client_payload.action) == 'show'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          NAME: ${{ inputs.name }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          NAME: ${{ (inputs.name || github.event.client_payload.name) }}
+          ENVIRONMENT: ${{ (inputs.environment || github.event.client_payload.environment || 'production') }}
         run: |
           set -euo pipefail
           [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
@@ -101,12 +112,12 @@ jobs:
           echo "::notice title=show $NAME::$(tr '\n' ' ' < /tmp/show.txt)"
 
       - name: Set
-        if: inputs.action == 'set'
+        if: (inputs.action || github.event.client_payload.action) == 'set'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          NAME: ${{ inputs.name }}
-          VALUE: ${{ inputs.value }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          NAME: ${{ (inputs.name || github.event.client_payload.name) }}
+          VALUE: ${{ (inputs.value || github.event.client_payload.value) }}
+          ENVIRONMENT: ${{ (inputs.environment || github.event.client_payload.environment || 'production') }}
         run: |
           set -euo pipefail
           [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
@@ -118,11 +129,11 @@ jobs:
           done
 
       - name: Delete
-        if: inputs.action == 'delete'
+        if: (inputs.action || github.event.client_payload.action) == 'delete'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          NAME: ${{ inputs.name }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          NAME: ${{ (inputs.name || github.event.client_payload.name) }}
+          ENVIRONMENT: ${{ (inputs.environment || github.event.client_payload.environment || 'production') }}
         run: |
           set -euo pipefail
           [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN secret is missing (Settings → Secrets and variables → Actions)"; exit 1; }
@@ -139,7 +150,7 @@ jobs:
       # store rather than taken as an input, because workflow_dispatch inputs are
       # visible in the run's metadata to anyone who can read the repository.
       - name: Sync push credentials
-        if: inputs.action == 'sync-push-credentials'
+        if: (inputs.action || github.event.client_payload.action) == 'sync-push-credentials'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
@@ -177,7 +188,7 @@ jobs:
       # that fronts it is, and the two are useless apart — so they are set
       # together and the secret never leaves the secrets store.
       - name: Sync TTS service
-        if: inputs.action == 'sync-tts'
+        if: (inputs.action || github.event.client_payload.action) == 'sync-tts'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           TTS_SERVICE_SECRET: ${{ secrets.TTS_SERVICE_SECRET }}
@@ -213,7 +224,7 @@ jobs:
           { echo "### sync-tts"; echo; echo "TTS_SERVICE_URL set to $url; health answered $code"; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Redeploy production
-        if: inputs.action == 'redeploy' || inputs.action == 'sync-push-credentials' || inputs.action == 'sync-tts' || ((inputs.action == 'set' || inputs.action == 'delete') && inputs.redeploy)
+        if: (inputs.action || github.event.client_payload.action) == 'redeploy' || (inputs.action || github.event.client_payload.action) == 'sync-push-credentials' || (inputs.action || github.event.client_payload.action) == 'sync-tts' || (((inputs.action || github.event.client_payload.action) == 'set' || (inputs.action || github.event.client_payload.action) == 'delete') && (inputs.redeploy || github.event.client_payload.redeploy))
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |

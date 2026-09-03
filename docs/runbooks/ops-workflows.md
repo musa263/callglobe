@@ -20,6 +20,21 @@ Repository → **Settings → Secrets and variables → Actions**.
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_AUTH_KEY`, `APNS_TOPIC` | Ops · Vercel (sync-push-credentials) | Apple Developer → Keys → a key with APNs enabled. `APNS_AUTH_KEY` is the whole `.p8`, `APNS_TOPIC` is the bundle id (`app.vocivo.mobile`). |
 | `FCM_SERVICE_ACCOUNT` | Ops · Vercel (sync-push-credentials) | Firebase → Project settings → Service accounts → Generate new private key; the whole JSON. |
 
+Every one of these workflows can also be started through the API, for the times the **Run workflow** form
+will not load (it failed to for a quarter of an hour on 3 September while the edge was down). A fine-grained
+token with *Contents: read and write* on the repository is enough:
+
+```bash
+curl -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+  https://api.github.com/repos/musa263/vocivo/dispatches \
+  -d '{"event_type":"ops-sip-edge","client_payload":{"action":"status","host":"sip"}}'
+```
+
+`event_type` is `ops-sip-edge`, `ops-vercel` or `ops-telnyx`; the `client_payload` keys are the form's inputs
+by name (`environment` and `host` default to `production` and `sip`; pass `"redeploy": true` explicitly for a
+Vercel `set`). Anything but a listed action is refused. A 204 means the run was queued; find it under
+`GET /repos/musa263/vocivo/actions/workflows/<file>/runs?event=repository_dispatch`.
+
 Variables (same page, *Variables* tab, all optional): `OPS_SSH_USER` (default `root`), `SIP_EDGE_REPO_DIR`
 (auto-discovered when unset), `TTS_PUBLIC_BASE_URL` (https URL the TTS service is served at).
 

@@ -8,6 +8,13 @@ name: Ops · Telnyx
 # Required repository secret: TELNYX_API_KEY
 
 on:
+  # Also startable through the API with a token that can write the
+  # repository's contents, for when the "Run workflow" form will not load:
+  #   POST /repos/musa263/vocivo/dispatches
+  #   {"event_type":"ops-telnyx","client_payload":{"action":"...", ...}}
+  # The payload keys mirror the inputs below and are validated the same way.
+  repository_dispatch:
+    types: [ops-telnyx]
   workflow_dispatch:
     inputs:
       action:
@@ -34,18 +41,22 @@ concurrency:
 
 jobs:
   telnyx:
-    name: ${{ inputs.action }} ${{ inputs.number }}
+    name: ${{ (inputs.action || github.event.client_payload.action) }} ${{ (inputs.number || github.event.client_payload.number) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Validate inputs
         env:
-          ACTION: ${{ inputs.action }}
-          NUMBER: ${{ inputs.number }}
-          CONNECTION_ID: ${{ inputs.connection_id }}
-          PORT: ${{ inputs.port }}
+          ACTION: ${{ (inputs.action || github.event.client_payload.action) }}
+          NUMBER: ${{ (inputs.number || github.event.client_payload.number) }}
+          CONNECTION_ID: ${{ (inputs.connection_id || github.event.client_payload.connection_id) }}
+          PORT: ${{ (inputs.port || github.event.client_payload.port) }}
         run: |
           set -euo pipefail
+          case "$ACTION" in
+            list-connections|show-connection|set-trunk-port|list-numbers|show-number|route-number) ;;
+            *) echo "::error::unknown action '$ACTION'"; exit 1;;
+          esac
           case "$ACTION" in
             show-number|route-number)
               [[ "$NUMBER" =~ ^\+[1-9][0-9]{6,14}$ ]] || { echo "::error::number must be E.164, e.g. +15551230000"; exit 1; };;
@@ -61,10 +72,10 @@ jobs:
       - name: Run
         env:
           TELNYX_API_KEY: ${{ secrets.TELNYX_API_KEY }}
-          ACTION: ${{ inputs.action }}
-          NUMBER: ${{ inputs.number }}
-          CONNECTION_ID: ${{ inputs.connection_id }}
-          PORT: ${{ inputs.port }}
+          ACTION: ${{ (inputs.action || github.event.client_payload.action) }}
+          NUMBER: ${{ (inputs.number || github.event.client_payload.number) }}
+          CONNECTION_ID: ${{ (inputs.connection_id || github.event.client_payload.connection_id) }}
+          PORT: ${{ (inputs.port || github.event.client_payload.port) }}
         run: |
           set -euo pipefail
           [ -n "$TELNYX_API_KEY" ] || { echo "::error::TELNYX_API_KEY secret is missing"; exit 1; }
