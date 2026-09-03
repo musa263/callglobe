@@ -20,12 +20,16 @@ jest.mock('@react-native-community/netinfo', () => {
 jest.mock('@telnyx/react-voice-commons-sdk', () => {
   const React = require('react');
   return {
+    // The real SDK's enums are uppercase (models/call-state.d.ts). They were
+    // mocked lowercase here, which the app never noticed because it compared
+    // against these same mocked values.
     TelnyxCallState: {
-      RINGING: 'ringing', CONNECTING: 'connecting', ACTIVE: 'active', HELD: 'held',
-      ENDED: 'ended', FAILED: 'failed', DROPPED: 'dropped',
+      RINGING: 'RINGING', CONNECTING: 'CONNECTING', ACTIVE: 'ACTIVE', HELD: 'HELD',
+      ENDED: 'ENDED', FAILED: 'FAILED', DROPPED: 'DROPPED',
     },
     TelnyxConnectionState: {
-      CONNECTED: 'connected', DISCONNECTED: 'disconnected', ERROR: 'error', CONNECTING: 'connecting',
+      CONNECTED: 'CONNECTED', DISCONNECTED: 'DISCONNECTED', ERROR: 'ERROR',
+      CONNECTING: 'CONNECTING', RECONNECTING: 'RECONNECTING',
     },
     createTokenConfig: jest.fn((token, options) => ({ type: 'token', token, ...options })),
     TelnyxVoipClient: { isLaunchedFromPushNotification: jest.fn(async () => false) },
@@ -75,13 +79,13 @@ jest.mock('../../src/lib/voipClient', () => {
     get subscriberCount() { return this.listeners.size; }
   }
 
-  const connectionState$ = new TestSubject('connected');
+  const connectionState$ = new TestSubject('CONNECTED');
   const calls$ = new TestSubject([]);
   const activeCall$ = new TestSubject(null);
   const state = { calls: [] as any[], active: null as any };
   const voipClient: any = {
     connectionState$, calls$, activeCall$,
-    get currentConnectionState() { return 'connected'; },
+    get currentConnectionState() { return 'CONNECTED'; },
     get currentCalls() { return state.calls; },
     get currentActiveCall() { return state.active; },
     getCall: jest.fn((id: string) => state.calls.find((call) => call.callId === id)),
@@ -98,6 +102,12 @@ jest.mock('../../src/lib/voipClient', () => {
 
   return {
     voipClient,
+    // The real module re-exports this from the SDK; engines.ts reads it here.
+    VoicePnBridge: {
+      endCall: jest.fn(async () => true),
+      hideIncomingCallNotification: jest.fn(async () => true),
+      toggleSpeaker: jest.fn(async () => true),
+    },
     getVoicePushToken: jest.fn(async () => undefined),
     loadVoiceSession: jest.fn(async () => null),
     persistVoiceSession: jest.fn(async () => undefined),
@@ -108,6 +118,7 @@ import { TelnyxConnectionState, TelnyxVoipClient, VoicePnBridge } from '@telnyx/
 import NetInfo from '@react-native-community/netinfo';
 import { VoiceProvider, VoiceRoot, useVoice } from '../../src/context/VoiceContext';
 import { loadVoiceSession, persistVoiceSession, voipClient } from '../../src/lib/voipClient';
+import { voice } from '../../src/voice/voiceClientFacade';
 
 function immediateSubject<T>(initial: T) {
   const listeners = new Set<(value: T) => void>();
@@ -123,11 +134,11 @@ function immediateSubject<T>(initial: T) {
 
 test('mounted VoiceProvider confirms already-active media and tears down on transport loss', async () => {
   const observed: { current: ReturnType<typeof useVoice> | null } = { current: null };
-  const callState$ = immediateSubject('active');
+  const callState$ = immediateSubject('ACTIVE');
   let packets = 0;
   const call = {
     callId: 'mounted-active-call',
-    currentState: 'active',
+    currentState: 'ACTIVE',
     currentDuration: 0,
     currentIsMuted: false,
     currentIsHeld: false,
@@ -167,6 +178,15 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
     return null;
   }
 
+  // In the app this is what useVoiceRegistration does once /api/voice/config
+  // has said which edge serves this tenant. The test stands in for it so the
+  // context has an engine to talk to.
+  voice.use('telnyx', voipClient as any, {
+    toggleSpeaker: async () => false,
+    endNativeCall: async (callId: string) => { await VoicePnBridge.endCall(callId); },
+    hideIncomingCallUi: async () => {},
+  });
+
   let tree: TestRenderer.ReactTestRenderer;
   await act(async () => {
     tree = TestRenderer.create(<VoiceProvider><Probe /></VoiceProvider>);
@@ -204,6 +224,10 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
 
   await act(async () => tree!.unmount());
   expect(callState$.subscriberCount).toBe(0);
+  // The context lets go of the client it talks to...
+  expect(voice.connectionState$.observerCount).toBe(0);
+  // ...and the client lets go of the engine underneath it.
+  voice.detach();
   expect((voipClient as any).connectionState$.subscriberCount).toBe(0);
 });
 

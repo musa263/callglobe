@@ -88,6 +88,23 @@ export async function setVocivoSipSpeaker(on: boolean) {
   await vocivoSipModule()?.setSpeaker(on).catch(() => undefined);
 }
 
+/**
+ * Flips the audio route and reports where it ended up.
+ *
+ * The bridge is the one that knows the current route, because the native
+ * module's own speaker state is only meaningful while a call is up.
+ */
+export async function toggleVocivoSipSpeaker() {
+  const next = !ensureBridge().bridge.speakerOn;
+  await setVocivoSipSpeaker(next);
+  return next;
+}
+
+/** Takes a call off the system call screen when the engine no longer can. */
+export async function endVocivoSipCallUi(callId: string) {
+  await vocivoSipModule()?.reportCallEnded({ callId, reason: 'ended' }).catch(() => undefined);
+}
+
 /** True when this build can show a native incoming-call screen. */
 export async function callUiAvailable() {
   const native = vocivoSipModule();

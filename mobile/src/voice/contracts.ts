@@ -1,4 +1,4 @@
-import type { TelnyxConnectionState } from '@telnyx/react-voice-commons-sdk';
+import type { VoiceConnectionState } from './voiceEngine';
 import type { ActiveCall, CallerNumber, CallRate, MergedConference } from '../types';
 
 export type VoiceIceServer = {
@@ -21,7 +21,7 @@ export type VoiceLoginConfig = {
 };
 
 export type VoiceContextValue = {
-  connection: TelnyxConnectionState;
+  connection: VoiceConnectionState;
   activeCall: ActiveCall | null;
   waitingCall: ActiveCall | null;
   heldCall: ActiveCall | null;

@@ -33,6 +33,15 @@ export type VoiceCall = {
   readonly currentIsHeld: boolean;
   readonly currentDuration: number;
 
+  /**
+   * The call's peer connection, when the engine has one to offer.
+   *
+   * `voiceRecovery` uses it to notice ICE failure and restart media, which is
+   * what keeps a call alive when a phone moves from wifi to cellular — the
+   * normal case for this app, not an edge case.
+   */
+  readonly peerConnection?: unknown;
+
   readonly callState$: VoiceObservable<VoiceCallState>;
   readonly isMuted$: VoiceObservable<boolean>;
   readonly isHeld$: VoiceObservable<boolean>;
@@ -108,6 +117,32 @@ export type SipEventMap = {
 export type SipEventSource = {
   addListener<K extends SipEventName>(event: K, listener: (payload: SipEventMap[K]) => void): { remove: () => void };
 };
+
+/**
+ * Named constants for the two vocabularies.
+ *
+ * The app used the carrier SDK's enums for these, which meant every file that
+ * reasoned about a call state imported the carrier SDK — including files that
+ * now run against Vocivo's own edge and never touch it. The values are
+ * unchanged, so this is a change of dependency, not of behaviour.
+ */
+export const CallState = {
+  CONNECTING: 'CONNECTING',
+  RINGING: 'RINGING',
+  ACTIVE: 'ACTIVE',
+  HELD: 'HELD',
+  ENDED: 'ENDED',
+  FAILED: 'FAILED',
+  DROPPED: 'DROPPED',
+} as const satisfies Record<string, VoiceCallState>;
+
+export const ConnectionState = {
+  DISCONNECTED: 'DISCONNECTED',
+  CONNECTING: 'CONNECTING',
+  CONNECTED: 'CONNECTED',
+  RECONNECTING: 'RECONNECTING',
+  ERROR: 'ERROR',
+} as const satisfies Record<string, VoiceConnectionState>;
 
 const callStates: VoiceCallState[] = ['CONNECTING', 'RINGING', 'ACTIVE', 'HELD', 'ENDED', 'FAILED', 'DROPPED'];
 

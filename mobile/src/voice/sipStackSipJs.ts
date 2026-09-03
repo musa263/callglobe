@@ -134,6 +134,10 @@ class SipJsSession implements SipSessionHandle {
     return this.ended;
   }
 
+  peerConnection() {
+    return this.currentPeerConnection();
+  }
+
   async accept() {
     if (!(this.session instanceof Invitation)) throw new Error('Only an incoming call can be answered.');
     await this.session.accept({ sessionDescriptionHandlerOptions: { constraints: audioOnly } });
@@ -168,7 +172,7 @@ class SipJsSession implements SipSessionHandle {
   async setMuted(on: boolean) {
     // Mute is local only: stopping the track would renegotiate and the far end
     // would hear the line drop rather than silence.
-    for (const sender of this.peerConnection()?.getSenders() ?? []) {
+    for (const sender of this.currentPeerConnection()?.getSenders() ?? []) {
       if (sender.track) sender.track.enabled = !on;
     }
   }
@@ -189,7 +193,7 @@ class SipJsSession implements SipSessionHandle {
     });
   }
 
-  private peerConnection() {
+  private currentPeerConnection() {
     const handler = this.session.sessionDescriptionHandler as SessionDescriptionHandler | undefined;
     return handler?.peerConnection;
   }

@@ -3,16 +3,14 @@ import NetInfo, { type NetInfoStateType } from '@react-native-community/netinfo'
 import { Platform } from 'react-native';
 import {
   createTokenConfig,
-  TelnyxCallState,
-  TelnyxConnectionState,
   TelnyxVoipClient,
   TelnyxVoiceApp,
-  VoicePnBridge,
-  type Call,
 } from '@telnyx/react-voice-commons-sdk';
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { loadVoiceSession, persistVoiceSession, voipClient } from '../lib/voipClient';
+import { CallState, ConnectionState, isTerminalVoiceCallState, type VoiceCall, type VoiceCallState, type VoiceConnectionState } from '../voice/voiceEngine';
+import { voice } from '../voice/voiceClientFacade';
 import { CallLifecycleRegistry, isSettledLocalHangupError, isTerminalCallState, transactCallWaiting } from '../lib/callLifecycle';
 import { attachIceFailureListener, isSetupSignalingBlip, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator, waitForBidirectionalMedia } from '../lib/voiceRecovery';
 import { ensureCallMicrophonePermission } from '../lib/callAudioPermission';
@@ -24,11 +22,23 @@ import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnectio
 import { useVoiceRegistration } from '../voice/useVoiceRegistration';
 import { useAuth } from './AuthContext';
 
+/** A call that is over: nothing more will happen on it. */
+const isTerminalCall = (state: VoiceCallState) => isTerminalVoiceCallState(state);
+
+/** A call with media negotiated: talking, or on hold. */
+const isConnectedCall = (state: VoiceCallState) => state === CallState.ACTIVE || state === CallState.HELD;
+
+/** A call still being set up — no audio yet either way. */
+const isSettingUpCall = (state: VoiceCallState) => state === CallState.RINGING || state === CallState.CONNECTING;
+
+/** A call worth watching the media of — it is up, or on its way up. */
+const isLiveCall = (state: VoiceCallState) => state === CallState.CONNECTING || state === CallState.ACTIVE || state === CallState.DROPPED;
+
 const VoiceContext = createContext<VoiceContextValue | null>(null);
 
 export function VoiceProvider({ children, bootstrapSession }: { children: React.ReactNode; bootstrapSession?: VoiceLoginConfig | null }) {
   const { loading, isAuthenticated, isPreview, addHistory, profile } = useAuth();
-  const [connection, setConnection] = useState(voipClient.currentConnectionState);
+  const [connection, setConnection] = useState(voice.currentConnectionState);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [waitingCall, setWaitingCall] = useState<ActiveCall | null>(null);
   const [heldCall, setHeldCall] = useState<ActiveCall | null>(null);
@@ -36,7 +46,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pushRegistration, setPushRegistration] = useState<VoiceContextValue['pushRegistration']>('registering');
-  const callRef = useRef<Call | null>(null);
+  const callRef = useRef<VoiceCall | null>(null);
   const callMetaRef = useRef(new Map<string, Partial<ActiveCall>>());
   const callRouteIdsRef = useRef(new Map<string, string>());
   const conferenceCallIdsRef = useRef(new Set<string>());
@@ -110,15 +120,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
 
   const terminateCall = useCallback((callId: string, routeId?: string) => lifecycleRef.current.terminate(callId, async () => {
-    const call = voipClient.getCall(callId);
+    const call = voice.getCall(callId);
     const cancelRemote = cancelRemoteRoute(routeId);
     try {
       if (call) await call.hangup();
-      else await VoicePnBridge.endCall(callId);
+      else await voice.endNativeCall(callId);
     } catch (error) {
-      const latest = voipClient.getCall(callId);
+      const latest = voice.getCall(callId);
       const alreadyEnded = !latest
-        || [TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(latest.currentState)
+        || isTerminalCall(latest.currentState)
         || isTerminalCallState(lifecycleRef.current.state(callId))
         || isSettledLocalHangupError(error);
       if (!alreadyEnded) throw error;
@@ -129,7 +139,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
-  const describeCall = useCallback((call: Call): ActiveCall => {
+  const describeCall = useCallback((call: VoiceCall): ActiveCall => {
     const meta = callMetaRef.current.get(call.callId) ?? {};
     const displayMatch = call.callerName?.trim().match(/^(.+?)\s*-\s*Ext(?:ension)?\s+(\d{2,5})$/i);
     const internalExtension = inviteHeader(call, 'X-Vocivo-Caller-Extension') || displayMatch?.[2];
@@ -163,7 +173,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const finalizeCall = useCallback((phase: 'ended' | 'failed', callId?: string) => {
     const current = activeCallRef.current;
     const id = callId || current?.id || '';
-    const nativeCall = id ? voipClient.getCall(id) : undefined;
+    const nativeCall = id ? voice.getCall(id) : undefined;
     const meta = id ? callMetaRef.current.get(id) : undefined;
     const described = nativeCall ? describeCall(nativeCall) : null;
     const snapshot = current?.id === id ? current : described ? { ...described, ...meta, id } : null;
@@ -197,12 +207,12 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
   }, [addHistory, describeCall, reportVoiceError]);
 
-  const confirmMediaConnected = useCallback(async (call: Call) => {
+  const confirmMediaConnected = useCallback(async (call: VoiceCall) => {
     if (mediaConfirmInFlightRef.current.has(call.callId)) return;
     mediaConfirmInFlightRef.current.add(call.callId);
     try {
     const stillThisCall = () => activeCallRef.current?.id === call.callId
-      && call.currentState === TelnyxCallState.ACTIVE
+      && call.currentState === CallState.ACTIVE
       && !lifecycleRef.current.isTerminating(call.callId);
     if (!call.isIncoming && callRouteIdsRef.current.has(call.callId)) {
       const deadline = Date.now() + 20_000;
@@ -257,7 +267,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
   }, [reportVoiceError]);
 
-  const attachCall = useCallback((call: Call | null) => {
+  const attachCall = useCallback((call: VoiceCall | null) => {
     callRef.current = call;
     if (!call) {
       activeCallRef.current = null;
@@ -268,7 +278,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
     const currentLifecycle = lifecycleRef.current.state(call.callId);
     if (isTerminalCallState(currentLifecycle)) return;
-    if (lifecycleRef.current.isTerminating(call.callId) && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)) {
+    if (lifecycleRef.current.isTerminating(call.callId) && !isTerminalCall(call.currentState)) {
       return;
     }
     const initialLifecycle = toLifecycleState(call.currentState);
@@ -306,7 +316,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     if (callSubscriptions.current.has(call.callId)) return;
     const subscriptions = [
       call.callState$.subscribe((state) => {
-        if ([TelnyxCallState.CONNECTING, TelnyxCallState.ACTIVE, TelnyxCallState.DROPPED].includes(state)) bindIceListener();
+        if (isLiveCall(state)) bindIceListener();
         const lifecycleState = toLifecycleState(state);
         const previousLifecycleState = lifecycleRef.current.state(call.callId);
         const transitioned = lifecycleRef.current.transition(call.callId, lifecycleState);
@@ -314,13 +324,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           return;
         }
         const phase = toUiCallPhase(state, callMetaRef.current.get(call.callId)?.connectedAt);
-        if (state === TelnyxCallState.ACTIVE) {
+        if (state === CallState.ACTIVE) {
           stopRingback();
           void confirmMediaConnected(call).catch((failure) => reportVoiceError('confirm bidirectional media', failure));
         }
         const takeRemainingCall = (remaining: typeof call) => {
-          if (remaining.currentState === TelnyxCallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
-          voipClient.setActiveCall(remaining.callId);
+          if (remaining.currentState === CallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
+          voice.setActiveCall(remaining.callId);
           attachCall(remaining);
         };
         if (phase === 'ended' || phase === 'failed') {
@@ -330,7 +340,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           callRouteIdsRef.current.delete(call.callId);
           callMetaRef.current.delete(call.callId);
           clearCallSubscriptions(call.callId);
-          const remainingNow = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
+          const remainingNow = voice.currentCalls.find((candidate) => candidate.callId !== call.callId && !isTerminalCall(candidate.currentState));
           if (remainingNow) {
             takeRemainingCall(remainingNow);
             return;
@@ -339,7 +349,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           const resumeTimer = setTimeout(() => {
             // A newer call (optimistic or attached) now owns the UI; this ended call's teardown must not clear it.
             if (activeCallRef.current && activeCallRef.current.id !== call.callId) return;
-            const remaining = voipClient.currentCalls.find((candidate) => candidate.callId !== call.callId && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(candidate.currentState));
+            const remaining = voice.currentCalls.find((candidate) => candidate.callId !== call.callId && !isTerminalCall(candidate.currentState));
             if (remaining) {
               takeRemainingCall(remaining);
               return;
@@ -383,12 +393,12 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     return unsubscribe;
   }, [reportVoiceError]);
 
-  const emergencyTransportCleanup = useCallback((state: TelnyxConnectionState) => {
+  const emergencyTransportCleanup = useCallback((state: VoiceConnectionState) => {
     startAttemptRef.current += 1;
     if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
     transportLossTimerRef.current = null;
     networkMigrationGraceUntilRef.current = 0;
-    const calls = voipClient.currentCalls.filter((call) => ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState));
+    const calls = voice.currentCalls.filter((call) => !isTerminalCall(call.currentState));
     if (activeCallRef.current) finalizeCall('failed', activeCallRef.current.id);
     if (heldCall) finalizeCall('failed', heldCall.id);
     calls.forEach((call) => {
@@ -410,14 +420,14 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     setError(`The calling connection was lost (${state.toLowerCase()}). The call was closed safely.`);
     lifecycleRef.current.clear();
     calls.forEach((call) => {
-      VoicePnBridge.endCall(call.callId).catch((failure) => reportVoiceError('close native call after transport loss', failure));
+      voice.endNativeCall(call.callId).catch((failure) => reportVoiceError('close native call after transport loss', failure));
     });
   }, [cancelRoutePolling, clearCallSubscriptions, finalizeCall, heldCall, reportVoiceError, stopRingback]);
 
   useEffect(() => {
-    const connectionSubscription = voipClient.connectionState$.subscribe((state) => {
+    const connectionSubscription = voice.connectionState$.subscribe((state) => {
       setConnection(state);
-      if (state === TelnyxConnectionState.CONNECTED) {
+      if (state === ConnectionState.CONNECTED) {
         if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
         transportLossTimerRef.current = null;
         const current = callRef.current;
@@ -428,30 +438,30 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         networkMigrationGraceUntilRef.current = 0;
         return;
       }
-      if (state === TelnyxConnectionState.DISCONNECTED && networkMigrationGraceUntilRef.current > Date.now()) {
+      if (state === ConnectionState.DISCONNECTED && networkMigrationGraceUntilRef.current > Date.now()) {
         if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
         const delay = Math.max(0, networkMigrationGraceUntilRef.current - Date.now());
         transportLossTimerRef.current = setTimeout(() => {
-          if (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED) emergencyTransportCleanup(state);
+          if (voice.currentConnectionState !== ConnectionState.CONNECTED) emergencyTransportCleanup(state);
         }, delay);
         return;
       }
-      if (state === TelnyxConnectionState.DISCONNECTED) {
-        const liveCount = voipClient.currentCalls.filter((call) => ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)).length;
+      if (state === ConnectionState.DISCONNECTED) {
+        const liveCount = voice.currentCalls.filter((call) => !isTerminalCall(call.currentState)).length;
         if (isSetupSignalingBlip(liveCount, activeCallRef.current?.id)) return;
       }
-      if (state === TelnyxConnectionState.ERROR || state === TelnyxConnectionState.DISCONNECTED) {
+      if (state === ConnectionState.ERROR || state === ConnectionState.DISCONNECTED) {
         emergencyTransportCleanup(state);
       }
     });
-    const callsSubscription = voipClient.calls$.subscribe((calls) => {
-      const currentId = voipClient.currentActiveCall?.callId;
-      const waiting = calls.find((call) => call.callId !== currentId && call.isIncoming && call.currentState === TelnyxCallState.RINGING);
-      const held = calls.find((call) => call.callId !== currentId && call.currentState === TelnyxCallState.HELD);
+    const callsSubscription = voice.calls$.subscribe((calls) => {
+      const currentId = voice.currentActiveCall?.callId;
+      const waiting = calls.find((call) => call.callId !== currentId && call.isIncoming && call.currentState === CallState.RINGING);
+      const held = calls.find((call) => call.callId !== currentId && call.currentState === CallState.HELD);
       setWaitingCall(waiting ? describeCall(waiting) : null);
       const mergedCalls = Array.from(conferenceCallIdsRef.current)
         .map((id) => calls.find((call) => call.callId === id))
-        .filter((call): call is Call => Boolean(call && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(call.currentState)));
+        .filter((call): call is VoiceCall => Boolean(call && !isTerminalCall(call.currentState)));
       if (conferenceCallIdsRef.current.size && mergedCalls.length >= 1) {
         setHeldCall(null);
       } else {
@@ -462,8 +472,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         setHeldCall(held ? describeCall(held) : null);
       }
     });
-    const callSubscription = voipClient.activeCall$.subscribe(attachCall);
-    if (voipClient.currentActiveCall) attachCall(voipClient.currentActiveCall);
+    const callSubscription = voice.activeCall$.subscribe(attachCall);
+    if (voice.currentActiveCall) attachCall(voice.currentActiveCall);
     return () => {
       connectionSubscription.unsubscribe();
       callsSubscription.unsubscribe();
@@ -506,11 +516,16 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       setPushRegistration('unavailable');
       throw new Error(`${Platform.OS === 'ios' ? 'iPhone' : 'Android'} did not provide a push token. Allow notifications, then reopen Vocivo and try again.`);
     }
-    await voipClient.loginWithToken(createTokenConfig(data.token, {
-      debug: __DEV__, pushNotificationDeviceToken: pushToken, pushWhenActive: true,
-      enableMissedCallNotifications: true, incomingCallRingtone: data.ringtone, useTrickleIce: true,
-      ...(data.iceServers ? { iceServers: data.iceServers } : {}),
-    }));
+    // Only the carrier engine has a token to log in with. On Vocivo's own edge
+    // the phone is already registered with Kamailio and there is nothing to do
+    // here — opening a carrier socket as well would route calls back through it.
+    if (voice.currentEngine !== 'sip') {
+      await voipClient.loginWithToken(createTokenConfig(data.token, {
+        debug: __DEV__, pushNotificationDeviceToken: pushToken, pushWhenActive: true,
+        enableMissedCallNotifications: true, incomingCallRingtone: data.ringtone, useTrickleIce: true,
+        ...(data.iceServers ? { iceServers: data.iceServers } : {}),
+      }));
+    }
     setPushRegistration('registered');
   }, []);
 
@@ -527,8 +542,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           stopRingback();
         }
         if (monitor.cancelled) return;
-        const sdkCall = voipClient.getCall(callId);
-        const sdkIsLive = Boolean(sdkCall && [TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(sdkCall.currentState));
+        const sdkCall = voice.getCall(callId);
+        const sdkIsLive = Boolean(sdkCall && isConnectedCall(sdkCall.currentState));
         if (sdkIsLive && (result.phase === 'connected' || result.phase === 'ended' || result.phase === 'failed')) {
           cancelRoutePolling(callId);
           stopRingback();
@@ -540,15 +555,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           // Yield once so an SDK ACTIVE event queued with this webhook wins the
           // state mutex before route cleanup can claim a ringing call.
           await new Promise((resolve) => setTimeout(resolve, 0));
-          const latestSdkCall = voipClient.getCall(callId);
+          const latestSdkCall = voice.getCall(callId);
           const latestLifecycle = lifecycleRef.current.state(callId);
-          const isNowLive = Boolean(latestSdkCall && [TelnyxCallState.ACTIVE, TelnyxCallState.HELD].includes(latestSdkCall.currentState))
+          const isNowLive = Boolean(latestSdkCall && isConnectedCall(latestSdkCall.currentState))
             || ['ACTIVE', 'HELD'].includes(latestLifecycle);
           if (isNowLive || monitor.cancelled) {
             cancelRoutePolling(callId);
             return;
           }
-          if (!latestSdkCall || [TelnyxCallState.RINGING, TelnyxCallState.CONNECTING].includes(latestSdkCall.currentState)) {
+          if (!latestSdkCall || isSettingUpCall(latestSdkCall.currentState)) {
             try {
               await terminateCall(callId, routeId);
             } catch (failure) {
@@ -612,7 +627,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         return;
       }
       startRingback();
-      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+      const call = await voice.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
       if (startAttemptRef.current !== attempt) {
         await Promise.all([
           call.hangup().catch((failure) => reportVoiceError('hang up failed outbound call', failure)),
@@ -639,11 +654,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const startSecondCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => {
     if (isPreview) throw new Error('Add call requires a live calling connection.');
-    if (connection !== TelnyxConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
+    if (connection !== ConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
-    if (voipClient.currentCalls.some((call) => call.currentState === TelnyxCallState.HELD)) throw new Error('Resume or merge the held call before adding another caller.');
-    const current = voipClient.currentActiveCall;
-    if (!current || current.currentState !== TelnyxCallState.ACTIVE) throw new Error('Connect the first call before adding another caller.');
+    if (voice.currentCalls.some((call) => call.currentState === CallState.HELD)) throw new Error('Resume or merge the held call before adding another caller.');
+    const current = voice.currentActiveCall;
+    if (!current || current.currentState !== CallState.ACTIVE) throw new Error('Connect the first call before adding another caller.');
     if (!callerNumber?.phone_number) throw new Error('Choose a caller ID before adding an external caller.');
     multiCallBusyRef.current = true;
     const routeId = createRouteId();
@@ -657,7 +672,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         throw new Error('The first call ended before the second caller could be added.');
       }
       startRingback();
-      const call = await voipClient.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
+      const call = await voice.newCall(number, profile?.full_name || 'Vocivo', reservation.callerId, outboundHeaders(number, reservation.callerId, 'outbound', routeId, reservation.routeToken));
       if (startAttemptRef.current !== attempt) {
         await Promise.all([
           call.hangup().catch((failure) => reportVoiceError('hang up superseded second call', failure)),
@@ -667,14 +682,14 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       }
       callRouteIdsRef.current.set(call.callId, routeId);
       callMetaRef.current.set(call.callId, { displayName: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, startedAt: Date.now(), routeId, callerId: reservation.callerId });
-      voipClient.setActiveCall(call.callId);
+      voice.setActiveCall(call.callId);
       attachCall(call);
       followRoute(routeId, call.callId);
     } catch (secondCallError) {
       stopRingback();
       await api.post('/api/voice/cancel', { routeId }).catch((failure) => reportVoiceError('cancel failed second-call route', failure));
       await current.resume().catch((failure) => reportVoiceError('roll back held outbound call', failure));
-      voipClient.setActiveCall(current.callId);
+      voice.setActiveCall(current.callId);
       attachCall(current);
       throw secondCallError;
     } finally {
@@ -717,7 +732,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       startRingback();
       const remoteName = reservation.destinationName || displayName;
       const remoteExtension = reservation.destinationExtension || extension;
-      const call = await voipClient.newCall(
+      const call = await voice.newCall(
         reservation.destination,
         reservation.callerName || profile?.full_name || 'Vocivo',
         reservation.callerExtension || profile?.extension,
@@ -754,21 +769,21 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const answerWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
-    const incoming = voipClient.getCall(waitingCall.id);
-    const current = voipClient.currentActiveCall;
+    const incoming = voice.getCall(waitingCall.id);
+    const current = voice.currentActiveCall;
     if (!incoming) return;
     await ensureCallMicrophonePermission();
     await transactCallWaiting({
       answerIncoming: async () => {
         await incoming.answer();
-        await waitForCallState(incoming, TelnyxCallState.ACTIVE);
+        await waitForCallState(incoming, CallState.ACTIVE);
       },
-      isIncomingAcknowledged: () => incoming.currentState === TelnyxCallState.ACTIVE,
+      isIncomingAcknowledged: () => incoming.currentState === CallState.ACTIVE,
       holdCurrent: async () => {
-        if (current && current.callId !== incoming.callId && current.currentState === TelnyxCallState.ACTIVE) await current.hold();
+        if (current && current.callId !== incoming.callId && current.currentState === CallState.ACTIVE) await current.hold();
       },
       activateIncoming: () => {
-        voipClient.setActiveCall(incoming.callId);
+        voice.setActiveCall(incoming.callId);
         attachCall(incoming);
       },
       rollbackIncoming: async () => {
@@ -781,7 +796,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       },
       restoreCurrent: () => {
         if (!current) return;
-        voipClient.setActiveCall(current.callId);
+        voice.setActiveCall(current.callId);
         attachCall(current);
       },
     });
@@ -789,21 +804,21 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const rejectWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
-    await voipClient.getCall(waitingCall.id)?.hangup();
+    await voice.getCall(waitingCall.id)?.hangup();
   }, [waitingCall?.id]);
 
   const swapCalls = useCallback(async () => {
     if (!heldCall?.id) throw new Error('There is no held call to swap.');
     if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
-    const target = voipClient.getCall(heldCall.id);
+    const target = voice.getCall(heldCall.id);
     if (!target) throw new Error('The held call is no longer available.');
-    const current = voipClient.currentActiveCall;
-    if (!current || current.currentState !== TelnyxCallState.ACTIVE) throw new Error('Wait for the active call to connect before swapping.');
-    if (target.currentState !== TelnyxCallState.HELD) throw new Error('The other call is not on hold yet.');
+    const current = voice.currentActiveCall;
+    if (!current || current.currentState !== CallState.ACTIVE) throw new Error('Wait for the active call to connect before swapping.');
+    if (target.currentState !== CallState.HELD) throw new Error('The other call is not on hold yet.');
     multiCallBusyRef.current = true;
     try {
-      await voipClient.swapCalls(target.callId);
-      voipClient.setActiveCall(target.callId);
+      await voice.swapCalls(target.callId);
+      voice.setActiveCall(target.callId);
       attachCall(target);
     } finally {
       multiCallBusyRef.current = false;
@@ -814,9 +829,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     if (isPreview) throw new Error('Call merge requires a live calling connection.');
     if (conferenceCallIdsRef.current.size) throw new Error('These calls are already merged.');
     if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
-    const current = voipClient.currentActiveCall;
-    const held = heldCall?.id ? voipClient.getCall(heldCall.id) : undefined;
-    if (!current || !held || current.currentState !== TelnyxCallState.ACTIVE || held.currentState !== TelnyxCallState.HELD) {
+    const current = voice.currentActiveCall;
+    const held = heldCall?.id ? voice.getCall(heldCall.id) : undefined;
+    if (!current || !held || current.currentState !== CallState.ACTIVE || held.currentState !== CallState.HELD) {
       throw new Error('Connect the second call before merging.');
     }
     const routeIds = [current.callId, held.callId].map((id) => callRouteIdsRef.current.get(id)).filter((id): id is string => Boolean(id));
@@ -899,8 +914,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       } catch (failure) {
         reportVoiceError('end conference', failure);
         const stillLive = mergedIds.some((id) => {
-          const latest = voipClient.getCall(id);
-          return latest && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(latest.currentState);
+          const latest = voice.getCall(id);
+          return latest && !isTerminalCall(latest.currentState);
         });
         if (stillLive) {
           setError('Conference hangup was not acknowledged. Tap end call to retry.');
@@ -918,14 +933,14 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
     const callId = activeCall?.id || callRef.current?.callId;
     const routeId = activeCall?.routeId || (callId ? callRouteIdsRef.current.get(callId) : undefined);
-    const resumeAfterEnd = voipClient.currentCalls.find((call) => call.callId !== callRef.current?.callId && call.currentState === TelnyxCallState.HELD);
+    const resumeAfterEnd = voice.currentCalls.find((call) => call.callId !== callRef.current?.callId && call.currentState === CallState.HELD);
     if (callId) {
       try {
         await terminateCall(callId, routeId);
       } catch (failure) {
         reportVoiceError('end call', failure);
-        const latest = voipClient.getCall(callId);
-        const stillLive = Boolean(latest && ![TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(latest.currentState));
+        const latest = voice.getCall(callId);
+        const stillLive = Boolean(latest && !isTerminalCall(latest.currentState));
         if (stillLive) {
           setError('Hangup was not acknowledged. Tap end call to retry.');
           throw failure;
@@ -940,7 +955,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     setDuration(0);
     if (resumeAfterEnd) {
       await resumeAfterEnd.resume().catch((failure) => reportVoiceError('resume remaining line after hangup', failure));
-      voipClient.setActiveCall(resumeAfterEnd.callId);
+      voice.setActiveCall(resumeAfterEnd.callId);
       attachCall(resumeAfterEnd);
       return;
     }
@@ -949,7 +964,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const answerCall = useCallback(async () => {
     const call = callRef.current;
     if (!call || !call.isIncoming) return;
-    if (![TelnyxCallState.RINGING, TelnyxCallState.CONNECTING].includes(call.currentState)) return;
+    if (!isSettingUpCall(call.currentState)) return;
     setError(null);
     await ensureCallMicrophonePermission();
     setActiveCall((current) => current?.id === call.callId ? { ...current, phase: 'connecting' } : current);
@@ -958,9 +973,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (routeId) {
         api.post('/api/voice/progress', { routeId, event: 'answered' }).catch((failure) => reportVoiceError('report answered route', failure));
       }
-      voipClient.setActiveCall(call.callId);
+      voice.setActiveCall(call.callId);
       await call.answer();
-      if (Platform.OS === 'android') await VoicePnBridge.hideIncomingCallNotification();
+      if (Platform.OS === 'android') await voice.hideIncomingCallUi();
       durationRef.current = 0;
       setDuration(0);
     } catch (answerError) {
@@ -987,7 +1002,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, []);
   const toggleSpeaker = useCallback(async () => {
     try {
-      const speaker = await VoicePnBridge.toggleSpeaker();
+      const speaker = await voice.toggleSpeaker();
       setActiveCall((current) => current ? { ...current, speaker } : current);
     } catch (failure) {
       reportVoiceError('toggle speaker', failure);
@@ -995,7 +1010,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
   const sendDtmf = useCallback(async (digit: string) => { if (callRef.current) await callRef.current.dtmf(digit); }, []);
 
-  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || connection === TelnyxConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
+  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || connection === ConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>;
 }

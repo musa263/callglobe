@@ -1,6 +1,6 @@
-import type { Call } from '@telnyx/react-voice-commons-sdk';
+import type { VoiceCall } from './voiceEngine';
 
-export function inviteHeader(call: Call, name: string) {
+export function inviteHeader(call: VoiceCall, name: string) {
   return call.inviteCustomHeaders?.find((header) => (
     String(header?.name || (header as { header_name?: string }).header_name || '').toLowerCase() === name.toLowerCase()
   ))?.value?.trim();

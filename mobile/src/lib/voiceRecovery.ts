@@ -1,4 +1,17 @@
-import type { Call } from '@telnyx/react-voice-commons-sdk';
+/**
+ * Media recovery, for whichever engine is carrying the call.
+ *
+ * The peer connection is reached structurally rather than through the carrier
+ * SDK's `Call`: Vocivo's own SIP engine exposes one directly, and the carrier's
+ * is behind `telnyxCall.peer`. Everything past that point is the same WebRTC.
+ */
+export type RecoverableCall = {
+  readonly callId: string;
+  /** Vocivo's SIP engine hands its peer connection over directly. */
+  peerConnection?: unknown;
+  /** The carrier SDK keeps its own behind a native wrapper. */
+  telnyxCall?: unknown;
+};
 
 export type StoredVoiceSession = {
   token: string;
@@ -28,8 +41,9 @@ export function isVoiceSessionFresh(session: StoredVoiceSession | null, minimumV
   return Boolean(session?.token && session.expiresAt > Date.now() + minimumValidityMs);
 }
 
-export function peerConnectionForCall(call: Call | null): PeerConnectionLike | null {
-  const nativeCall = call?.telnyxCall as unknown as NativeCallLike | undefined;
+export function peerConnectionForCall(call: RecoverableCall | null): PeerConnectionLike | null {
+  if (call?.peerConnection) return call.peerConnection as PeerConnectionLike;
+  const nativeCall = call?.telnyxCall as NativeCallLike | undefined;
   return nativeCall?.peer?.getPeerConnection?.() || null;
 }
 
@@ -38,7 +52,7 @@ export function isTransportNetworkMigration(previous: string | null, current: st
   return Boolean(previous && previous !== current && transports.has(previous) && transports.has(current));
 }
 
-export function attachIceFailureListener(call: Call, recover: (reason: string) => void) {
+export function attachIceFailureListener(call: RecoverableCall, recover: (reason: string) => void) {
   const peer = peerConnectionForCall(call);
   if (!peer?.addEventListener || !peer.removeEventListener) return null;
   let disconnectedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -66,7 +80,7 @@ export function attachIceFailureListener(call: Call, recover: (reason: string) =
   };
 }
 
-export function isBidirectionalMediaReady(call: Call | null) {
+export function isBidirectionalMediaReady(call: RecoverableCall | null) {
   const peer = peerConnectionForCall(call);
   if (!peer) return false;
   const connectionState = String(peer.connectionState || '').toLowerCase();
@@ -105,7 +119,7 @@ function isAudioStat(record: Record<string, unknown>) {
   return !record.kind || record.kind === 'audio' || record.mediaType === 'audio';
 }
 
-export async function readAudioRtpCounts(call: Call | null): Promise<AudioRtpCounts | null> {
+export async function readAudioRtpCounts(call: RecoverableCall | null): Promise<AudioRtpCounts | null> {
   const peer = peerConnectionForCall(call);
   if (!peer?.getStats) return null;
   const records = statRecords(await peer.getStats());
@@ -126,7 +140,7 @@ export function hasConversationRtpProgress(current: AudioRtpCounts | null, basel
   return inboundDelta >= MIN_CONVERSATION_RTP_PACKETS && outboundDelta >= MIN_CONVERSATION_RTP_PACKETS;
 }
 
-export async function hasConfirmedBidirectionalMedia(call: Call | null, baseline: AudioRtpCounts | null = null) {
+export async function hasConfirmedBidirectionalMedia(call: RecoverableCall | null, baseline: AudioRtpCounts | null = null) {
   if (!isBidirectionalMediaReady(call)) return false;
   // ICE + live tracks are not enough: Telnyx can report ACTIVE (SIP 200)
   // and ringback RTP before the first audible conversation packet.
@@ -137,7 +151,7 @@ export function isSetupSignalingBlip(sdkLiveCallCount: number, uiCallId?: string
   return sdkLiveCallCount === 0 && !uiCallId;
 }
 
-export async function waitForBidirectionalMedia(call: Call, timeoutMs = 8_000) {
+export async function waitForBidirectionalMedia(call: RecoverableCall, timeoutMs = 8_000) {
   const deadline = Date.now() + timeoutMs;
   const baseline = await readAudioRtpCounts(call);
   while (Date.now() < deadline) {
@@ -156,7 +170,7 @@ export class VoiceMediaRecoveryCoordinator {
     private readonly recoveryDelayMs = 1_250,
   ) {}
 
-  recover(call: Call | null, reason: string) {
+  recover(call: RecoverableCall | null, reason: string) {
     if (!call) return Promise.resolve();
     const callId = call.callId;
     const inFlight = this.operations.get(callId);

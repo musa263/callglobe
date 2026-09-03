@@ -1,4 +1,4 @@
-import { TelnyxConnectionState } from '@telnyx/react-voice-commons-sdk';
+import { ConnectionState } from './voiceEngine';
 import { getVoicePushToken, voipClient } from '../lib/voipClient';
 import type { VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 
@@ -27,10 +27,10 @@ export function createRouteId() {
 
 export async function waitForVoiceConnection(timeoutMs = 12_000) {
   const deadline = Date.now() + timeoutMs;
-  while (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED && Date.now() < deadline) {
+  while (voipClient.currentConnectionState !== ConnectionState.CONNECTED && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  if (voipClient.currentConnectionState !== TelnyxConnectionState.CONNECTED) {
+  if (voipClient.currentConnectionState !== ConnectionState.CONNECTED) {
     throw new Error('Calling service is reconnecting. Please try again in a moment.');
   }
 }

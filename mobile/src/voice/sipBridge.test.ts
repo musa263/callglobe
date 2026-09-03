@@ -45,6 +45,7 @@ class FakeSession implements SipSessionHandle {
     this.listener?.(state);
   }
 
+  peerConnection() { return null; }
   async accept() { this.actions.push('accept'); }
   async terminate() { this.actions.push('terminate'); }
   async setHold(on: boolean) { this.actions.push(`hold:${on}`); }

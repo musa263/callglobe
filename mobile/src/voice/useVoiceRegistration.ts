@@ -5,6 +5,8 @@ import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
 import { registerVocivoSip } from '../lib/sipNative';
+import { sipEngine, telnyxEngine } from './engines';
+import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
 import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../lib/voiceEdge';
 import type { ActiveCall } from '../types';
@@ -75,6 +77,10 @@ export function useVoiceRegistration({
         }
         const edgeConfig = await api.get<VoiceEdgeConfig>('/api/voice/config').catch(() => null);
         if (canceled) return;
+        // Which engine carries the call. Until this point the app has been
+        // registering with a carrier and with Vocivo's own edge both; from here
+        // exactly one of them is the client the UI talks to.
+        let onSipEdge = false;
         if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
           const sip = await api.post<{
             username: string;
@@ -82,20 +88,39 @@ export function useVoiceRegistration({
             domain: string;
             wsUri?: string;
           }>('/api/voice/sip-credentials', {});
-          await registerVocivoSip({
-            username: sip.username,
-            password: sip.password,
-            domain: sip.domain,
-            wsUri: sip.wsUri,
-            displayName: sip.username,
-          }).catch((failure) => reportVoiceError('register Vocivo SIP', failure));
+          try {
+            await registerVocivoSip({
+              username: sip.username,
+              password: sip.password,
+              domain: sip.domain,
+              wsUri: sip.wsUri,
+              displayName: sip.username,
+            });
+            const engine = sipEngine();
+            voice.use(engine.name, engine.client, engine.platform);
+            onSipEdge = true;
+          } catch (failure) {
+            // A SIP edge that will not register must not leave the user with no
+            // phone at all: fall back to the carrier for this session.
+            reportVoiceError('register Vocivo SIP', failure);
+          }
         }
+        if (!onSipEdge) {
+          const engine = telnyxEngine();
+          voice.use(engine.name, engine.client, engine.platform);
+        }
+        if (canceled) return;
         if (canceled) return;
         let registeredToken = pushNotificationDeviceToken;
         let registrationBusy = false;
         let sessionRefreshBusy = false;
 
         const login = async (pushToken?: string, session = loginConfigRef.current) => {
+          // On the SIP edge the phone is already registered with Vocivo's own
+          // Kamailio. Logging into the carrier as well would keep a second
+          // signalling socket open, and route the calls it carries back through
+          // the carrier — which is the whole thing this move is undoing.
+          if (onSipEdge) return;
           if (!session) throw new Error('The calling session is unavailable.');
           let lastError: unknown;
           for (let attempt = 0; attempt < 3 && !canceled; attempt += 1) {
@@ -140,6 +165,7 @@ export function useVoiceRegistration({
           }
           sessionRefreshBusy = true;
           try {
+            if (onSipEdge) return;
             const fresh = voiceLoginConfig(
               await api.post<VoiceTokenResponse>('/api/telnyx/token', {}),
               ringtone,

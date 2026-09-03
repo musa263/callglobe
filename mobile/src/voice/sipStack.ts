@@ -40,6 +40,9 @@ export type SipSessionHandle = {
   /** Resolves with how the session ended once it reaches `Terminated`. */
   disposition(): SipDisposition;
 
+  /** The underlying peer connection, for ICE recovery. */
+  peerConnection(): unknown;
+
   accept(): Promise<void>;
   /** Ends the session whatever stage it is at: CANCEL, 486 or BYE as appropriate. */
   terminate(): Promise<void>;

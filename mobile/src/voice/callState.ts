@@ -1,32 +1,32 @@
-import { TelnyxCallState, type Call } from '@telnyx/react-voice-commons-sdk';
+import { CallState, isTerminalVoiceCallState, type VoiceCall, type VoiceCallState } from './voiceEngine';
 import type { CallLifecycleState } from '../lib/callLifecycle';
 import type { CallPhase } from '../types';
 
-export function toCallPhase(state: TelnyxCallState): CallPhase {
-  if (state === TelnyxCallState.RINGING) return 'ringing';
-  if (state === TelnyxCallState.CONNECTING) return 'connecting';
-  if (state === TelnyxCallState.ACTIVE || state === TelnyxCallState.HELD) return 'active';
-  if (state === TelnyxCallState.DROPPED) return 'connecting';
-  if (state === TelnyxCallState.FAILED) return 'failed';
+export function toCallPhase(state: VoiceCallState): CallPhase {
+  if (state === CallState.RINGING) return 'ringing';
+  if (state === CallState.CONNECTING) return 'connecting';
+  if (state === CallState.ACTIVE || state === CallState.HELD) return 'active';
+  if (state === CallState.DROPPED) return 'connecting';
+  if (state === CallState.FAILED) return 'failed';
   return 'ended';
 }
 
-export function toUiCallPhase(state: TelnyxCallState, connectedAt?: number): CallPhase {
-  if (state === TelnyxCallState.ACTIVE && !connectedAt) return 'connecting';
+export function toUiCallPhase(state: VoiceCallState, connectedAt?: number): CallPhase {
+  if (state === CallState.ACTIVE && !connectedAt) return 'connecting';
   return toCallPhase(state);
 }
 
-export function toLifecycleState(state: TelnyxCallState): CallLifecycleState {
-  if (state === TelnyxCallState.CONNECTING) return 'CONNECTING';
-  if (state === TelnyxCallState.RINGING) return 'RINGING';
-  if (state === TelnyxCallState.ACTIVE) return 'ACTIVE';
-  if (state === TelnyxCallState.HELD) return 'HELD';
-  if (state === TelnyxCallState.FAILED) return 'FAILED';
-  if (state === TelnyxCallState.DROPPED) return 'DROPPED';
+export function toLifecycleState(state: VoiceCallState): CallLifecycleState {
+  if (state === CallState.CONNECTING) return 'CONNECTING';
+  if (state === CallState.RINGING) return 'RINGING';
+  if (state === CallState.ACTIVE) return 'ACTIVE';
+  if (state === CallState.HELD) return 'HELD';
+  if (state === CallState.FAILED) return 'FAILED';
+  if (state === CallState.DROPPED) return 'DROPPED';
   return 'ENDED';
 }
 
-export function waitForCallState(call: Call, expected: TelnyxCallState, timeoutMs = 6_000) {
+export function waitForCallState(call: VoiceCall, expected: VoiceCallState, timeoutMs = 6_000) {
   if (call.currentState === expected) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -42,7 +42,7 @@ export function waitForCallState(call: Call, expected: TelnyxCallState, timeoutM
     };
     subscription = call.callState$.subscribe((state) => {
       if (state === expected) queueMicrotask(() => finish());
-      else if ([TelnyxCallState.ENDED, TelnyxCallState.FAILED].includes(state)) {
+      else if (isTerminalVoiceCallState(state)) {
         queueMicrotask(() => finish(new Error(`The call ended before reaching ${expected}.`)));
       }
     });
