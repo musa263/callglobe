@@ -152,8 +152,13 @@ export function promptSignature(secret: string, text: string, voice: string, for
 
 export function promptUrl(input: Pick<SipDialplanInput, 'apiUrl' | 'secret' | 'promptFormat'>, text: string, voice: string) {
   const sig = promptSignature(input.secret, text, voice, input.promptFormat);
-  const query = new URLSearchParams({ text, voice, sig });
-  return `${input.apiUrl.replace(/\/+$/, '')}/api/voice/sip-prompt/${sig.slice(0, 24)}.${input.promptFormat}?${query.toString()}`;
+  // mod_http_cache names its cached copy after the last dot in the whole URL,
+  // query string included, and then opens the file by that "extension". A
+  // period in the prompt text or in a voice id such as Vocivo.Kokoro.AmAdam
+  // gave it an extension no file module handles, and every prompt failed to
+  // open. Percent-encoding the dots keeps the extension at the path's .wav.
+  const query = new URLSearchParams({ text, voice, sig }).toString().replace(/\./g, '%2E');
+  return `${input.apiUrl.replace(/\/+$/, '')}/api/voice/sip-prompt/${sig.slice(0, 24)}.${input.promptFormat}?${query}`;
 }
 
 export function verifyPromptSignature(secret: string, text: string, voice: string, format: string, supplied: string) {

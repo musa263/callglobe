@@ -170,9 +170,24 @@ test('prompt URLs are signed and verifiable, and carry the format in the path fo
   const url = promptUrl({ apiUrl: 'https://vocivo.app/', secret, promptFormat: 'wav' }, 'Hello there.', 'voice-a');
   const parsed = new URL(url);
   assert.match(parsed.pathname, /^\/api\/voice\/sip-prompt\/[A-Za-z0-9_-]{24}\.wav$/);
+  assert.equal(parsed.searchParams.get('text'), 'Hello there.');
   assert.equal(verifyPromptSignature(secret, 'Hello there.', 'voice-a', 'wav', parsed.searchParams.get('sig') || ''), true);
   assert.equal(verifyPromptSignature(secret, 'Hello there!', 'voice-a', 'wav', parsed.searchParams.get('sig') || ''), false);
   assert.equal(verifyPromptSignature('other', 'Hello there.', 'voice-a', 'wav', parsed.searchParams.get('sig') || ''), false);
+});
+
+test('a prompt URL has no dot after the path, because mod_http_cache takes its file extension from the last one', () => {
+  // The first live call: the voice id Vocivo.Kokoro.AmAdam gave the cached
+  // copy the extension "AmAdam&sig=…", no file module could open it, and every
+  // prompt was silent.
+  const url = promptUrl({ apiUrl: 'https://vocivo.app', secret, promptFormat: 'wav' }, 'Welcome to Global Heritage. For Sales, press 1.', 'Vocivo.Kokoro.AmAdam');
+  const [path, query] = url.split('?');
+  assert.match(path, /\.wav$/);
+  assert.equal(query.includes('.'), false);
+  const parsed = new URL(url);
+  assert.equal(parsed.searchParams.get('voice'), 'Vocivo.Kokoro.AmAdam');
+  assert.equal(parsed.searchParams.get('text'), 'Welcome to Global Heritage. For Sales, press 1.');
+  assert.equal(verifyPromptSignature(secret, 'Welcome to Global Heritage. For Sales, press 1.', 'Vocivo.Kokoro.AmAdam', 'wav', parsed.searchParams.get('sig') || ''), true);
 });
 
 test('outside office hours the caller goes straight to a signed voicemail upload', () => {
