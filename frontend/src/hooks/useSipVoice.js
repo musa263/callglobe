@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
 import { reportWebVoiceError } from '../voice/telemetry';
-import { sipTargetUri, sipUserFromUri } from '../voice/sipDial';
+import { describeCallRejection, sipTargetUri, sipUserFromUri } from '../voice/sipDial';
 import { SessionState } from 'sip.js';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../voice/sipSession';
 
@@ -135,7 +135,16 @@ export function useSipVoice(token, enabled, identity = {}) {
     if (!userAgent) throw new Error('The SIP phone is not registered yet.');
     const domain = credentialsRef.current?.userAgent?.configuration?.uri?.host || '';
     const target = sipTargetUri(destination, domain);
-    const session = await inviteSipTarget(userAgent, target, options.headers || []);
+    const session = await inviteSipTarget(userAgent, target, options.headers || [], {
+      onReject: (statusCode, reasonPhrase) => {
+        reportWebVoiceError('SIP INVITE rejected', new Error(`${statusCode} ${reasonPhrase}`));
+        setError(describeCallRejection(statusCode, reasonPhrase));
+      },
+      onError: (failure) => {
+        reportWebVoiceError('SIP INVITE', failure);
+        setError(failure instanceof Error && failure.message ? failure.message : 'The call could not be started.');
+      },
+    });
     attachSipMedia(session);
     sessionRef.current = session;
     session.stateChange.addListener((next) => {

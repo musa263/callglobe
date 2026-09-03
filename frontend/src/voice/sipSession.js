@@ -27,7 +27,7 @@ export async function connectSipUserAgent(input) {
   return { userAgent, registerer };
 }
 
-export async function inviteSipTarget(userAgent, targetUri, extraHeaders = []) {
+export async function inviteSipTarget(userAgent, targetUri, extraHeaders = [], handlers = {}) {
   const target = UserAgent.makeURI(targetUri);
   if (!target) throw new Error('The SIP destination is invalid.');
   const inviter = new Inviter(userAgent, target, {
@@ -35,8 +35,14 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = []) {
     earlyMedia: false,
     sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } },
   });
-  const sending = inviter.invite();
-  sending.catch(() => undefined);
+  // The rejection is the one thing the person needs to see: without it a
+  // refused call just ended, with no word on why.
+  const sending = inviter.invite({
+    requestDelegate: {
+      onReject: (response) => handlers.onReject?.(response?.message?.statusCode, response?.message?.reasonPhrase),
+    },
+  });
+  sending.catch((failure) => handlers.onError?.(failure));
   return inviter;
 }
 
