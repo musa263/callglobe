@@ -37,3 +37,7 @@ Thumbs.db
 *.log
 backend/supabase/.temp/
 .vercel
+
+# Python bytecode from the self-hosted services
+__pycache__/
+*.py[co]

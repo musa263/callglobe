@@ -34,7 +34,7 @@
         <action application="set" data="vocivo_did=+$1"/>
         <action application="set" data="curl_timeout=8"/>
         <action application="set" data="curl_add_header=Authorization: Bearer $${SIP_EDGE_SECRET}"/>
-        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {\"to\":\"${vocivo_did}\"}"/>
+        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {&quot;to&quot;:&quot;${vocivo_did}&quot;}"/>
         <action application="log" data="INFO Vocivo inbound lookup ${curl_response_data}"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>
@@ -47,6 +47,21 @@
         <action application="speak" data="flite|kal|${regex(${curl_response_data}|&quot;prompt&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
         <action application="sleep" data="400"/>
         <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+    <!-- Vocivo's own receptionist. `socket` hands the call to the service on
+         this droplet, which answers, listens, thinks and speaks with our own
+         speech recognition and voice, and transfers back into this dialplan
+         when the caller asks for a person. The actions after it run only when
+         that service could not be reached. -->
+    <extension name="vocivo-inbound-ai">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${vocivo_gathered}" expression="^$"/>
+      <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;ai&quot;">
+        <action application="socket" data="127.0.0.1:8084 async full"/>
+        <action application="log" data="WARNING Vocivo receptionist did not answer; falling back to the menu"/>
+        <action application="set" data="vocivo_ai_unavailable=true"/>
+        <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>
     </extension>
     <extension name="vocivo-inbound-menu">
@@ -64,7 +79,7 @@
         <action application="set" data="vocivo_gathered=true"/>
         <action application="set" data="curl_timeout=8"/>
         <action application="set" data="curl_add_header=Authorization: Bearer $${SIP_EDGE_SECRET}"/>
-        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {\"to\":\"${vocivo_did}\",\"digit\":\"${vocivo_digit}\"}"/>
+        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound json {&quot;to&quot;:&quot;${vocivo_did}&quot;,&quot;digit&quot;:&quot;${vocivo_digit}&quot;}"/>
         <action application="log" data="INFO Vocivo inbound digit ${vocivo_digit} ${curl_response_data}"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>

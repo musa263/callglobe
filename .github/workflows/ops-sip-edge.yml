@@ -8,7 +8,8 @@ name: Ops · Droplets
 #   OPS_SSH_KEY        private key whose public half is in root's authorized_keys on the droplets
 #   SIP_EDGE_HOST      IP or hostname of vocivo-sip
 #   PBX_HOST           IP or hostname of vocivo-pbx-01b (optional; only for host=pbx)
-#   TTS_SERVICE_SECRET shared TTS bearer secret (only for tts-deploy)
+#   TTS_SERVICE_SECRET shared TTS bearer secret (tts-deploy, receptionist-deploy)
+#   LLM_API_KEY        language-model key for the AI receptionist (receptionist-deploy)
 # Optional repository variables:
 #   OPS_SSH_USER       default root
 #   SIP_EDGE_REPO_DIR  checkout path on the droplet; auto-discovered when unset
@@ -29,10 +30,13 @@ on:
           - status
           - logs
           - deploy
+          - sync-config
           - enable-inbound
           - disable-inbound
           - tts-deploy
           - tts-status
+          - receptionist-deploy
+          - receptionist-status
       host:
         description: Which droplet
         required: true
@@ -66,6 +70,33 @@ jobs:
           ssh-keyscan -T 10 -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
           echo "HOST=$HOST" >> "$GITHUB_ENV"
 
+      # A dialplan that will not parse takes the whole switch down with it, so
+      # it is checked on the runner rather than discovered by the first caller.
+      - name: Check the FreeSWITCH configuration
+        if: inputs.action == 'sync-config'
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          broken = []
+          checked = 0
+          for path in sorted(Path("services/sip/freeswitch").rglob("*.xml")):
+              checked += 1
+              try:
+                  ET.parse(path)
+              except ET.ParseError as error:
+                  broken.append(f"{path}: {error}")
+          if broken:
+              print("::error::the dialplan would not parse:")
+              for line in broken:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          print(f"{checked} FreeSWITCH XML files parse")
+          PYCHECK
+
       - name: Run
         env:
           ACTION: ${{ inputs.action }}
@@ -73,9 +104,14 @@ jobs:
           REPO_DIR: ${{ vars.SIP_EDGE_REPO_DIR }}
           TTS_SERVICE_SECRET: ${{ secrets.TTS_SERVICE_SECRET }}
           TTS_PUBLIC_BASE_URL: ${{ vars.TTS_PUBLIC_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          SIP_EDGE_SECRET: ${{ secrets.SIP_EDGE_SECRET }}
         run: |
           set -euo pipefail
           if [ -n "$TTS_SERVICE_SECRET" ]; then echo "::add-mask::$TTS_SERVICE_SECRET"; fi
+          if [ -n "$LLM_API_KEY" ]; then echo "::add-mask::$LLM_API_KEY"; fi
+          if [ -n "$SIP_EDGE_SECRET" ]; then echo "::add-mask::$SIP_EDGE_SECRET"; fi
 
           # The remote script is generated here from fixed fragments; inputs only choose which fragment runs.
           # NOTE: every discovery pipeline below ends in `|| true`. `head -1` closes the
@@ -200,6 +236,32 @@ jobs:
               fi
               cd "$SIP_DIR" && docker compose pull --quiet && docker compose up -d --remove-orphans && docker compose ps
               ';;
+            sync-config)
+              # The droplet has always been configured by hand, so the repository
+              # and the live box drifted. services/sip is now an import of what is
+              # actually running (see docs/sip-edge-reconciliation.md), which makes
+              # shipping it safe — and necessary, because nothing in the repository
+              # reaches the edge otherwise.
+              echo "shipping services/sip to the droplet"
+              tar czf - -C services sip | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
+                'set -e; install -d -m 755 /opt/vocivo/sip-backups; ts=$(date +%Y%m%d%H%M%S); [ -d /opt/vocivo/sip ] && cp -a /opt/vocivo/sip "/opt/vocivo/sip-backups/$ts"; rm -rf /opt/vocivo/sip.new; install -d /opt/vocivo/sip.new; tar xzf - -C /opt/vocivo/sip.new; echo "backed up to /opt/vocivo/sip-backups/$ts"'
+              remote="$remote"'
+              # .env holds the secrets and is not in the repository; it is the one
+              # file that survives a sync.
+              [ -f "$SIP_DIR/.env" ] && cp "$SIP_DIR/.env" /opt/vocivo/sip.new/sip/.env
+              latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
+              rm -rf "$SIP_DIR" && mv /opt/vocivo/sip.new/sip "$SIP_DIR" && rmdir /opt/vocivo/sip.new
+              cd "$SIP_DIR"
+              if ! docker compose config >/dev/null 2>&1; then
+                echo "::error::the shipped compose file is not valid; rolling back"
+                rm -rf "$SIP_DIR" && cp -a "$latest" "$SIP_DIR"
+                exit 1
+              fi
+              docker compose up -d --remove-orphans
+              sleep 8
+              docker compose ps
+              docker compose logs --tail=30 --no-color freeswitch | { grep -Ei "error|crit|cannot|failed" || echo "no FreeSWITCH errors in the last 30 lines"; }
+              ';;
             enable-inbound|disable-inbound)
               flag=$([ "$ACTION" = enable-inbound ] && echo 1 || echo 0)
               remote="$remote"'
@@ -272,6 +334,45 @@ jobs:
                   -H "Authorization: Bearer $secret" -H "Content-Type: application/json" \
                   -d "{\"input\":\"Thank you for calling. Please hold.\",\"voice\":\"$voice\"}"
               done
+              ';;
+            receptionist-deploy)
+              [ -n "$TTS_SERVICE_SECRET" ] || { echo "::error::TTS_SERVICE_SECRET secret is required"; exit 1; }
+              [ -n "$LLM_API_KEY" ] || { echo "::error::LLM_API_KEY secret is required"; exit 1; }
+              [ -n "$SIP_EDGE_SECRET" ] || { echo "::error::SIP_EDGE_SECRET secret is required"; exit 1; }
+              echo "shipping services/receptionist to the droplet"
+              tar czf - -C services receptionist | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
+                'set -e; install -d -m 755 /opt/vocivo; rm -rf /opt/vocivo/receptionist.new; install -d /opt/vocivo/receptionist.new; tar xzf - -C /opt/vocivo/receptionist.new; rm -rf /opt/vocivo/receptionist; mv /opt/vocivo/receptionist.new/receptionist /opt/vocivo/receptionist; rmdir /opt/vocivo/receptionist.new'
+              remote="$remote"'
+              install -d -m 700 /etc/vocivo
+              umask 077
+              printf "TTS_SERVICE_SECRET=%s\nLLM_API_KEY=%s\nLLM_MODEL=%s\nSIP_EDGE_SECRET=%s\nVOCIVO_API_URL=%s\nSTT_MODEL=%s\n" \
+                "'"$TTS_SERVICE_SECRET"'" "'"$LLM_API_KEY"'" "'"${LLM_MODEL:-claude-3-5-haiku-latest}"'" "'"$SIP_EDGE_SECRET"'" "https://vocivo.app" "base" > /etc/vocivo/receptionist.env
+              # Niced and capped for the same reason the voice engine is: this
+              # box carries live audio and must not be starved by a build.
+              cd /opt/vocivo/receptionist && nice -n 19 docker build --memory 2g --progress plain -t vocivo-receptionist . 2>&1 | tail -25
+              docker rm -f vocivo-receptionist >/dev/null 2>&1 || true
+              # host networking so FreeSWITCH reaches it on loopback, and the
+              # audio volume is the one FreeSWITCH already mounts.
+              docker run -d --restart unless-stopped --name vocivo-receptionist --network host \
+                --cpus 1.5 --memory 2g --env-file /etc/vocivo/receptionist.env \
+                -v sip_receptionist-audio:/var/lib/vocivo-receptionist vocivo-receptionist >/dev/null
+              echo "--- waiting for the speech recogniser to load ---"
+              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                sleep 10
+                if docker logs vocivo-receptionist 2>&1 | grep -q "listening for FreeSWITCH"; then break; fi
+              done
+              docker ps --filter name=vocivo-receptionist --format "{{.Names}} {{.Status}}"
+              docker logs --tail=20 vocivo-receptionist 2>&1 | { grep -Ev "^$" || true; }
+              # Loopback only: the Event Socket has no authentication in
+              # outbound mode, so anything that can reach 8084 can answer calls.
+              ss -ltnp 2>/dev/null | { grep -E ":8084" || echo "nothing is listening on 8084"; }
+              ';;
+            receptionist-status)
+              remote="$remote"'
+              docker ps --filter name=vocivo-receptionist --format "{{.Names}} {{.Status}}" | { grep . || echo "the receptionist is not running"; }
+              ss -ltn 2>/dev/null | { grep -E ":8084" || echo "nothing is listening on 8084"; }
+              echo "--- recent log ---"
+              docker logs --tail=40 vocivo-receptionist 2>&1 | { grep -Ev "^$" || true; }
               ';;
             tts-status)
               remote="$remote"'

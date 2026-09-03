@@ -18,6 +18,7 @@ import webPush from './_lib/routes/voice-web-push.js';
 import aiTransfer from './_lib/routes/voice-ai-transfer.js';
 import sipAuth from './_lib/routes/voice-sip-auth.js';
 import sipCredentials from './_lib/routes/voice-sip-credentials.js';
+import receptionist from './_lib/routes/voice-receptionist.js';
 import sipInbound from './_lib/routes/voice-sip-inbound.js';
 import sipWakeup from './_lib/routes/voice-sip-wakeup.js';
 import sipDialplan from './_lib/routes/voice-sip-dialplan.js';
@@ -46,6 +47,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   'web-push': webPush,
   'sip-auth': sipAuth,
   'sip-credentials': sipCredentials,
+  receptionist,
   'sip-inbound': sipInbound,
   'sip-wakeup': sipWakeup,
   'sip-dialplan': sipDialplan,

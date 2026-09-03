@@ -99,11 +99,18 @@ export type SipDialplanInput = {
   promptFormat: 'wav' | 'mp3';
   recordingsDir: string;
   trunkGateway: string;
+  /**
+   * host:port of Vocivo's own receptionist, which FreeSWITCH reaches over the
+   * Event Socket. Loopback on the SIP edge, because the receptionist runs on
+   * the same droplet and nothing outside it should be able to answer calls.
+   */
+  receptionist?: string;
   now: Date;
 };
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 const kamailioLoopback = '127.0.0.1:5060';
+const defaultReceptionist = '127.0.0.1:8084';
 const queueAttemptSeconds = 45;
 const maxForwardingDepth = 2;
 const voicemailMaxSeconds = 120;
@@ -458,11 +465,36 @@ function entryActions(input: SipDialplanInput) {
   if (owned && assignment?.destinationType === 'ivr' && assignment.destinationId) {
     return [...prelude, ...configuredIvrActions(input, assignment.destinationId)];
   }
-  // The Telnyx AI receptionist has no FreeSWITCH equivalent yet; the configured
-  // voice menu is the same fallback the webhook uses when the assistant fails.
+  if (input.pbx.ai?.enabled) return [...prelude, ...receptionistActions(input)];
   if (!input.business.enabled) return [...prelude, ...mainLineActions(input)];
+  return [...prelude, ...menuFallbackActions(input)];
+}
+
+/**
+ * Hands the call to Vocivo's own receptionist.
+ *
+ * `socket ... async full` connects FreeSWITCH to the receptionist service over
+ * the Event Socket; that service answers, listens, thinks and speaks using
+ * Vocivo's own speech recognition and voice, and transfers back into this same
+ * dialplan when the caller asks for a person.
+ *
+ * The actions after it run only when the receptionist could not be reached, so
+ * an unreachable service degrades to the voice menu rather than to silence.
+ */
+function receptionistActions(input: SipDialplanInput): Action[] {
+  const address = input.receptionist || defaultReceptionist;
+  return [
+    set('vocivo_did', channelSafe(input.did)),
+    set('vocivo_org', channelSafe(input.organizationId)),
+    action('socket', `${address} async full`),
+    action('log', 'WARNING Vocivo receptionist did not answer; falling back to the voice menu'),
+    ...menuFallbackActions(input),
+  ];
+}
+
+function menuFallbackActions(input: SipDialplanInput): Action[] {
   const menu = menuPrompt(input);
-  return [...prelude, ...gatherActions(input, {
+  return gatherActions(input, {
     prompt: menu.prompt,
     invalid: menu.invalid,
     minDigits: 1,
@@ -470,7 +502,7 @@ function entryActions(input: SipDialplanInput) {
     regex: `^[${menu.validDigits}]$`,
     timeoutMs: 10000,
     next: 'ivr-select',
-  })];
+  });
 }
 
 function ivrSelectActions(input: SipDialplanInput) {
