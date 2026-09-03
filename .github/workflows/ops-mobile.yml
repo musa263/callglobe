@@ -23,6 +23,7 @@ on:
           - build-ios
           - build-android
           - build-both
+          - submit-ios
           - list-builds
       profile:
         description: EAS build profile
@@ -56,12 +57,14 @@ jobs:
         run: npm ci
 
       - name: Unit tests
+        if: inputs.action == 'prebuild-check' || startsWith(inputs.action, 'build-')
         run: npm run test:unit
 
       # Generating the native projects is the cheapest way to find a config
       # plugin that no longer applies — a broken plugin otherwise surfaces
       # twenty minutes into an EAS build, or worse, silently drops a file.
       - name: Prebuild check
+        if: inputs.action == 'prebuild-check' || startsWith(inputs.action, 'build-')
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
@@ -116,8 +119,24 @@ jobs:
             --non-interactive \
             --no-wait
 
+      # Signing and the App Store Connect credentials live on EAS. --latest
+      # submits the most recent finished build rather than starting a new one,
+      # so this never silently rebuilds something you have already tested.
+      - name: Submit to TestFlight
+        if: inputs.action == 'submit-ios'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$EXPO_TOKEN" ] || { echo "::error::EXPO_TOKEN secret is missing"; exit 1; }
+          npx --yes eas-cli@latest submit \
+            --platform ios \
+            --profile "${{ inputs.profile }}" \
+            --latest \
+            --non-interactive
+
       - name: List builds
-        if: inputs.action == 'list-builds' || startsWith(inputs.action, 'build-')
+        if: inputs.action == 'list-builds' || inputs.action == 'submit-ios' || startsWith(inputs.action, 'build-')
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
