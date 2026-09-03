@@ -1,2 +1,7 @@
 httpx==0.28.1
 faster-whisper==1.1.1
+# faster-whisper 1.1.1 imports requests but does not declare it, and the
+# huggingface_hub 1.x it otherwise resolves to no longer brings it along:
+# the first deploy died on "No module named 'requests'" before it listened.
+requests>=2.32,<3
+huggingface_hub>=0.25,<1.0
