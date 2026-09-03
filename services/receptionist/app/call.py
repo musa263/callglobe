@@ -39,6 +39,9 @@ class CallHandler:
             return
 
         await connection.execute("answer")
+        # The carrier's media takes a moment to arrive after the answer; a
+        # greeting that starts before it does loses its first word or two.
+        await connection.execute("sleep", "400", timeout=5)
         # Narrowband is what the caller hears anyway, and it keeps recordings
         # small enough that transcription starts the moment they stop talking.
         await connection.set("record_sample_rate", "8000")

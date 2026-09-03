@@ -4,7 +4,7 @@ import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { get, put } from '../object-store.js';
 import { verifyPromptSignature } from '../sip-dialplan.js';
 import { telnyx } from '../telnyx.js';
-import { carrierFallbackVoice, promptVoice, renderVocivoPrompt } from '../voice-catalog.js';
+import { carrierFallbackVoice, defaultVocivoVoice, promptVoice, renderVocivoPrompt } from '../voice-catalog.js';
 
 /**
  * Prompt audio for the SIP-edge dialplan. FreeSWITCH fetches these through
@@ -25,13 +25,29 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array> | null | undefi
   return Buffer.from(await new Response(stream).arrayBuffer());
 }
 
-async function synthesize(text: string, voice: string): Promise<{ audio: Buffer; contentType: string }> {
-  const vocivoUrl = await renderVocivoPrompt(text, promptVoice(voice));
-  if (vocivoUrl) {
-    const response = await fetch(vocivoUrl, { signal: AbortSignal.timeout(8000) });
-    if (response.ok) return { audio: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') || 'audio/wav' };
-    console.error('Vocivo TTS prompt fetch failed; using carrier voice.', response.status);
+async function fetchVocivoPrompt(text: string, voice: string) {
+  const vocivoUrl = await renderVocivoPrompt(text, voice);
+  if (!vocivoUrl) return null;
+  const response = await fetch(vocivoUrl, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) {
+    console.error('Vocivo TTS prompt fetch failed.', response.status, voice);
+    return null;
   }
+  return { audio: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') || 'audio/wav' };
+}
+
+/**
+ * The tenant's own voice first; Vocivo's default voice if the engine cannot
+ * speak that one (a language this deployment lacks, say); the carrier last.
+ * The carrier returns mp3 while the edge asks for wav, and a wav-named file
+ * holding mp3 is one FreeSWITCH cannot open — so the carrier is only ever
+ * the last resort, and the format mismatch is logged when it happens.
+ */
+async function synthesize(text: string, voice: string, format: 'wav' | 'mp3'): Promise<{ audio: Buffer; contentType: string }> {
+  const preferred = promptVoice(voice);
+  const own = await fetchVocivoPrompt(text, preferred) || (preferred !== defaultVocivoVoice ? await fetchVocivoPrompt(text, defaultVocivoVoice) : null);
+  if (own) return own;
+  console.error(`Vocivo TTS could not render a ${format} prompt; using the carrier voice.`);
   const response = await telnyx('/text-to-speech/speech', {
     method: 'POST',
     body: JSON.stringify({ text, voice: carrierFallbackVoice(voice), output_type: 'binary_output' }),
@@ -59,12 +75,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       contentType = cached.blob?.contentType || contentType;
     }
     if (!audio) {
-      const rendered = await synthesize(text, voice);
+      const rendered = await synthesize(text, voice, format);
       audio = rendered.audio;
       contentType = rendered.contentType;
       const expected = format === 'wav' ? /wav|x-wav|wave/i : /mpeg|mp3/i;
-      if (!expected.test(contentType)) console.warn(`Vocivo SIP prompt rendered as ${contentType} but the dialplan expects ${format}; check TTS_SERVICE_URL / carrier voice output.`);
-      await put(pathname, audio, { access: 'private', contentType, allowOverwrite: true }).catch((error) => console.error('Vocivo could not cache a SIP prompt.', error));
+      if (expected.test(contentType)) {
+        await put(pathname, audio, { access: 'private', contentType, allowOverwrite: true }).catch((error) => console.error('Vocivo could not cache a SIP prompt.', error));
+      } else {
+        // Served once, never cached: a wav-named file holding mp3 is one the
+        // edge cannot play, and caching it would make the silence permanent.
+        console.warn(`Vocivo SIP prompt rendered as ${contentType} but the dialplan expects ${format}; check TTS_SERVICE_URL / carrier voice output.`);
+      }
     }
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', String(audio.length));

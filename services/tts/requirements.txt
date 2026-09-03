@@ -3,3 +3,8 @@ uvicorn[standard]==0.35.0
 kokoro==0.9.4
 soundfile==0.13.1
 numpy==2.2.6
+# Kokoro's Spanish, French, Italian and Portuguese voices phonemise through
+# espeak-ng; misaki reaches it through these two, which its English extra
+# does not bring along.
+phonemizer-fork>=3.3.2
+espeakng-loader>=0.2.4

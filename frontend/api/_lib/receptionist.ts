@@ -1,4 +1,5 @@
 import type { ExtensionUser } from './pbx.js';
+import { vocivoVoices, voiceDefinition } from './voice-catalog.js';
 import type { PbxConfig } from './pbx-config-store.js';
 import { normalizeE164 } from './tenancy.js';
 
@@ -71,11 +72,21 @@ const voiceAliases: Record<string, string> = {
   'Telnyx.Bayan.Michael': 'am_michael',
 };
 
-const selfHostedVoices = new Set(['af_heart', 'af_bella', 'am_adam', 'am_michael']);
+const kokoroVoiceIds = new Set(vocivoVoices.map((voice) => voice.sourceVoice));
 
+/**
+ * The Kokoro voice id the speech engine wants, from whatever the tenant's
+ * record holds: a catalog id (`Vocivo.Kokoro.AmAdam`), the engine's own id,
+ * the carrier's copy of a Kokoro voice, or one of the old carrier voices.
+ * Anything else falls back to the default voice rather than to silence.
+ */
 export function receptionistVoice(stored: string): string {
   const trimmed = (stored || '').trim();
-  if (selfHostedVoices.has(trimmed)) return trimmed;
+  if (kokoroVoiceIds.has(trimmed)) return trimmed;
+  const catalog = voiceDefinition(trimmed);
+  if (catalog) return catalog.sourceVoice;
+  const carrierCopy = /^Telnyx\.KokoroTTS\.([a-z]{2}_[a-z]+)$/.exec(trimmed);
+  if (carrierCopy && kokoroVoiceIds.has(carrierCopy[1])) return carrierCopy[1];
   return voiceAliases[trimmed] || 'af_heart';
 }
 

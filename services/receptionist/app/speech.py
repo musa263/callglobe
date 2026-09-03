@@ -44,12 +44,18 @@ class Voice:
         path = self._path_for(text, chosen)
         if path.exists() and path.stat().st_size > 0:
             return path
+        # /v1/audio/speech answers with the WAV itself. (/v1/audio/render
+        # answers with JSON naming a public URL — the first deploy wrote that
+        # JSON into a .wav and every word the receptionist said was silence.)
         response = await self._client.post(
-            f"{self._settings.tts_url}/v1/audio/render",
+            f"{self._settings.tts_url}/v1/audio/speech",
             headers={"Authorization": f"Bearer {self._settings.tts_secret}"},
-            json={"input": text, "voice": chosen},
+            json={"input": text, "voice": chosen, "format": "wav"},
         )
         response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if "audio" not in content_type or len(response.content) < 64 or not response.content.startswith(b"RIFF"):
+            raise RuntimeError(f"voice engine answered with {content_type or 'no content type'}, not audio")
         # Written beside the target and moved into place, so a prompt half
         # written while another call reads the same path can never be played.
         staging = path.with_suffix(".partial")

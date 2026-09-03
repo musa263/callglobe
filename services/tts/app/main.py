@@ -22,11 +22,32 @@ cache_ttl_seconds = max(1, int(os.getenv("TTS_CACHE_TTL_DAYS", "30"))) * 86400
 service_secret = os.getenv("TTS_SERVICE_SECRET", "")
 pipelines: dict[str, KPipeline] = {}
 
+# Kokoro's voice packs, the same 37 the API offers as Vocivo.Kokoro.<Name>.
+# The first letter of a voice id is its language: a American English,
+# b British English, e Spanish, f French, i Italian, p Brazilian Portuguese.
+# The service knew four of these and answered "Unknown voice" for the other
+# thirty-three a tenant could pick in the admin.
+_LANGUAGES = {"a": "English", "b": "English", "e": "Spanish", "f": "French", "i": "Italian", "p": "Portuguese"}
+_VOICE_NAMES = {
+    "af_heart": "Amina", "af_alloy": "Alloy", "af_aoede": "Aoede", "af_bella": "Bella", "af_jessica": "Jessica",
+    "af_kore": "Kore", "af_nicole": "Nicole", "af_nova": "Nova", "af_river": "River", "af_sarah": "Sarah", "af_sky": "Sky",
+    "am_adam": "Adam", "am_echo": "Echo", "am_eric": "Eric", "am_fenrir": "Fenrir", "am_liam": "Liam",
+    "am_michael": "Michael", "am_onyx": "Onyx", "am_puck": "Puck", "am_santa": "Nicholas",
+    "bf_alice": "Alice", "bf_emma": "Emma", "bf_isabella": "Isabella", "bf_lily": "Lily",
+    "bm_daniel": "Daniel", "bm_fable": "Fable", "bm_george": "George", "bm_lewis": "Lewis",
+    "ef_dora": "Dora", "em_alex": "Alex", "em_santa": "Santiago",
+    "ff_siwis": "Siwis",
+    "if_sara": "Sara", "im_nicola": "Nicola",
+    "pf_dora": "Dora BR", "pm_alex": "Alex BR", "pm_santa": "Mateus",
+}
 voices = {
-    "af_heart": {"name": "Amina", "gender": "female", "language": "English", "lang_code": "a"},
-    "af_bella": {"name": "Bella", "gender": "female", "language": "English", "lang_code": "a"},
-    "am_adam": {"name": "Adam", "gender": "male", "language": "English", "lang_code": "a"},
-    "am_michael": {"name": "Michael", "gender": "male", "language": "English", "lang_code": "a"},
+    voice_id: {
+        "name": name,
+        "gender": "female" if voice_id[1] == "f" else "male",
+        "language": _LANGUAGES[voice_id[0]],
+        "lang_code": voice_id[0],
+    }
+    for voice_id, name in _VOICE_NAMES.items()
 }
 
 
@@ -48,7 +69,10 @@ def authorize(authorization: str | None = Header(default=None)) -> None:
 
 def pipeline_for(lang_code: str) -> KPipeline:
     if lang_code not in pipelines:
-        pipelines[lang_code] = KPipeline(lang_code=lang_code)
+        try:
+            pipelines[lang_code] = KPipeline(lang_code=lang_code)
+        except Exception as error:  # noqa: BLE001 - a language this image cannot speak is a clear answer, not a crash
+            raise HTTPException(status_code=503, detail=f"This deployment cannot speak language '{lang_code}': {error}") from error
     return pipelines[lang_code]
 
 

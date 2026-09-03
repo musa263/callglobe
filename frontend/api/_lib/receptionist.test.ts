@@ -60,6 +60,16 @@ test('a carrier voice name maps onto the self-hosted voice nearest it', () => {
   assert.equal(receptionistVoice(''), 'af_heart');
 });
 
+test('the voice a tenant picks in the admin is the voice the receptionist speaks with', () => {
+  // The admin offers the catalog ids; the receptionist knew four engine ids
+  // and quietly spoke with the default for every other choice.
+  assert.equal(receptionistVoice('Vocivo.Kokoro.AmAdam'), 'am_adam');
+  assert.equal(receptionistVoice('Vocivo.Kokoro.BfEmma'), 'bf_emma');
+  assert.equal(receptionistVoice('Vocivo.Kokoro.EfDora'), 'ef_dora');
+  assert.equal(receptionistVoice('Telnyx.KokoroTTS.bm_george'), 'bm_george');
+  assert.equal(receptionistVoice('bf_lily'), 'bf_lily');
+});
+
 test('only extensions somebody can actually answer are offered as transfers', () => {
   const targets = transferTargets([
     extension(),

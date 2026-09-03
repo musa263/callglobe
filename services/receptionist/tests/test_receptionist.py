@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.brain import Assistant, Conversation, TransferTarget, decision_from_response, system_prompt, tool_definitions
 from app.esl import EslConnection, Message, parse_header_block
-from app.speech import recording_has_audio
+from app.config import Settings
+from app.speech import Voice, recording_has_audio
 
 RECEPTION = Assistant(
     name="Reception",
@@ -221,3 +222,49 @@ class Recordings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
+    """The receptionist must ask the voice engine for audio, and refuse anything else."""
+
+    def _voice(self, directory: str, transport):
+        import httpx
+
+        settings = Settings(tts_url="http://voice.test", tts_secret="s", audio_dir=directory)
+        voice = Voice(settings)
+        voice._client = httpx.AsyncClient(transport=transport)
+        return voice
+
+    async def test_asks_the_speech_endpoint_and_keeps_the_wav(self):
+        import httpx
+
+        seen: list[httpx.Request] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, content=b"RIFF" + b"\x00" * 100, headers={"content-type": "audio/wav"})
+
+        with TemporaryDirectory() as directory:
+            voice = self._voice(directory, httpx.MockTransport(handle))
+            path = await voice.say("Thanks for calling.", "am_adam")
+            self.assertEqual(seen[0].url.path, "/v1/audio/speech")
+            self.assertEqual(seen[0].headers["authorization"], "Bearer s")
+            self.assertIn(b'"voice": "am_adam"', seen[0].content.replace(b'":"', b'": "'))
+            self.assertTrue(path.read_bytes().startswith(b"RIFF"))
+            # The second time round nothing is synthesised.
+            await voice.say("Thanks for calling.", "am_adam")
+            self.assertEqual(len(seen), 1)
+
+    async def test_json_from_the_render_endpoint_is_not_mistaken_for_audio(self):
+        import httpx
+
+        # This is what /v1/audio/render answers, and what the first deploy
+        # wrote into a .wav file: every word the receptionist said was silence.
+        def handle(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"id": "abc", "audio_url": "https://x/y.wav"})
+
+        with TemporaryDirectory() as directory:
+            voice = self._voice(directory, httpx.MockTransport(handle))
+            with self.assertRaises(RuntimeError):
+                await voice.say("Hello", "af_heart")
+            self.assertEqual(list((Path(directory) / "prompts").glob("*.wav")), [])

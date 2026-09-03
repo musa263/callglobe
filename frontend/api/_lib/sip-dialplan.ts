@@ -462,6 +462,9 @@ function entryActions(input: SipDialplanInput) {
   const caller = callerVars(input);
   const prelude = [
     action('answer'),
+    // The carrier's media takes a moment to arrive after the answer; a prompt
+    // that starts before it does loses its first word or two.
+    action('sleep', '400'),
     set('vocivo_org', channelSafe(input.organizationId, 80)),
     set('vocivo_did', channelSafe(input.did, 24)),
     set('vocivo_from', caller.number),
