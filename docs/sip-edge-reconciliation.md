@@ -70,3 +70,50 @@ exposed to toll fraud, and committed a fix for it (`e51204e`). That was true of 
 not of the running system: the live config already restricts E.164 origination to the authenticated WebSocket
 port. The exposure would have been created by deploying the repo, not by leaving the droplet alone. The fix is
 superseded by this import and the live approach is stricter than mine was.
+
+## Update — 3 September 2026
+
+Three things changed since the import, and one of them was a real fault sitting in the deployed dialplan.
+
+### `public.xml` is not valid XML
+
+The two `curl` actions in `vocivo-inbound-did` and `vocivo-inbound-menu` write their JSON bodies as
+`data="... {\"to\":\"${vocivo_did}\"}"`. A backslash does not escape a quote inside an XML attribute — the
+first `"` ends the attribute, whatever precedes it. `xml.etree` refuses the file at line 37, and so would
+FreeSWITCH's parser.
+
+This has gone unnoticed for the same reason problem 1 above is latent: inbound is off, so nothing exercises those
+extensions. But a parser rejects a *file*, not an extension. The day `VOCIVO_SIP_INBOUND` was switched to 1 and
+FreeSWITCH reloaded, it would have lost the whole `public` context — conferences and outbound PSTN included, not
+just the inbound branches.
+
+Fixed by using `&quot;`. The quality gates now parse every FreeSWITCH XML file on every push, and `sync-config`
+re-checks before it ships anything.
+
+### Nothing in this repository ever reached the droplet
+
+The import made the repo describe the live edge, but there was still no way for a change here to become a change
+there — `Ops · Droplets → deploy` only runs `docker compose up` against whatever is already on the box. That is
+why a malformed dialplan could sit in the repo without consequence, and it would have made the AI receptionist
+below undeployable.
+
+`Ops · Droplets → sync-config` now ships `services/sip`, after checking every XML file parses, keeping `.env`
+(the one file that is not in the repo), taking a timestamped backup under `/opt/vocivo/sip-backups/`, and rolling
+back if `docker compose config` rejects the result.
+
+### The AI receptionist is no longer a carrier feature
+
+`sip-dialplan.ts` carried the line *"The Telnyx AI receptionist has no FreeSWITCH equivalent yet"*. It now has
+one: `services/receptionist`, reached from the dialplan with `socket 127.0.0.1:8084 async full` — a stock
+FreeSWITCH module, so there is no custom build to maintain.
+
+Both inbound designs were given the hook, because either may end up winning: `vocivo-inbound-ai` in the deployed
+`public.xml`, and a `receptionistActions` branch in `renderSipDialplan`. In both cases the actions after the
+socket run only if the service could not be reached, so an unreachable receptionist degrades to the voice menu
+rather than to silence.
+
+What that leaves outside Vocivo's own hardware, for an answered call: one HTTPS request per conversational turn
+to a language model. Telephony, speech recognition and the voice are all local. The trunk and the DID remain a
+carrier service, which is the intended arrangement — the point was never to stop buying numbers, it was to stop
+paying per minute for calls that never leave the tenant.
+
