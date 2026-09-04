@@ -159,11 +159,27 @@ function signaturesMatch(expected: string, supplied: string) {
   return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
 }
 
-export function promptSignature(secret: string, text: string, voice: string, format: string) {
-  return signature(secret, 'prompt', format, voice, text);
+/**
+ * A prompt as both ends will see it.
+ *
+ * The URL carried the text as written and signed the same, and the endpoint
+ * verified the signature against a trimmed copy — so a greeting saved with a
+ * trailing space, or an empty one (which leaves the menu sentence starting
+ * with a space), produced a URL whose signature could never match. The caller
+ * heard nothing at all, because a 403 is not audio. Both ends normalise the
+ * same way now, which is also how the receptionist splits a sentence, so the
+ * pre-rendered copy is the one the call plays.
+ */
+export function normalizedPromptText(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
-export function promptUrl(input: Pick<SipDialplanInput, 'apiUrl' | 'secret' | 'promptFormat'>, text: string, voice: string) {
+export function promptSignature(secret: string, text: string, voice: string, format: string) {
+  return signature(secret, 'prompt', format, voice, normalizedPromptText(text));
+}
+
+export function promptUrl(input: Pick<SipDialplanInput, 'apiUrl' | 'secret' | 'promptFormat'>, rawText: string, voice: string) {
+  const text = normalizedPromptText(rawText);
   const sig = promptSignature(input.secret, text, voice, input.promptFormat);
   // mod_http_cache names its cached copy after the last dot in the whole URL,
   // query string included, and then opens the file by that "extension". A
@@ -455,7 +471,7 @@ function configuredIvrPrompt(input: SipDialplanInput, ivr: PbxConfig['callHandli
 export function dialplanPromptTexts(input: Pick<SipDialplanInput, 'pbx' | 'business' | 'extensions' | 'organizationId'>): { texts: string[]; voice: string } {
   const full = input as SipDialplanInput;
   const texts = new Set<string>();
-  const add = (text: string) => { if (text && text.trim()) texts.add(text.trim()); };
+  const add = (text: string) => { const normalized = normalizedPromptText(text); if (normalized) texts.add(normalized); };
   const menu = menuPrompt(full);
   add(menu.prompt);
   add(menu.invalid);

@@ -102,7 +102,29 @@ function departments(value: unknown, legacyOne?: unknown, legacyTwo?: unknown) {
   return normalized.length >= 1 ? normalized : defaults.departments;
 }
 
+/**
+ * The legacy configuration is a carrier round trip, and the inbound dialplan
+ * asks for it at every routing step of every call — so a slow carrier API was
+ * dead air on the line and an unreachable one was a call that failed to route
+ * at all. Held briefly in the instance that fetched it, and held on to if the
+ * carrier stops answering: a stale greeting is better than no dialplan.
+ */
+let cachedTaggedConfig: { expiresAt: number; value: BusinessVoiceConfig } | null = null;
+const taggedConfigTtlMs = 60_000;
+
 async function readTaggedBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
+  if (cachedTaggedConfig && cachedTaggedConfig.expiresAt > Date.now()) return cachedTaggedConfig.value;
+  try {
+    const value = await readTaggedBusinessVoiceConfigFromCarrier();
+    cachedTaggedConfig = { expiresAt: Date.now() + taggedConfigTtlMs, value };
+    return value;
+  } catch (error) {
+    console.error('Could not read the legacy business voice configuration from the carrier.', error);
+    return cachedTaggedConfig?.value || defaults;
+  }
+}
+
+async function readTaggedBusinessVoiceConfigFromCarrier(): Promise<BusinessVoiceConfig> {
   const tags = await readTags();
   const current = tags.filter((tag) => tag.startsWith(configPrefix));
   const chunks = current.map((tag) => tag.slice(configPrefix.length).match(/^(\d+)_(.+)$/)).filter((match): match is RegExpMatchArray => Boolean(match)).sort((a, b) => Number(a[1]) - Number(b[1])).map((match) => match[2]);
@@ -151,6 +173,7 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
     voice: bounded(input.voice, defaults.voice, 100),
     backgroundImageUrl: typeof input.backgroundImageUrl === 'string' && /^https:\/\//.test(input.backgroundImageUrl) ? input.backgroundImageUrl.slice(0, 500) : '',
   };
+  cachedTaggedConfig = null;
   const pbx = await savePbxConfig((current) => ({ businessVoiceConfigs: { ...current.businessVoiceConfigs, [organizationId]: config } }));
   const numbers: Array<{ id: string; phone_number: string; connection_id?: string | null }> = [];
   for (let page = 1; page <= 20; page += 1) {

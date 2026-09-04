@@ -37,6 +37,11 @@ cache_dir = Path(os.getenv("TTS_CACHE_DIR", "/var/cache/vocivo-tts"))
 cache_dir.mkdir(parents=True, exist_ok=True)
 public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 cache_ttl_seconds = max(1, int(os.getenv("TTS_CACHE_TTL_DAYS", "30"))) * 86400
+# The edge has a small disk and every rendered sentence is kept. Held under a
+# ceiling as well as under an age, and swept on a timer rather than in a
+# request.
+cache_max_bytes = max(64, int(os.getenv("TTS_CACHE_MAX_MB", "2048"))) * 1024 * 1024
+cache_sweep_seconds = max(60, int(os.getenv("TTS_CACHE_SWEEP_SECONDS", "3600")))
 service_secret = os.getenv("TTS_SERVICE_SECRET", "")
 # Languages whose pipeline is built when the process starts rather than on the
 # first caller's greeting. American English is what every default prompt uses.
@@ -137,14 +142,51 @@ def synthesize(request: SpeechRequest) -> bytes:
 
 
 def evict_stale_cache_entries() -> None:
-    # Opportunistic sweep so the content-addressed cache cannot grow unbounded.
+    """
+    Keeps the content-addressed cache inside its age and its size.
+
+    It used to be swept only from /v1/audio/render, which is the carrier's
+    path — on Vocivo's own edge every prompt goes through /v1/audio/speech and
+    the prerender queue, and nothing ever removed a file. Age alone would not
+    have been enough either: a busy tenant's month of prompts is a lot of disk
+    on a droplet this size, so the oldest go once the total is over the limit.
+
+    Called from a janitor thread rather than from a request: the sweep is a
+    stat of every file in the directory, which does not belong in the path a
+    caller is waiting on.
+    """
     cutoff = time.time() - cache_ttl_seconds
     try:
+        entries = []
         for entry in cache_dir.iterdir():
-            if entry.suffix == ".wav" and entry.is_file() and entry.stat().st_mtime < cutoff:
+            if entry.suffix != ".wav" or not entry.is_file():
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            if stat.st_mtime < cutoff:
                 entry.unlink(missing_ok=True)
+                continue
+            entries.append((stat.st_mtime, stat.st_size, entry))
+        total = sum(size for _, size, _ in entries)
+        if total <= cache_max_bytes:
+            return
+        # Oldest first until the cache is back under the limit. A prompt that
+        # is still in use is rendered again the next time it is asked for.
+        for _, size, entry in sorted(entries):
+            if total <= cache_max_bytes:
+                break
+            entry.unlink(missing_ok=True)
+            total -= size
     except OSError:
         pass  # eviction is best-effort; synthesis must never fail because of it
+
+
+def _cache_janitor() -> None:
+    while True:
+        time.sleep(cache_sweep_seconds)
+        evict_stale_cache_entries()
 
 
 def cache_key(request: SpeechRequest) -> str:
@@ -237,6 +279,7 @@ def _warm_up() -> None:
 def start_background_work() -> None:
     threading.Thread(target=_prerender_worker, name="prerender", daemon=True).start()
     threading.Thread(target=_warm_up, name="warm-up", daemon=True).start()
+    threading.Thread(target=_cache_janitor, name="cache-janitor", daemon=True).start()
 
 
 # -- HTTP ----------------------------------------------------------------
@@ -272,7 +315,6 @@ def speech(request: SpeechRequest, _: None = Depends(authorize)) -> Response:
 def render(request: SpeechRequest, _: None = Depends(authorize)) -> dict:
     if not public_base_url.startswith("https://"):
         raise HTTPException(status_code=503, detail="PUBLIC_BASE_URL must be configured with HTTPS")
-    evict_stale_cache_entries()
     was_cached = is_cached(request)
     path = render_to_cache(request)
     return {"id": path.stem, "audio_url": f"{public_base_url}/v1/audio/{path.stem}.wav", "cached": was_cached}

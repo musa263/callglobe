@@ -379,6 +379,17 @@ jobs:
               # .env holds the secrets and is not in the repository; it is the one
               # file that survives a sync.
               if [ -f "$TARGET/.env" ]; then cp "$TARGET/.env" "$STAGE/.env"; fi
+              # The TURN relay used to fall back to the secret "changeme" when
+              # none was set, which is a relay on a public address that anyone
+              # can mint a credential for. compose now refuses to start without
+              # one, so a real one is written here rather than left to be
+              # remembered. Existing values are never touched.
+              touch "$STAGE/.env"
+              if ! grep -qE "^TURN_SECRET=.+" "$STAGE/.env"; then
+                sed -i "/^TURN_SECRET=/d" "$STAGE/.env"
+                printf "TURN_SECRET=%s\n" "$(openssl rand -hex 32)" >> "$STAGE/.env"
+                echo "generated a TURN_SECRET; the relay no longer accepts the default one"
+              fi
               latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
               rm -rf "$TARGET" && mv "$STAGE" "$TARGET" && rmdir /opt/vocivo-stage
               cd "$TARGET"

@@ -7,7 +7,9 @@ import {
   channelSafe,
   dialplanPromptTexts,
   isLocalOrigination,
+  normalizedPromptText,
   parseXmlCurlRequest,
+  promptSignature,
   promptUrl,
   renderSipDialplan,
   verifyPromptSignature,
@@ -219,6 +221,20 @@ test('outside office hours the caller goes straight to a signed voicemail upload
   assert.equal(verifyVoicemailUpload(secret, { org: 'globex', call: 'call-uuid-1', from: '+15559876543', name: 'Jane Caller', exp: params.get('exp') || '', sig: params.get('sig') || '' }, now), false);
   assert.equal(verifyVoicemailUpload(secret, { org: 'acme', call: 'call-uuid-1', from: '+15559876543', name: 'Jane Caller', exp: params.get('exp') || '', sig: params.get('sig') || '' }, new Date(now.getTime() + 2 * 60 * 60 * 1000)), false, 'expired upload links are rejected');
   assert.equal(list.at(-1)?.app, 'hangup');
+});
+
+test('a greeting with stray whitespace still signs, because both ends normalise the same way', () => {
+  // A blank IVR greeting leaves the menu sentence starting with a space, and a
+  // greeting typed with a trailing one leaves it ending with a space. The
+  // endpoint verified against a trimmed copy, so the signature never matched
+  // and the caller heard a 403 — which is to say, nothing.
+  const spaced = '  Welcome to Acme.\n\n  Press one for sales.  ';
+  const tidy = 'Welcome to Acme. Press one for sales.';
+  assert.equal(normalizedPromptText(spaced), tidy);
+  assert.equal(promptSignature(secret, spaced, 'Vocivo.Kokoro.Heart', 'wav'), promptSignature(secret, tidy, 'Vocivo.Kokoro.Heart', 'wav'));
+  const url = new URL(promptUrl({ apiUrl: 'https://vocivo.app', secret, promptFormat: 'wav' }, spaced, 'Vocivo.Kokoro.Heart').replace(/%2E/g, '.'));
+  assert.equal(url.searchParams.get('text'), tidy, 'the URL carries what was signed');
+  assert.equal(verifyPromptSignature(secret, url.searchParams.get('text') || '', 'Vocivo.Kokoro.Heart', 'wav', url.searchParams.get('sig') || ''), true);
 });
 
 test('with company voicemail disabled the closed prompt just hangs up', () => {

@@ -85,7 +85,11 @@ services:
       - --external-ip=${PUBLIC_IP:-127.0.0.1}
       - --realm=${VOCIVO_SIP_REALM:-sip.vocivo.app}
       - --use-auth-secret
-      - --static-auth-secret=${TURN_SECRET:-changeme}
+      # No default. "changeme" is a secret the whole internet knows, and this
+      # relay is on a public address: anyone could mint a credential for it and
+      # send their traffic through the droplet. Ops · Droplets → sync-config
+      # writes a random one into .env when it finds none.
+      - --static-auth-secret=${TURN_SECRET:?TURN_SECRET is required — sync-config generates one when it is missing}
       - --fingerprint
       - --no-cli
       - --no-tls

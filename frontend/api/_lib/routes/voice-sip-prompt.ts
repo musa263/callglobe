@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { methodNotAllowed, publicError, requiredEnv } from '../http.js';
 import { get, put } from '../object-store.js';
-import { verifyPromptSignature } from '../sip-dialplan.js';
+import { normalizedPromptText, verifyPromptSignature } from '../sip-dialplan.js';
 import { telnyx } from '../telnyx.js';
 import { carrierFallbackVoice, defaultVocivoVoice, promptVoice, renderVocivoPrompt } from '../voice-catalog.js';
 
@@ -83,7 +83,9 @@ async function synthesize(text: string, voice: string, format: 'wav' | 'mp3'): P
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return methodNotAllowed(res, ['GET', 'HEAD']);
   try {
-    const text = query(req, 'text').trim();
+    // Normalised the same way the URL was built, so the signature agrees
+    // whatever whitespace the tenant's greeting carries.
+    const text = normalizedPromptText(query(req, 'text'));
     const voice = query(req, 'voice').trim();
     const sig = query(req, 'sig').trim();
     const format = /\.wav$/i.test(query(req, 'file')) ? 'wav' : 'mp3';

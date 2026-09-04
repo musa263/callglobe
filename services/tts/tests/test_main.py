@@ -116,3 +116,40 @@ class VoiceEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CacheHousekeeping(unittest.TestCase):
+    """
+    The sweep used to run only from /v1/audio/render — the carrier's path. On
+    Vocivo's own edge every prompt goes through /v1/audio/speech and the
+    prerender queue, so nothing ever removed a file and the droplet's disk
+    filled with old greetings.
+    """
+
+    def test_sweeps_by_age_and_then_by_size(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = (engine.cache_dir, engine.cache_ttl_seconds, engine.cache_max_bytes)
+            engine.cache_dir, engine.cache_ttl_seconds, engine.cache_max_bytes = root, 100, 250
+            try:
+                stale = root / "stale.wav"
+                stale.write_bytes(b"x" * 50)
+                os.utime(stale, (time.time() - 1000, time.time() - 1000))
+                for index in range(4):
+                    entry = root / f"fresh-{index}.wav"
+                    entry.write_bytes(b"x" * 100)
+                    os.utime(entry, (time.time() - (10 - index), time.time() - (10 - index)))
+                notes = root / "notes.txt"
+                notes.write_bytes(b"not audio")
+
+                engine.evict_stale_cache_entries()
+
+                self.assertFalse(stale.exists(), "an entry past its age is removed")
+                self.assertTrue(notes.exists(), "only rendered audio is swept")
+                self.assertEqual(
+                    sorted(entry.name for entry in root.glob("*.wav")),
+                    ["fresh-2.wav", "fresh-3.wav"],
+                    "the oldest go until the cache is under its ceiling",
+                )
+            finally:
+                engine.cache_dir, engine.cache_ttl_seconds, engine.cache_max_bytes = original

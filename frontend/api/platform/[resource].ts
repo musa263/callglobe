@@ -5,6 +5,8 @@ import { findExtension, listExtensions } from '../_lib/pbx.js';
 import { callAction, dialCall } from '../_lib/voice-control.js';
 import { telnyx, telnyxPstnConnectionId } from '../_lib/telnyx.js';
 import { assertCallerIdForOrganization } from '../_lib/phone-number-access.js';
+import { assertOrganizationMayCall, CallNotPermittedError } from '../_lib/organization-call-access.js';
+import { accessForOrganization } from '../_lib/saas-access.js';
 import { readPbxConfig } from '../_lib/pbx-config-store.js';
 import { organizationExtensionSipUri } from '../_lib/internal-sip.js';
 import { assignNumberToOrganization, numberOrganizationId } from '../_lib/tenancy.js';
@@ -81,6 +83,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const from = text(req.body?.from, 24);
       if (!from || !e164.test(from)) return res.status(400).json({ error: 'An explicit caller ID in E.164 format is required.' });
       await assertCallerIdForOrganization(from, apiKey.organizationId);
+      // Everything the apps are held to. A key used to skip all of it.
+      await assertOrganizationMayCall(apiKey.organizationId, {
+        flow: internal ? 'internal' : 'outbound',
+        destination: internal ? to : requested,
+        callerId: from,
+      });
       const result = await dialCall({ to, from, fromDisplayName: text(req.body?.displayName, 80) || 'Vocivo API', state: { flow: 'api_outbound', organizationId: apiKey.organizationId }, commandId: text(req.body?.commandId, 80) || crypto.randomUUID(), timeoutSeconds: Number(req.body?.timeoutSeconds) || 45 });
       return res.status(201).json({ data: { ...result.data, destination: requested, internal: Boolean(internal) } });
     }
@@ -119,6 +127,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.body?.confirmPurchase !== true) return res.status(400).json({ error: 'Explicit purchase confirmation is required.' });
       const numbers = Array.isArray(req.body?.phoneNumbers) ? req.body.phoneNumbers.map((item: unknown) => text(item, 24)).filter((item: string) => e164.test(item)).slice(0, 10) : [];
       if (!numbers.length) return res.status(400).json({ error: 'At least one valid phone number is required.' });
+      // The numbers screen holds a company to the numbers its plan includes.
+      // Buying through a key was a way around that, and every number bought is
+      // a monthly charge to Vocivo.
+      const purchaseConfig = await readPbxConfig();
+      const access = await accessForOrganization(apiKey.organizationId, purchaseConfig).catch(() => null);
+      if (!access) return res.status(403).json({ error: 'This company is not active.' });
+      const held = Object.values(purchaseConfig.numberAssignments).filter((assignment) => assignment.organizationId === apiKey.organizationId).length;
+      if (held + numbers.length > access.plan.limits.phoneNumbers) {
+        return res.status(409).json({ error: `Your ${access.plan.name} plan includes ${access.plan.limits.phoneNumbers} phone numbers.` });
+      }
       const response = await telnyx('/number_orders', { method: 'POST', body: JSON.stringify({ phone_numbers: numbers.map((phone_number: string) => ({ phone_number })), connection_id: telnyxPstnConnectionId(), customer_reference: text(req.body?.customerReference, 100) || `Vocivo API ${apiKey.id}` }) });
       const payload = await response.json();
       await Promise.all(numbers.map((phoneNumber: string) => assignNumberToOrganization(phoneNumber, apiKey.organizationId, { source: 'owned', destinationType: 'main' })));
@@ -134,6 +152,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: 'Not found' });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Invalid API key or scope.' });
+    if (error instanceof CallNotPermittedError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof Error && /Caller ID|owned|verified/i.test(error.message)) return res.status(403).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }
 }
