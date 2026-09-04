@@ -65,6 +65,7 @@
       "./plugins/withVocivoSip",
       "./plugins/withFmtXcode26",
       "./plugins/withQuotedBundlePath",
+      "./plugins/withScriptSandboxingOff",
       [
         "expo-splash-screen",
         {
