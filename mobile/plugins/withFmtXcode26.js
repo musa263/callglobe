@@ -13,6 +13,12 @@ const { withDangerousMod } = require('expo/config-plugins');
  * what every compiler without consteval support already gets. Set on every pod
  * so the library and everything that includes it agree on the type.
  *
+ * One catch, found the hard way: 11.0.2's base.h does not check whether the
+ * switch was already given before deciding it for itself, so the value from
+ * the command line was simply overwritten and the errors stayed. The header is
+ * given that check at pod install — a two-line edit that later versions of the
+ * library already carry.
+ *
  * Applied at prebuild, so EAS and a local `expo run:ios` get it alike; it goes
  * the day React Native moves to a {fmt} that Xcode 26 accepts.
  */
@@ -20,6 +26,13 @@ const { withDangerousMod } = require('expo/config-plugins');
 const marker = '# Vocivo: {fmt} under Xcode 26';
 const snippet = `
     ${marker}
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base) && !File.read(fmt_base).include?('Vocivo: honour')
+      File.chmod(0644, fmt_base)
+      File.write(fmt_base, File.read(fmt_base).sub(
+        "// Detect consteval, C++20 constexpr extensions and std::is_constant_evaluated.\\n#if !defined(__cpp_lib_is_constant_evaluated)",
+        "// Detect consteval, C++20 constexpr extensions and std::is_constant_evaluated.\\n#if defined(FMT_USE_CONSTEVAL)\\n// Vocivo: honour a value given on the command line (FMT_USE_CONSTEVAL=0 for Xcode 26).\\n#elif !defined(__cpp_lib_is_constant_evaluated)"))
+    end
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
         config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
