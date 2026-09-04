@@ -221,29 +221,21 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     const stillThisCall = () => activeCallRef.current?.id === call.callId
       && call.currentState === CallState.ACTIVE
       && !lifecycleRef.current.isTerminating(call.callId);
-    if (!call.isIncoming && callRouteIdsRef.current.has(call.callId)) {
-      const deadline = Date.now() + 20_000;
-      const routeId = callRouteIdsRef.current.get(call.callId);
-      while (Date.now() < deadline && stillThisCall() && routePhaseByCallRef.current.get(call.callId) !== 'connected') {
-        if (routeId) {
-          try {
-            const result = await api.get<{ phase: string }>(`/api/voice/status?routeId=${encodeURIComponent(routeId)}`);
-            if (result.phase === 'connected') {
-              routePhaseByCallRef.current.set(call.callId, 'connected');
-              break;
-            }
-          } catch (failure) {
-            reportVoiceError('confirm outbound bridge status', failure);
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 150));
-      }
-      if (!stillThisCall()) return;
-      if (routePhaseByCallRef.current.get(call.callId) !== 'connected') {
-        if (stillThisCall()) setError('The call is connected, but audio is still starting. Stay on the call.');
-        return;
-      }
-    }
+    if (!stillThisCall()) return;
+    // Telnyx answers the local agent leg before the destination. Its existing
+    // route monitor supplies the remote answer; direct SIP needs no such leg.
+    if (voice.currentEngine !== 'sip' && !call.isIncoming && callRouteIdsRef.current.has(call.callId)
+      && routePhaseByCallRef.current.get(call.callId) !== 'connected') return;
+    const existing = callMetaRef.current.get(call.callId) ?? {};
+    const connectedAt = existing.connectedAt ?? Date.now();
+    callMetaRef.current.set(call.callId, { ...existing, connectedAt });
+    cancelRoutePolling(call.callId);
+    setActiveCall((current) => {
+      if (current?.id !== call.callId) return current;
+      const next = { ...current, phase: 'active' as const, connectedAt };
+      activeCallRef.current = next;
+      return next;
+    });
     let mediaReady = await waitForBidirectionalMedia(call);
     if (!stillThisCall()) return;
     if (!mediaReady) {
@@ -259,20 +251,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       if (stillThisCall()) setError('The call is connected, but audio is still starting. Stay on the call.');
       return;
     }
-    const existing = callMetaRef.current.get(call.callId) ?? {};
-    const connectedAt = existing.connectedAt ?? Date.now();
-    callMetaRef.current.set(call.callId, { ...existing, connectedAt });
     setError(null);
-    setActiveCall((current) => {
-      if (current?.id !== call.callId) return current;
-      const next = { ...current, phase: 'active' as const, connectedAt };
-      activeCallRef.current = next;
-      return next;
-    });
     } finally {
       mediaConfirmInFlightRef.current.delete(call.callId);
     }
-  }, [reportVoiceError]);
+  }, [cancelRoutePolling, reportVoiceError]);
 
   const attachCall = useCallback((call: VoiceCall | null) => {
     callRef.current = call;
@@ -310,11 +293,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     }
     const incomingRouteId = inviteHeader(call, 'X-Vocivo-Route-ID');
     if (incomingRouteId && !callRouteIdsRef.current.has(call.callId)) callRouteIdsRef.current.set(call.callId, incomingRouteId);
-    setActiveCall((existing) => {
-      const next = { ...base, speaker: existing?.speaker ?? base.speaker };
-      activeCallRef.current = next;
-      return next;
-    });
+    // The observable replays ACTIVE synchronously below; publish the ref
+    // before subscribing rather than waiting for React to run an updater.
+    const attached = { ...base, speaker: activeCallRef.current?.speaker ?? base.speaker };
+    activeCallRef.current = attached;
+    setActiveCall(attached);
     const connectedAt = callMetaRef.current.get(call.callId)?.connectedAt;
     const seconds = connectedAt ? Math.max(0, Math.floor((Date.now() - connectedAt) / 1000)) : 0;
     durationRef.current = seconds;
@@ -330,11 +313,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         if (!transitioned && previousLifecycleState !== lifecycleState) {
           return;
         }
-        const phase = toUiCallPhase(state, callMetaRef.current.get(call.callId)?.connectedAt);
         if (state === CallState.ACTIVE) {
           stopRingback();
           void confirmMediaConnected(call).catch((failure) => reportVoiceError('confirm bidirectional media', failure));
         }
+        const phase = toUiCallPhase(state, callMetaRef.current.get(call.callId)?.connectedAt);
         const takeRemainingCall = (remaining: typeof call) => {
           if (remaining.currentState === CallState.HELD) remaining.resume().catch((failure) => reportVoiceError('resume remaining call', failure));
           voice.setActiveCall(remaining.callId);
@@ -374,7 +357,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         }
         setActiveCall((current) => {
           if (current?.id !== call.callId) return current;
-          const next = { ...current, phase };
+          const next = { ...current, phase, connectedAt: callMetaRef.current.get(call.callId)?.connectedAt ?? current.connectedAt };
           activeCallRef.current = next;
           return next;
         });
@@ -559,6 +542,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         if (result.phase === 'connected') {
           routePhaseByCallRef.current.set(callId, 'connected');
           stopRingback();
+          const answered = voice.getCall(callId);
+          if (answered?.currentState === CallState.ACTIVE) {
+            void confirmMediaConnected(answered).catch((failure) => reportVoiceError('confirm answered route media', failure));
+          }
         }
         if (monitor.cancelled) return;
         const sdkCall = voice.getCall(callId);

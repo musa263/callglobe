@@ -48,6 +48,7 @@ export type SipSessionHandle = {
 
   /** The underlying peer connection, for ICE recovery. */
   peerConnection(): unknown;
+  restartMedia?(): Promise<void>;
 
   accept(): Promise<void>;
   /** Ends the session whatever stage it is at: CANCEL, 486 or BYE as appropriate. */
@@ -83,6 +84,7 @@ export type SipStackConfig = {
   /** `wss://sip.vocivo.app/ws` — Vocivo's own Kamailio behind its nginx, never a carrier. */
   wsUri?: string;
   displayName?: string;
+  iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
 };
 
 /**

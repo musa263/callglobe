@@ -103,6 +103,15 @@ test('Wi-Fi to cellular recovery restarts ICE without replacing the live signali
   assert.equal(peer.restartCount, 1);
 });
 
+test('SIP calls use their own renegotiation path without a Telnyx call wrapper', async () => {
+  const peer = new MockPeerConnection();
+  let reinvites = 0;
+  const call = { callId: 'sip-direct', peerConnection: peer, restartMedia: async () => { reinvites++; } };
+  const coordinator = new VoiceMediaRecoveryCoordinator(() => undefined, 0);
+  await Promise.all([coordinator.recover(call, 'network-wifi-to-cellular'), coordinator.recover(call, 'ice-failed')]);
+  assert.equal(reinvites, 1);
+});
+
 test('media readiness requires live inbound and outbound audio tracks', async () => {
   const peer = new MockPeerConnection();
   const call = mockTelnyxCall(peer);

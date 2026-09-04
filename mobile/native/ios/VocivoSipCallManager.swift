@@ -23,7 +23,6 @@ public final class VocivoSipCallManager: NSObject {
 
   private let provider: CXProvider
   private let controller = CXCallController()
-  private var voipRegistry: PKPushRegistry?
 
   /// Vocivo call id <-> CallKit UUID. Both directions are needed: JavaScript
   /// talks in call ids, CallKit talks in UUIDs.
@@ -53,13 +52,9 @@ public final class VocivoSipCallManager: NSObject {
 
   // MARK: - Launch
 
-  /// Called from `application(_:didFinishLaunchingWithOptions:)`.
+  /// AppDelegate owns the sole PushKit registry and routes pushes by provider.
   @objc public func start() {
-    guard voipRegistry == nil else { return }
-    let registry = PKPushRegistry(queue: .main)
-    registry.delegate = self
-    registry.desiredPushTypes = [.voIP]
-    voipRegistry = registry
+    // Initializing the singleton installs the CallKit provider delegate.
   }
 
   // MARK: - JavaScript attachment
@@ -197,7 +192,7 @@ extension VocivoSipCallManager: PKPushRegistryDelegate {
     completion: @escaping () -> Void
   ) {
     guard type == .voIP else { completion(); return }
-    let data = payload.dictionaryPayload
+    let data = (payload.dictionaryPayload["vocivo"] as? [AnyHashable: Any]) ?? payload.dictionaryPayload
     // The id must be the edge's own call UUID: the INVITE that follows carries
     // it in X-Vocivo-Call-UUID, and that is what makes the pushed call and the
     // signalled call one call instead of two.
@@ -205,10 +200,23 @@ extension VocivoSipCallManager: PKPushRegistryDelegate {
     let callerName = data["callerName"] as? String ?? data["caller_name"] as? String
     let callerNumber = data["callerNumber"] as? String ?? data["caller_number"] as? String
 
-    configureAudioSession()
+    let signedIn = UserDefaults.standard.bool(forKey: "vocivo_voice_signed_in")
+    let expiresAt = (data["expiresAt"] as? String).flatMap { value -> Date? in
+      let formatter = ISO8601DateFormatter()
+      formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+      return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+    let actionable = signedIn && (expiresAt.map { $0 > Date() } ?? true)
     // Report first, tell JavaScript second. iOS requires the call on screen
     // before this delegate returns, whatever else is or is not running.
-    reportIncomingCall(callId: callId, callerName: callerName, callerNumber: callerNumber) { _ in
+    reportIncomingCall(callId: callId, callerName: callerName, callerNumber: callerNumber) { error in
+      // Even a stale push must satisfy PushKit's reporting contract. End it
+      // immediately and never wake SIP or accept it for a signed-out account.
+      guard error == nil, actionable else {
+        if error == nil { self.reportCallEnded(callId: callId, reason: "unanswered") }
+        completion()
+        return
+      }
       var body: [String: Any] = ["callId": callId]
       if let callerName = callerName { body["callerName"] = callerName }
       if let callerNumber = callerNumber { body["callerNumber"] = callerNumber }

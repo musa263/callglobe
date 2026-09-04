@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { put } from './object-store.js';
+import { transactObject } from './object-store.js';
 import type { VercelRequest } from '@vercel/node';
 import { readStoredObject } from './stored-object-read.js';
 import { requiredEnv } from './http.js';
@@ -25,8 +25,6 @@ export async function readPlatformKeys() {
   }
 }
 
-async function writePlatformKeys(value: PlatformKey[]) { await put(pathname, encrypt(value), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true }); }
-
 export async function createPlatformKey(input: { name?: unknown; organizationId?: unknown; scopes?: unknown }) {
   const name = typeof input.name === 'string' ? input.name.trim().slice(0, 80) : '';
   if (!name) throw new Error('API key name is required.');
@@ -35,18 +33,19 @@ export async function createPlatformKey(input: { name?: unknown; organizationId?
   if (!scopes.length) throw new Error('Choose at least one API scope.');
   const token = `vcp_live_${randomBytes(32).toString('base64url')}`;
   const item: PlatformKey = { id: crypto.randomUUID(), name, prefix: token.slice(0, 17), secretHash: tokenHash(token), organizationId, scopes, createdAt: new Date().toISOString() };
-  const keys = await readPlatformKeys();
-  await writePlatformKeys([...keys, item]);
+  await transactObject(pathname, (current) => encrypt([...(current ? decrypt(current) : []), item]));
   return { item, token };
 }
 
 export async function revokePlatformKey(id: string) {
-  const keys = await readPlatformKeys();
-  const index = keys.findIndex((item) => item.id === id);
-  if (index < 0) throw new Error('API key not found.');
-  keys[index] = { ...keys[index], revokedAt: new Date().toISOString() };
-  await writePlatformKeys(keys);
-  return keys[index];
+  const result = await transactObject(pathname, (current) => {
+    const keys = current ? decrypt(current) : [];
+    const index = keys.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error('API key not found.');
+    keys[index] = { ...keys[index], revokedAt: keys[index].revokedAt || new Date().toISOString() };
+    return encrypt(keys);
+  });
+  return decrypt(result.body).find((item) => item.id === id)!;
 }
 
 export async function authenticatePlatformKey(req: VercelRequest, requiredScope: PlatformScope) {

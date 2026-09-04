@@ -30,7 +30,7 @@ object VocivoSipIncomingCall {
   /** True when the message was a Vocivo call and has been handled here. */
   @SuppressLint("MissingPermission")
   fun handle(context: Context, data: Map<String, String>): Boolean {
-    if (data["type"] != "vocivo.call") return false
+    if (data["type"] !in setOf("vocivo.incoming_call", "vocivo.call")) return false
 
     val signedIn = context.getSharedPreferences("vocivo_auth", Context.MODE_PRIVATE)
       .getBoolean("voice_signed_in", false)

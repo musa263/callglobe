@@ -41,6 +41,7 @@ export type VoiceCall = {
    * normal case for this app, not an edge case.
    */
   readonly peerConnection?: unknown;
+  restartMedia?(): Promise<void>;
 
   readonly callState$: VoiceObservable<VoiceCallState>;
   readonly isMuted$: VoiceObservable<boolean>;
@@ -84,6 +85,8 @@ export type NativeSipBridge = {
   mute(callId: string, on: boolean): Promise<void>;
   sendDtmf(callId: string, digit: string): Promise<void>;
   setSpeaker(on: boolean): Promise<void>;
+  peerConnection?(callId: string): unknown;
+  restartMedia?(callId: string): Promise<void>;
   /**
    * iOS only, and the single most important call in the integration: PushKit
    * terminates an app that receives a VoIP push and does not report an incoming

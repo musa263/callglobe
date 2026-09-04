@@ -107,6 +107,16 @@ class SipJsSession implements SipSessionHandle {
   private listener: ((state: SipSessionState) => void) | null = null;
   private ended: SipDisposition = {};
   private held = false;
+  private readonly stateListener = (state: SessionState) => {
+    try {
+      this.listener?.(toSipSessionState(state));
+    } finally {
+      if (state === SessionState.Terminated) {
+        this.session.stateChange.removeListener(this.stateListener);
+        this.listener = null;
+      }
+    }
+  };
 
   constructor(private readonly session: Session, readonly id: string, readonly incoming: boolean) {
     const identity = session.remoteIdentity;
@@ -117,7 +127,7 @@ class SipJsSession implements SipSessionHandle {
 
     // An ordinary hang-up leaves `ended` empty: no status code is precisely how
     // the bridge tells a BYE apart from a rejection.
-    session.stateChange.addListener((state) => this.listener?.(toSipSessionState(state)));
+    session.stateChange.addListener(this.stateListener);
   }
 
   /** Records why the far end refused, so the UI can tell busy from broken. */
@@ -143,6 +153,32 @@ class SipJsSession implements SipSessionHandle {
   async accept() {
     if (!(this.session instanceof Invitation)) throw new Error('Only an incoming call can be answered.');
     await this.session.accept({ sessionDescriptionHandlerOptions: { constraints: audioOnly } });
+  }
+
+  async restartMedia() {
+    if (this.session.state !== SessionState.Established) throw new Error('Cannot renegotiate a call that is not established.');
+    const options: WebSessionDescriptionHandlerOptions = {
+      constraints: audioOnly,
+      hold: this.held,
+      offerOptions: { iceRestart: true },
+    };
+    // SIP.js owns offer creation and local/remote SDP application. Setting
+    // iceRestart here keeps the offer and re-INVITE in one SIP transaction.
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => finish(new Error('SIP media restart timed out.')), 10_000);
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        if (error) reject(error);
+        else resolve();
+      };
+      this.session.invite({
+        sessionDescriptionHandlerOptions: options,
+        requestDelegate: {
+          onAccept: () => finish(),
+          onReject: (response) => finish(new Error(`SIP media restart rejected (${response.message.statusCode}).`)),
+        },
+      }).catch(finish);
+    });
   }
 
   async terminate() {
@@ -235,7 +271,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     sessionDescriptionHandlerFactoryOptions: {
       iceGatheringTimeout: 3000,
       peerConnectionConfiguration: {
-        iceServers: options.iceServers ?? [{ urls: `stun:${config.domain}:3478` }],
+        iceServers: config.iceServers ?? options.iceServers ?? [{ urls: `stun:${config.domain}:3478` }],
       },
     },
     logLevel: 'warn',
@@ -256,7 +292,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
   });
 
   const registerer = new Registerer(userAgent, { expires: 600 });
-  registerer.stateChange.addListener((state) => {
+  const registrationListener = (state: RegistererState) => {
     // A REGISTER that failed because the socket was down comes back as a
     // synthetic 503 and an Unregistered state. While the keeper is bringing
     // the socket back that is "reconnecting", not "signed out": the UI keeps
@@ -266,7 +302,8 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
       return;
     }
     onRegistration?.(toSipRegistererState(state));
-  });
+  };
+  registerer.stateChange.addListener(registrationListener);
 
   const keeper = createRegistrationKeeper({
     isConnected: () => userAgent.isConnected(),
@@ -296,12 +333,16 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
 
     stop: async () => {
       keeper.stop();
+      registerer.stateChange.removeListener(registrationListener);
       try {
         await registerer.unregister();
-      } catch {
-        // The socket may already be gone; sign-out must not depend on it.
+      } catch (error) {
+        console.warn('Vocivo SIP unregister failed', { message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        onRegistration = null;
+        onInvitation = null;
+        await userAgent.stop();
       }
-      await userAgent.stop();
     },
 
     refresh: () => keeper.refresh(),

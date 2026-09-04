@@ -51,6 +51,7 @@ class FakeSession implements SipSessionHandle {
   async setHold(on: boolean) { this.actions.push(`hold:${on}`); }
   async setMuted(on: boolean) { this.actions.push(`mute:${on}`); }
   async sendDtmf(digit: string) { this.actions.push(`dtmf:${digit}`); }
+  async restartMedia() { this.actions.push('restart-media'); }
 }
 
 function fakeStack() {
@@ -106,10 +107,24 @@ test('registration reports progress then success', async () => {
   assert.deepEqual(of('registration').map((entry) => entry.state), ['progress', 'ok']);
 });
 
+test('ICE recovery refreshes signaling and renegotiates the same established SIP dialog', async () => {
+  const { bridge, fake } = harness();
+  await bridge.register(credentials);
+  const id = await bridge.invite('2001');
+  await assert.rejects(bridge.restartMedia(id), /established/);
+  const session = must(fake.outgoing[0], 'the outgoing session');
+  session.move('Established');
+  await bridge.restartMedia(id);
+  assert.equal(fake.state.refreshed, 1);
+  assert.deepEqual(session.actions, ['restart-media']);
+  assert.equal(fake.outgoing.length, 1);
+});
+
 test('a failed start reports the failure and leaves nothing registered', async () => {
   const { bridge, fake, of } = harness();
   fake.state.startError = new Error('websocket refused');
   await assert.rejects(() => bridge.register(credentials));
+  assert.equal(fake.state.stopped, true, 'failed startup must stop the transport and registration keeper');
   assert.deepEqual(of('registration').map((entry) => entry.state), ['progress', 'failed']);
   assert.equal(of('registration').at(-1)?.reason, 'websocket refused');
   await assert.rejects(() => bridge.invite('1002'), /not registered/);

@@ -1,5 +1,6 @@
 import { UserAgent, Registerer, RegistererState, RequestPendingError, Inviter, SessionState } from 'sip.js';
 import { createRegistrationKeeper } from './sipRegistrationKeeper';
+import { reportWebVoiceError } from './telemetry';
 
 /**
  * Brings up the browser phone against Vocivo's own edge and keeps it there.
@@ -38,7 +39,7 @@ export async function connectSipUserAgent(input) {
     },
   });
   const registerer = new Registerer(userAgent, { expires: 600 });
-  registerer.stateChange.addListener((state) => {
+  const registrationListener = (state) => {
     if (state === RegistererState.Registered) return notify('Registered');
     if (state === RegistererState.Unregistered) {
       // A REGISTER that failed because the socket was down comes back as a
@@ -47,7 +48,8 @@ export async function connectSipUserAgent(input) {
       return notify('Unregistered', 'registration ended');
     }
     return undefined;
-  });
+  };
+  registerer.stateChange.addListener(registrationListener);
   keeper = createRegistrationKeeper({
     isConnected: () => userAgent.isConnected(),
     reconnect: () => userAgent.reconnect(),
@@ -64,17 +66,25 @@ export async function connectSipUserAgent(input) {
       },
     }).then(() => undefined),
   });
-  await userAgent.start();
-  await keeper.start();
+  const stop = async () => {
+    keeper.stop();
+    registerer.stateChange.removeListener(registrationListener);
+    try { await registerer.unregister(); }
+    catch (failure) { reportWebVoiceError('SIP unregister', failure); }
+    finally { await userAgent.stop(); }
+  };
+  try {
+    await userAgent.start();
+    await keeper.start();
+  } catch (failure) {
+    await stop().catch((cleanupFailure) => reportWebVoiceError('SIP failed startup cleanup', cleanupFailure));
+    throw failure;
+  }
   return {
     userAgent,
     registerer,
     refresh: () => keeper.refresh(),
-    stop: async () => {
-      keeper.stop();
-      try { await registerer.unregister(); } catch { /* the socket may already be gone */ }
-      await userAgent.stop();
-    },
+    stop,
   };
 }
 
@@ -97,9 +107,9 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = [], h
   return inviter;
 }
 
-export function attachSipMedia(session, elementId = 'remoteMedia') {
+export function attachSipMedia(session, elementId = 'remoteMedia', onError = console.error) {
   const element = document.getElementById(elementId);
-  session.stateChange.addListener((state) => {
+  const listener = (state) => {
     if (state !== SessionState.Established) return;
     const pc = session.sessionDescriptionHandler?.peerConnection;
     const remote = new MediaStream();
@@ -107,8 +117,11 @@ export function attachSipMedia(session, elementId = 'remoteMedia') {
       if (receiver.track) remote.addTrack(receiver.track);
     });
     if (element && 'srcObject' in element) element.srcObject = remote;
-    element?.play?.().catch(() => undefined);
-  });
+    element?.play?.().catch(onError);
+  };
+  session.stateChange.addListener(listener);
+  listener(session.state);
+  return () => session.stateChange.removeListener(listener);
 }
 
 export function sipSessionId(session) {

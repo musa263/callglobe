@@ -85,6 +85,7 @@ function withTelnyxAppDelegate(config) {
     for type: PKPushType
   ) {
     TelnyxVoipPushHandler.shared.handleVoipTokenUpdate(pushCredentials, type: type)
+    VocivoSipCallManager.shared.pushRegistry(registry, didUpdate: pushCredentials, for: type)
   }
 
   public func pushRegistry(
@@ -93,6 +94,10 @@ function withTelnyxAppDelegate(config) {
     for type: PKPushType,
     completion: @escaping () -> Void
   ) {
+    if payload.dictionaryPayload["vocivo"] != nil {
+      VocivoSipCallManager.shared.pushRegistry(registry, didReceiveIncomingPushWith: payload, for: type, completion: completion)
+      return
+    }
     guard UserDefaults.standard.bool(forKey: "vocivo_voice_signed_in") else {
       completion()
       return
@@ -105,12 +110,32 @@ function withTelnyxAppDelegate(config) {
   ) {
     UserDefaults.standard.removeObject(forKey: "voip_push_token")
     UserDefaults.standard.removeObject(forKey: "telnyx_voip_push_token")
+    VocivoSipCallManager.shared.pushRegistry(registry, didInvalidatePushTokenFor: type)
   }
 `;
     if (!source.includes('// VOCIVO_VOIP_DELEGATE_METHODS') && source.includes('didReceiveIncomingPushWith payload: PKPushPayload')) {
       source = source.replace('  // MARK: - Telnyx VoIP Push Notifications', '  // VOCIVO_VOIP_DELEGATE_METHODS\n  // MARK: - Telnyx VoIP Push Notifications');
     }
     source = insertInSwiftType(source, 'AppDelegate', '// VOCIVO_VOIP_DELEGATE_METHODS', methods);
+    // Upgrade an already-generated AppDelegate as well as a clean prebuild.
+    if (!source.includes('VocivoSipCallManager.shared.pushRegistry(registry, didUpdate:')) {
+      source = source.replace(
+        'TelnyxVoipPushHandler.shared.handleVoipTokenUpdate(pushCredentials, type: type)',
+        'TelnyxVoipPushHandler.shared.handleVoipTokenUpdate(pushCredentials, type: type)\n    VocivoSipCallManager.shared.pushRegistry(registry, didUpdate: pushCredentials, for: type)',
+      );
+    }
+    if (!source.includes('if payload.dictionaryPayload["vocivo"] != nil')) {
+      source = source.replace(
+        'guard UserDefaults.standard.bool(forKey: "vocivo_voice_signed_in") else {',
+        'if payload.dictionaryPayload["vocivo"] != nil {\n      VocivoSipCallManager.shared.pushRegistry(registry, didReceiveIncomingPushWith: payload, for: type, completion: completion)\n      return\n    }\n    guard UserDefaults.standard.bool(forKey: "vocivo_voice_signed_in") else {',
+      );
+    }
+    if (!source.includes('VocivoSipCallManager.shared.pushRegistry(registry, didInvalidatePushTokenFor:')) {
+      source = source.replace(
+        'UserDefaults.standard.removeObject(forKey: "telnyx_voip_push_token")',
+        'UserDefaults.standard.removeObject(forKey: "telnyx_voip_push_token")\n    VocivoSipCallManager.shared.pushRegistry(registry, didInvalidatePushTokenFor: type)',
+      );
+    }
     appConfig.modResults.contents = source;
     return appConfig;
   });

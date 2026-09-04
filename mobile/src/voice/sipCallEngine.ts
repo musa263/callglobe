@@ -46,6 +46,15 @@ class SipCall implements VoiceCall {
     return this.callState$.value;
   }
 
+  get peerConnection() {
+    return this.bridge.peerConnection?.(this.callId);
+  }
+
+  async restartMedia() {
+    if (!this.bridge.restartMedia) throw new Error('SIP media recovery is unavailable.');
+    await this.bridge.restartMedia(this.callId);
+  }
+
   get currentIsMuted() {
     return this.isMuted$.value;
   }

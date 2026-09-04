@@ -1,13 +1,20 @@
 const SESSION_KEY = 'vocivo.session';
 
 export function getStoredSession() {
-  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
+  try {
+    const session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (session && Object.prototype.hasOwnProperty.call(session, 'token')) {
+      // Older sessions must renew through the httpOnly-cookie login flow.
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return session;
+  } catch { return null; }
 }
 
 export function storeSession(session) {
   // The auth token now lives in an httpOnly cookie set by the server; persist
   // everything except the token so an XSS can no longer read a usable credential.
-  // (Sessions stored by older builds keep their token and continue to work.)
   const { token, ...rest } = session || {};
   localStorage.setItem(SESSION_KEY, JSON.stringify(rest));
 }

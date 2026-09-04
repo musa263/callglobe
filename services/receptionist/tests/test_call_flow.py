@@ -215,13 +215,21 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
             handler = CallHandler(settings, voice, self.ears, FakeBrain(decisions, delay=model_delay), api)  # type: ignore[arg-type]
 
             async def on_connection(reader, writer):
-                await handler.handle(EslConnection(reader, writer))
+                connection = EslConnection(reader, writer)
+                try:
+                    await handler.handle(connection)
+                finally:
+                    await connection.close()
 
             server = await asyncio.start_server(on_connection, "127.0.0.1", 0)
             port = server.sockets[0].getsockname()[1]
             async with server:
                 reader, writer = await asyncio.open_connection("127.0.0.1", port)
-                await asyncio.wait_for(freeswitch.run(reader, writer), timeout=15)
+                try:
+                    await asyncio.wait_for(freeswitch.run(reader, writer), timeout=15)
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
                 # Let the handler finish filing the conversation.
                 await asyncio.sleep(0.1)
             return freeswitch, voice, api

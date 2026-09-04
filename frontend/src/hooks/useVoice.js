@@ -21,23 +21,32 @@ import { useTelnyxVoice } from './useTelnyxVoice';
  */
 export function useVoice(token, enabled, identity = {}) {
   const [edge, setEdge] = useState(null);
+  const [configurationError, setConfigurationError] = useState('');
   useEffect(() => {
     if (!enabled || !token) {
       setEdge(null);
       return undefined;
     }
     let cancelled = false;
-    api('/api/voice/config').then((config) => {
-      if (cancelled) return;
-      setEdge(config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx');
-    }).catch(() => {
-      if (!cancelled) setEdge('telnyx');
-    });
-    return () => { cancelled = true; };
+    let retry;
+    const resolveEdge = () => {
+      api('/api/voice/config').then((config) => {
+        if (cancelled) return;
+        setConfigurationError('');
+        setEdge(config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx');
+      }).catch(() => {
+        if (cancelled) return;
+        setConfigurationError('Calling configuration is unavailable. Reconnecting...');
+        retry = setTimeout(resolveEdge, 5000);
+      });
+    };
+    setEdge(null);
+    resolveEdge();
+    return () => { cancelled = true; clearTimeout(retry); };
   }, [enabled, token]);
   const telnyx = useTelnyxVoice(token, enabled && edge === 'telnyx', identity);
   const sip = useSipVoice(token, enabled && edge === 'sip', identity);
   if (edge === 'sip') return sip;
   if (edge === 'telnyx') return telnyx;
-  return { ...sip, ready: false, statusLabel: 'Connecting…', error: '' };
+  return { ...sip, ready: false, statusLabel: 'Connecting…', error: configurationError };
 }

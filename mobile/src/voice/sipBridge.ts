@@ -131,9 +131,9 @@ export class SipStackBridge implements NativeSipBridge {
     try {
       await stack.start();
     } catch (error) {
-      // Report rather than throw: a failed REGISTER is a state the UI shows,
-      // not an exception the caller has to catch on every sign-in path.
       this.stack = null;
+      try { await stack.stop(); }
+      catch (cleanupError) { console.warn('Vocivo SIP failed-start cleanup', describe(cleanupError)); }
       this.events.emit('registration', { state: 'failed', reason: describe(error) });
       throw error;
     }
@@ -165,8 +165,8 @@ export class SipStackBridge implements NativeSipBridge {
       if (session.terminal) continue;
       try {
         await session.handle.terminate();
-      } catch {
-        // A socket that is already gone must not block sign-out.
+      } catch (error) {
+        console.warn('Vocivo SIP call teardown failed', describe(error));
       }
       this.emitState(callId, 'ENDED');
     }
@@ -189,6 +189,17 @@ export class SipStackBridge implements NativeSipBridge {
 
   async answer(callId: string) {
     await this.requireSession(callId).handle.accept();
+  }
+
+  peerConnection(callId: string) {
+    return this.sessions.get(callId)?.handle.peerConnection();
+  }
+
+  async restartMedia(callId: string) {
+    const session = this.requireSession(callId);
+    if (!session.established || !session.handle.restartMedia) throw new Error('SIP media recovery requires an established call.');
+    await this.stack?.refresh();
+    await session.handle.restartMedia();
   }
 
   async hangup(callId?: string) {

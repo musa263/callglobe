@@ -64,6 +64,7 @@ export async function registerVocivoSip(config: {
   domain: string;
   wsUri?: string;
   displayName?: string;
+  iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
 }) {
   await ensureBridge().bridge.register(config);
 }

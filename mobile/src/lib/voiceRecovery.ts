@@ -11,6 +11,7 @@ export type RecoverableCall = {
   peerConnection?: unknown;
   /** The carrier SDK keeps its own behind a native wrapper. */
   telnyxCall?: unknown;
+  restartMedia?: () => Promise<void>;
 };
 
 export type StoredVoiceSession = {
@@ -180,12 +181,14 @@ export class VoiceMediaRecoveryCoordinator {
     this.lastAttemptAt.set(callId, now);
     const operation = (async () => {
       const peer = peerConnectionForCall(call);
-      const nativeCall = call.telnyxCall as unknown as NativeCallLike;
+      const nativeCall = call.telnyxCall as NativeCallLike | undefined;
       if (!peer?.restartIce) throw new Error('The active call does not expose ICE restart support.');
       try {
         // The patched Telnyx SDK method creates a fresh local offer and sends
         // it through Telnyx's supported attach/re-INVITE signaling path.
-        if (nativeCall.restartMedia) {
+        if (call.restartMedia) {
+          await call.restartMedia();
+        } else if (nativeCall?.restartMedia) {
           await nativeCall.restartMedia();
         } else {
           // Without the patched restartMedia there is no supported way to send

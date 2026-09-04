@@ -163,9 +163,8 @@ async function ownerSessionsInvalidatedAtSeconds() {
     ownerInvalidationCache = { checkedAt: Date.now(), invalidatedAtSeconds };
     return invalidatedAtSeconds;
   } catch (error) {
-    // Fail open only on a transient storage error so the owner is not locked out.
     console.error('Unable to read the owner session invalidation marker.', error);
-    return 0;
+    throw new Error('Owner session verification is temporarily unavailable.');
   }
 }
 
