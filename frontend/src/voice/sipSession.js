@@ -108,20 +108,42 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = [], h
 }
 
 export function attachSipMedia(session, elementId = 'remoteMedia', onError = console.error) {
-  const element = document.getElementById(elementId);
+  let element;
+  let pc;
+  let remote;
+  let disposed = false;
+  const play = () => {
+    if (disposed || session.state !== SessionState.Established) return;
+    element = document.getElementById(elementId);
+    if (!element) { onError(new Error('The call audio element is not mounted.')); return; }
+    if (!remote) remote = new MediaStream();
+    pc?.getReceivers().forEach(({ track }) => {
+      if (track?.kind === 'audio' && !remote.getTracks().includes(track)) remote.addTrack(track);
+    });
+    element.srcObject = remote;
+    element.play().catch((failure) => { if (!disposed) onError(failure); });
+  };
   const listener = (state) => {
     if (state !== SessionState.Established) return;
-    const pc = session.sessionDescriptionHandler?.peerConnection;
-    const remote = new MediaStream();
-    pc?.getReceivers().forEach((receiver) => {
-      if (receiver.track) remote.addTrack(receiver.track);
-    });
-    if (element && 'srcObject' in element) element.srcObject = remote;
-    element?.play?.().catch(onError);
+    const connection = session.sessionDescriptionHandler?.peerConnection;
+    if (pc !== connection) {
+      pc?.removeEventListener('track', play);
+      pc = connection;
+      pc?.addEventListener('track', play);
+    }
+    play();
   };
   session.stateChange.addListener(listener);
   listener(session.state);
-  return () => session.stateChange.removeListener(listener);
+  return () => {
+    disposed = true;
+    session.stateChange.removeListener(listener);
+    pc?.removeEventListener('track', play);
+    if (element && remote && element.srcObject === remote) {
+      element.pause();
+      element.srcObject = null;
+    }
+  };
 }
 
 export function sipSessionId(session) {

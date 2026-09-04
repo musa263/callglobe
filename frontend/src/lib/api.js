@@ -3,10 +3,13 @@ const SESSION_KEY = 'vocivo.session';
 export function getStoredSession() {
   try {
     const session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!session || typeof session !== 'object' || Array.isArray(session)) return null;
     if (session && Object.prototype.hasOwnProperty.call(session, 'token')) {
-      // Older sessions must renew through the httpOnly-cookie login flow.
-      localStorage.removeItem(SESSION_KEY);
-      return null;
+      // Keep account metadata so App can validate the existing httpOnly cookie.
+      // Never reuse the legacy bearer to authorize a request.
+      const { token, ...metadata } = session;
+      localStorage.setItem(SESSION_KEY, JSON.stringify(metadata));
+      return metadata;
     }
     return session;
   } catch { return null; }

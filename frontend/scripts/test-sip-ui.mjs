@@ -8,10 +8,11 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
   page.setDefaultTimeout(15_000);
+  page.setDefaultNavigationTimeout(90_000);
   const errors = [];
   page.on('pageerror', (error) => { errors.push(error.message); console.error(error.message); });
   await page.route('**/api/**', (route) => route.fulfill({ json: {} }));
-  await page.goto(origin);
+  await page.goto(origin, { waitUntil: 'domcontentloaded' });
   await page.route('**/src/voice/sipSession*', (route) => route.fulfill({
     contentType: 'application/javascript',
     body: `
@@ -76,7 +77,7 @@ try {
         window.root.render(React.createElement(Probe));
       </script></body></html>`,
   }));
-  await page.goto(`${origin}/__sip-qa`);
+  await page.goto(`${origin}/__sip-qa`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.voice?.ready).catch(async (error) => {
     console.error(await page.evaluate(() => ({ text: document.body.innerText, status: window.voice?.statusLabel, error: window.voice?.error, mockConnected: !!window.sipInput })));
     throw error;

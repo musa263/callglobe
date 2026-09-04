@@ -31,6 +31,7 @@ export function useSipVoice(token, enabled, identity = {}) {
   const [callStarting, setCallStarting] = useState(false);
   const [routePhase, setRoutePhase] = useState(null);
   const [mediaReady, setMediaReady] = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const [endedCall, setEndedCall] = useState(null);
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   // Bumped when the SIP password needs replacing, which tears the phone down
@@ -39,6 +40,21 @@ export function useSipVoice(token, enabled, identity = {}) {
   // arriving, with "Ready for calls" still on screen.
   const [credentialEpoch, setCredentialEpoch] = useState(0);
   const ringbackRef = useRef(null);
+
+  useEffect(() => {
+    if (!incomingCall || incomingCall.state === SessionState.Established || incomingCall.state === SessionState.Terminated) return undefined;
+    const tone = new Audio('/audio/ringback.wav');
+    tone.loop = true;
+    tone.volume = 0.72;
+    let stopped = false;
+    const stop = () => { stopped = true; tone.pause(); tone.currentTime = 0; };
+    const onState = (next) => {
+      if (next === SessionState.Established || next === SessionState.Terminated) stop();
+    };
+    incomingCall.stateChange.addListener(onState);
+    tone.play().then(() => { if (stopped) tone.pause(); }).catch((failure) => reportWebVoiceError('play incoming SIP ringtone', failure));
+    return () => { stop(); incomingCall.stateChange.removeListener(onState); };
+  }, [incomingCall]);
 
   const stopRingback = useCallback(() => {
     const tone = ringbackRef.current;
@@ -70,6 +86,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     sessionTeardownsRef.current.get(session)?.();
     const mediaCleanup = attachSipMedia(session, 'remoteMedia', (failure) => {
       reportWebVoiceError('play remote SIP audio', failure);
+      setAudioBlocked(true);
       setError('Browser audio is blocked. Allow audio playback to hear the call.');
     });
     const stateCleanup = observeSipSession(session, (next) => {
@@ -130,6 +147,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     setState(null);
     setRoutePhase(null);
     setMediaReady(false);
+    setAudioBlocked(false);
     setMuted(false);
     setCallStarting(false);
     dialingRef.current = false;
@@ -244,6 +262,7 @@ export function useSipVoice(token, enabled, identity = {}) {
 
   const beginOutgoing = useCallback((identity, dialed) => {
     setError('');
+    setAudioBlocked(false);
     setRemoteIdentity(identity);
     setDialedNumber(dialed || identity.number);
     setRoutePhase('ringing');
@@ -448,6 +467,20 @@ export function useSipVoice(token, enabled, identity = {}) {
     throw new Error('Conference merge stays on Telnyx Call Control until inbound SIP cutover.');
   }, []);
 
+  const resumeAudio = useCallback(async () => {
+    const element = document.getElementById('remoteMedia');
+    if (!element?.srcObject) return;
+    try {
+      await element.play();
+      setAudioBlocked(false);
+      setError('');
+    } catch (failure) {
+      setAudioBlocked(true);
+      reportWebVoiceError('resume remote SIP audio', failure);
+      setError('Browser audio is blocked. Allow audio playback to hear the call.');
+    }
+  }, []);
+
   return {
     ready,
     statusLabel,
@@ -474,8 +507,8 @@ export function useSipVoice(token, enabled, identity = {}) {
       if (permission === 'granted') await registerWebPush();
       return permission;
     },
-    audioBlocked: false,
-    resumeAudio: async () => undefined,
+    audioBlocked,
+    resumeAudio,
     startCall,
     startInternalCall,
     startSecondCall: unsupported,

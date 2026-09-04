@@ -11,8 +11,8 @@ test('legacy browser bearer tokens are purged and newly stored profiles contain 
     removeItem: (key) => data.delete(key),
   } });
   try {
-    assert.equal(getStoredSession(), null);
-    assert.equal(data.size, 0);
+    assert.deepEqual(getStoredSession(), { name: 'User' });
+    assert.equal(data.get('vocivo.session').includes('old-bearer'), false);
     storeSession({ token: 'new-bearer', name: 'User' });
     assert.deepEqual(getStoredSession(), { name: 'User' });
     assert.equal(data.get('vocivo.session').includes('bearer'), false);

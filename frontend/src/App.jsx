@@ -383,7 +383,10 @@ export default function App() {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const voiceIdentity = useMemo(() => ({ name: profile?.full_name || 'Vocivo', extension: profile?.extension }), [profile?.extension, profile?.full_name]);
-  const voice = useVoice(session?.token, !preview && Boolean(session) && Boolean(profile) && profile?.admin_only !== true, voiceIdentity);
+  // Authentication is verified through the httpOnly cookie above. This key
+  // identifies the verified account; a browser-stored bearer is not required.
+  const voiceSessionKey = profile?.id ? JSON.stringify([profile.organization_id, profile.id]) : null;
+  const voice = useVoice(voiceSessionKey, !preview && Boolean(session) && Boolean(profile) && profile?.admin_only !== true, voiceIdentity);
 
   useEffect(() => {
     if (!session) return;
