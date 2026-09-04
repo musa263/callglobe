@@ -110,14 +110,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     config.company = { ...config.company, name: organization?.name || config.company.name };
     if (!access.superadmin) {
       const extensionIds = new Set((await listExtensions(organizationId)).map((item) => item.id));
+      // organizationSettings holds every tenant's phone system — their
+      // greetings, voice menus, ring groups, outbound rules and receptionist
+      // instructions — and platform holds which carrier is behind Vocivo,
+      // which the console itself says is superadmin-only. Both rode along in
+      // this response to any company administrator who opened their settings.
+      const { organizationSettings: _settings, platform: _platform, legacyPrimaryOrganizationId: _legacy, ...visible } = config;
       config = {
-        ...config,
+        ...visible,
         activeOrganizationId: organizationId,
         organizations: organization ? [organization] : [],
         numberAssignments: Object.fromEntries(Object.entries(config.numberAssignments as PbxConfig['numberAssignments']).filter(([, assignment]) => assignment.organizationId === organizationId)),
         businessVoiceConfigs: config.businessVoiceConfigs[organizationId] ? { [organizationId]: config.businessVoiceConfigs[organizationId] } : {},
         userProfiles: Object.fromEntries(Object.entries(config.userProfiles).filter(([id]) => extensionIds.has(id))),
-      };
+      } as PbxConfig;
     }
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ config });

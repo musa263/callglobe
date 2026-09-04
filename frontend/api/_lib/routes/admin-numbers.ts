@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../http.js';
+import { nextNumberTags, tenantVisibleNumberTags } from '../number-config.js';
 import { inboundConnectionId, telnyx, telnyxPstnConnectionId } from '../telnyx.js';
 import { pbxForOrganization, readPbxConfig } from '../pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../tenancy.js';
@@ -98,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const visibleProfileIds = new Set(visibleNumbers.map((item) => String(item.messaging_profile_id || '')).filter(Boolean));
       const visibleProfiles = access.superadmin ? profilesPayload.data ?? [] : (profilesPayload.data ?? []).filter((item) => visibleProfileIds.has(String(item.id || '')));
       return res.status(200).json({
-        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: item.tags || [], purchasedAt: item.purchased_at, assignment: assignedConfig.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
+        numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: tenantVisibleNumberTags(item.tags), purchasedAt: item.purchased_at, assignment: assignedConfig.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
         orders: (ordersPayload.data ?? []).filter((item) => String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
         messagingProfiles: visibleProfiles.map((item) => ({ id: item.id, name: item.name || item.id, ...(access.superadmin ? { webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' } : {}) })),
       });
@@ -144,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const id = text(req.body?.id, 80);
     if (!id) return res.status(400).json({ error: 'Phone number ID is required.' });
     const ownedResponse = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`);
-    const owned = await ownedResponse.json() as { data?: { phone_number?: string } };
+    const owned = await ownedResponse.json() as { data?: { phone_number?: string; tags?: string[] } };
     const ownedNumber = text(owned.data?.phone_number, 24);
     if (!ownedNumber || config.numberAssignments[ownedNumber]?.organizationId !== activeOrganizationId) return res.status(404).json({ error: 'Phone number not found in the selected customer workspace.' });
     const body: Record<string, unknown> = {};
@@ -169,7 +170,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       body.messaging_profile_id = requestedProfileId || null;
     }
-    if (Array.isArray(req.body?.tags)) body.tags = req.body.tags.map((item: unknown) => text(item, 50)).filter(Boolean).slice(0, 20);
+    // Vocivo's own tags are carried across untouched. Saved as sent, this
+    // screen let a company administrator drop the tag holding the platform
+    // owner's password hash — or write a new one, and choose that password.
+    if (Array.isArray(req.body?.tags)) body.tags = nextNumberTags(owned.data?.tags, req.body.tags);
     const requestedOrganizationId = text(req.body?.organizationId, 50);
     const organizationId = access.superadmin ? requestedOrganizationId || activeOrganizationId : activeOrganizationId;
     if (organizationId && !config.organizations.some((item) => item.id === organizationId && item.status === 'active')) return res.status(400).json({ error: 'Choose an active organization.' });

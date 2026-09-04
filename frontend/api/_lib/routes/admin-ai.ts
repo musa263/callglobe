@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { nextAiSettings } from '../ai-settings.js';
 import { requireAdmin } from '../auth.js';
 import { afterResponse, allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
@@ -19,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await requireFeature(access.session, 'aiReceptionist', current);
     const organizationId = access.superadmin ? current.activeOrganizationId : access.organizationId!;
     const tenant = pbxForOrganization(current, organizationId);
-    const ai = { ...tenant.ai, ...(req.body ?? {}) };
+    const ai = nextAiSettings(tenant.ai, req.body);
     if (ai.voice === 'Telnyx.KokoroTTS.af') ai.voice = 'Telnyx.Bayan.Amanda';
     if (!ai.name.trim() || !ai.instructions.trim()) return res.status(400).json({ error: 'Assistant name and instructions are required.' });
     const [fallback, extensions] = await Promise.all([

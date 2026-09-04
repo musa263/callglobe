@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { mayAdministerAccount, mayGrantAdminAccess } from '../admin-account-access.js';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
 import { createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
@@ -14,6 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
     const access = await requireAdmin(req);
+    const actor = { superadmin: access.superadmin, role: access.session.role, extensionId: access.session.extensionId };
     const config = await readPbxConfig();
     const requestedOrganizationId = typeof req.body?.organizationId === 'string' ? req.body.organizationId : typeof req.query.organizationId === 'string' ? req.query.organizationId : '';
     const organizationId = access.superadmin ? requestedOrganizationId || config.activeOrganizationId : access.organizationId || '';
@@ -31,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (req.method === 'POST') {
       const requestedRole = req.body?.role;
-      if (!access.superadmin && ['company_owner', 'company_admin'].includes(requestedRole) && access.session.role !== 'company_owner') return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
+      if (!mayGrantAdminAccess(actor, requestedRole)) return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
       if (['company_owner', 'company_admin'].includes(requestedRole)) {
         const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
         const password = typeof req.body?.loginPassword === 'string' ? req.body.loginPassword : '';
@@ -64,7 +66,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const requestedRole = req.body?.role;
       const state = await readTenantSaasState(organizationId, config);
       const linkedAdmin = state.tenantAdmins.find((account) => account.extensionId === id);
-      if (!access.superadmin && ['company_owner', 'company_admin'].includes(requestedRole) && access.session.role !== 'company_owner') return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
+      if (!mayGrantAdminAccess(actor, requestedRole)) return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
+      // The guard above asks what role the request is asking for, and a request
+      // that asks for none passed it vacuously. A company administrator could
+      // therefore PATCH the owner's extension with nothing but a loginPassword:
+      // no role changed, so nothing fired, and the block further down saved
+      // that password as the owner's login — the owner's account, taken by one
+      // of their own administrators.
+      if (!mayAdministerAccount(actor, existing)) return res.status(403).json({ error: 'Only the company owner can change another administrator\u2019s account.' });
       if (['company_owner', 'company_admin'].includes(requestedRole)) {
         const email = typeof req.body?.email === 'string' ? req.body.email.trim() : existing.email;
         const password = typeof req.body?.loginPassword === 'string' ? req.body.loginPassword : '';
@@ -89,6 +98,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       return res.status(200).json({ extension });
     }
+    // Deleting an administrator takes the same authority as editing one, or an
+    // administrator simply removes the owner instead.
+    if (!mayAdministerAccount(actor, existing)) return res.status(403).json({ error: 'Only the company owner can remove another administrator\u2019s account.' });
     const state = await readTenantSaasState(organizationId, config);
     const linkedAdmin = state.tenantAdmins.find((account) => account.extensionId === id);
     const remainingAdmins = state.tenantAdmins.filter((account) => account.organizationId === organizationId && account.status === 'active' && account.id !== linkedAdmin?.id);

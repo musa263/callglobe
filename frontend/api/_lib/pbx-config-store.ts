@@ -161,11 +161,33 @@ export function organizationSettingsFrom(config: PbxConfig): OrganizationPbxSett
   };
 }
 
+/**
+ * Which organization the settings that predate multi-tenancy belong to.
+ *
+ * They live at the top level of the config rather than under
+ * organizationSettings, so exactly one tenant may claim them. An administrator
+ * pins the owner explicitly; without a pin the historical organizations[0]
+ * assumption applies, which is what number-config.ts has always used.
+ */
+export function legacyPrimaryOrganizationId(config: PbxConfig) {
+  const pinned = config.legacyPrimaryOrganizationId
+    && config.organizations.some((item) => item.id === config.legacyPrimaryOrganizationId)
+    ? config.legacyPrimaryOrganizationId
+    : undefined;
+  return pinned || config.organizations[0]?.id || 'primary';
+}
+
 export function pbxForOrganization(config: PbxConfig, organizationId: string): PbxConfig {
   const settings = config.organizationSettings[organizationId];
   if (settings) return { ...config, ...settings, activeOrganizationId: organizationId };
   const organization = config.organizations.find((item) => item.id === organizationId);
-  const ownsSharedConfig = organizationId === config.activeOrganizationId;
+  // Whose settings these are is a fact about the tenant, not about who is
+  // looking. Keyed on activeOrganizationId, the legacy tenant's voice menu,
+  // office hours and AI receptionist moved to whichever customer a superadmin
+  // had most recently opened — and stayed there, because opening a customer
+  // saves that choice. A customer could start answering calls with another
+  // company's greeting because somebody at Vocivo had looked at their account.
+  const ownsSharedConfig = organizationId === legacyPrimaryOrganizationId(config);
   if (ownsSharedConfig) return { ...config, activeOrganizationId: organizationId };
   const isolated = defaultPbxConfig();
   return {

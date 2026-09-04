@@ -127,6 +127,19 @@ const queueAttemptSeconds = 45;
 const maxForwardingDepth = 2;
 const voicemailMaxSeconds = 120;
 
+/**
+ * One argument of a command the media host will run through /bin/sh.
+ *
+ * Single quotes make everything inside literal to the shell, and a single
+ * quote is the one character that could end them — so it is removed rather
+ * than escaped. Neither of the two values this is used for can contain one
+ * (the upload URL is percent-encoded, the recording path is configuration),
+ * which makes this a guard against a future caller rather than a repair.
+ */
+export function shellArgument(value: string) {
+  return `'${value.replace(/'/g, '').replace(/[\r\n]/g, '')}'`;
+}
+
 export function escapeXml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
@@ -291,15 +304,22 @@ function unavailableActions(input: SipDialplanInput, voicemailEnabled: boolean) 
   // The upload URL is signed over the call id, so it must be the concrete value
   // xml_curl posted (FreeSWITCH cannot expand ${uuid} inside a percent-encoded URL).
   const callId = channelSafe(input.request.uuid, 64) || 'unknown-call';
+  const upload = voicemailUploadUrl(input, input.organizationId, callId, caller.number, caller.name);
   return [
     playback(input, business.voicemailGreeting),
     set('record_sample_rate', '8000'),
     set('RECORD_STEREO', 'false'),
     set('playback_terminators', 'none'),
+    // A caller who has finished speaking hangs up, and a hung-up channel runs
+    // no more dialplan: an upload written as the next action after `record`
+    // never ran, and every message left on this edge was recorded to a
+    // container's disk and lost with it. A hangup hook is the one thing that
+    // does run, and it runs on the other ending too — the recorder stopping by
+    // itself is followed by the `hangup` below.
+    set('session_in_hangup_hook', 'true'),
+    set('api_hangup_hook', `system /bin/sh /opt/vocivo-fs/voicemail-hangup.sh ${shellArgument(upload)} ${shellArgument(recording)}`),
     action('playback', 'tone_stream://%(500,0,800)'),
     action('record', `${recording} ${voicemailMaxSeconds} 30 5`),
-    action('http_put', `${voicemailUploadUrl(input, input.organizationId, callId, caller.number, caller.name)} ${recording}`),
-    action('system', `rm -f ${recording}`),
     action('hangup', 'NORMAL_CLEARING'),
   ];
 }

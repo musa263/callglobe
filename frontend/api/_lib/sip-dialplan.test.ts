@@ -201,9 +201,15 @@ test('outside office hours the caller goes straight to a signed voicemail upload
   assert.equal(promptText(list.find((item) => item.app === 'playback')!.data), 'Leave a message after the tone.');
   const record = list.find((item) => item.app === 'record');
   assert.equal(record?.data, '/var/lib/vocivo/recordings/${uuid}.wav 120 30 5');
-  const upload = list.find((item) => item.app === 'http_put');
-  assert.ok(upload, 'recording is uploaded');
-  const [url, file] = upload!.data.split(' ');
+  // The upload runs from the hangup hook, not as the next action: the caller
+  // hangs up when the message is finished, and nothing after `record` would
+  // ever run.
+  assert.ok(list.some((item) => item.app === 'set' && item.data === 'session_in_hangup_hook=true'));
+  const hook = list.find((item) => item.app === 'set' && item.data.startsWith('api_hangup_hook='));
+  assert.ok(hook, 'the recording is uploaded from a hangup hook');
+  const quoted = hook!.data.match(/^api_hangup_hook=system \/bin\/sh \/opt\/vocivo-fs\/voicemail-hangup\.sh '([^']*)' '([^']*)'$/);
+  assert.ok(quoted, `the hook quotes both of its arguments: ${hook!.data}`);
+  const [, url, file] = quoted!;
   assert.equal(file, '/var/lib/vocivo/recordings/${uuid}.wav');
   const params = new URL(url).searchParams;
   assert.equal(params.get('org'), 'acme');

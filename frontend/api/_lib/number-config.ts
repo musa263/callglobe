@@ -1,7 +1,8 @@
 import bcrypt from 'bcryptjs';
 import { requiredEnv } from './http.js';
 import { inboundConnectionId, telnyx } from './telnyx.js';
-import { readPbxConfig, savePbxConfig, type PbxConfig } from './pbx-config-store.js';
+import { legacyPrimaryOrganizationId, readPbxConfig, savePbxConfig, type PbxConfig } from './pbx-config-store.js';
+import { readStoredOwnerPasswordHash, writeOwnerPasswordHash } from './owner-credential-store.js';
 import { numberOrganizationId } from './tenancy.js';
 
 export type BusinessVoiceConfig = {
@@ -33,6 +34,38 @@ const defaults: BusinessVoiceConfig = {
 };
 
 type NumberResource = { tags?: string[] };
+
+/**
+ * A tag Vocivo keeps on a carrier number for its own use.
+ *
+ * The business voice configuration that predates multi-tenancy is stored in
+ * `vocfg_` tags, and the platform owner's password hash used to be stored in a
+ * `vopwd_` one. Neither is the tenant's to read or to write: the numbers screen
+ * showed every tag on a number the tenant owns and saved back whatever it was
+ * given, so a company administrator could read the owner's password hash and
+ * replace it with a hash of their own choosing.
+ */
+export function isInternalNumberTag(tag: unknown) {
+  return typeof tag === 'string' && (tag.startsWith(configPrefix) || tag.startsWith(passwordPrefix));
+}
+
+/** The tags a tenant may see on their own number. */
+export function tenantVisibleNumberTags(tags: unknown) {
+  return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string' && !isInternalNumberTag(tag)) : [];
+}
+
+/**
+ * The tag list to save: the tenant's own tags as they asked for them, with
+ * Vocivo's kept exactly as they were. A request cannot add one, change one, or
+ * drop one by leaving it out.
+ */
+export function nextNumberTags(existing: unknown, requested: unknown) {
+  const keep = Array.isArray(existing) ? existing.filter(isInternalNumberTag) as string[] : [];
+  const asked = Array.isArray(requested)
+    ? requested.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim().slice(0, 50)).filter((tag) => tag && !isInternalNumberTag(tag))
+    : [];
+  return [...keep, ...[...new Set(asked)].slice(0, 20)];
+}
 
 async function readTags() {
   const response = await telnyx(`/phone_numbers/${requiredEnv('TELNYX_PHONE_NUMBER_ID')}`);
@@ -93,15 +126,9 @@ async function readTaggedBusinessVoiceConfig(): Promise<BusinessVoiceConfig> {
   }
 }
 
-// The Telnyx-tag-based legacy config belongs to exactly one organization.
-// Admins can pin the owner via legacyPrimaryOrganizationId; without a valid
-// pin, the historical organizations[0] assumption applies unchanged.
-function resolveLegacyPrimaryOrganizationId(pbx: PbxConfig) {
-  const pinned = pbx.legacyPrimaryOrganizationId && pbx.organizations.some((item) => item.id === pbx.legacyPrimaryOrganizationId)
-    ? pbx.legacyPrimaryOrganizationId
-    : undefined;
-  return pinned || pbx.organizations[0]?.id || 'primary';
-}
+// The Telnyx-tag-based legacy config belongs to exactly one organization, and
+// to the same one the rest of the legacy settings belong to.
+const resolveLegacyPrimaryOrganizationId = legacyPrimaryOrganizationId;
 
 export async function readBusinessVoiceConfig(organizationId = 'primary'): Promise<BusinessVoiceConfig> {
   const pbx = await readPbxConfig();
@@ -144,7 +171,19 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
   return config;
 }
 
+/**
+ * The platform owner's password hash.
+ *
+ * Vocivo's own encrypted store first. The carrier tag is read only for an
+ * installation whose password was last changed before that store existed —
+ * it is where this credential used to live, which meant the hash that signs in
+ * to the whole platform sat in a phone-number tag that tenant administrators
+ * could read from the numbers screen and write from the same screen. The next
+ * password change moves it, and takes the tag away with it.
+ */
 export async function readPasswordHash() {
+  const stored = await readStoredOwnerPasswordHash();
+  if (stored) return stored;
   const tags = await readTags();
   const current = tags.find((tag) => tag.startsWith(passwordPrefix));
   const encoded = current?.slice(passwordPrefix.length);
@@ -154,8 +193,17 @@ export async function readPasswordHash() {
 export async function changePassword(currentPassword: string, newPassword: string) {
   const currentHash = await readPasswordHash();
   if (!await bcrypt.compare(currentPassword, currentHash)) return false;
-  const tags = await readTags();
-  const nextHash = await bcrypt.hash(newPassword, 12);
-  await writeTags([...tags.filter((tag) => !tag.startsWith(passwordPrefix)), `${passwordPrefix}${Buffer.from(nextHash).toString('base64url')}`]);
+  await writeOwnerPasswordHash(await bcrypt.hash(newPassword, 12));
+  // Best effort, and after the new hash is safely stored: a carrier that is
+  // unreachable must not stop the owner changing their password. What is left
+  // behind is only ever a stale hash the store now takes precedence over.
+  try {
+    const tags = await readTags();
+    if (tags.some((tag) => tag.startsWith(passwordPrefix))) {
+      await writeTags(tags.filter((tag) => !tag.startsWith(passwordPrefix)));
+    }
+  } catch (error) {
+    console.error('Could not remove the legacy password tag from the carrier number.', error);
+  }
   return true;
 }
