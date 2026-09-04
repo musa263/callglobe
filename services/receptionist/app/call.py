@@ -174,8 +174,11 @@ class CallHandler:
         """
         thinking = asyncio.create_task(self._brain.respond(conversation))
         # A quick reply ("yes", "goodbye") comes back before a filler would be
-        # worth saying, and "one moment" before "goodbye" sounds wrong.
-        done, _ = await asyncio.wait({thinking}, timeout=1.2)
+        # worth saying, and "one moment" before "goodbye" sounds wrong. The
+        # filler is what made the receptionist sound scripted — the same three
+        # phrases at the top of every answer — so it is kept for the turns
+        # that would otherwise be dead air, and only those.
+        done, _ = await asyncio.wait({thinking}, timeout=2.5)
         if not done:
             filler = FILLERS[self._filler_index % len(FILLERS)]
             self._filler_index += 1

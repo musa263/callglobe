@@ -89,7 +89,10 @@ function VoicePage({ business, setBusiness, config, setConfig, voices, onApplyRo
   const [playingVoice, setPlayingVoice] = useState('');
   const [previewError, setPreviewError] = useState('');
   const audioRef = useRef(null);
-  const voiceOptions = <><optgroup label="Vocivo in-house voices">{(voices?.voices || []).map((voice) => <option key={voice.id} value={voice.id}>{voice.name} · {voice.gender} · {voice.accent}</option>)}</optgroup><optgroup label="Carrier fallback voices">{(voices?.carrierFallbacks || []).map((voice) => <option key={voice.id} value={voice.id}>{voice.name} · {voice.gender}</option>)}</optgroup></>;
+  const recommendedVoices = (voices?.voices || []).filter((voice) => voice.recommended !== false);
+  const otherVoices = (voices?.voices || []).filter((voice) => voice.recommended === false);
+  const voiceLabel = (voice) => `${voice.name} · ${voice.gender} · ${voice.accent}${voice.quality ? ` · ${voice.quality}` : ''}`;
+  const voiceOptions = <><optgroup label="Recommended Vocivo voices">{recommendedVoices.map((voice) => <option key={voice.id} value={voice.id}>{voiceLabel(voice)}</option>)}</optgroup>{otherVoices.length > 0 && <optgroup label="Other Vocivo voices (noticeably synthetic)">{otherVoices.map((voice) => <option key={voice.id} value={voice.id}>{voiceLabel(voice)}</option>)}</optgroup>}<optgroup label="Carrier fallback voices">{(voices?.carrierFallbacks || []).map((voice) => <option key={voice.id} value={voice.id}>{voice.name} · {voice.gender}</option>)}</optgroup></>;
   const previewVoice = async (voice) => {
     if (!voice || playingVoice) return;
     setPreviewError(''); setPlayingVoice(voice);

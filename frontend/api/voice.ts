@@ -26,6 +26,7 @@ import sipDialplan from './_lib/routes/voice-sip-dialplan.js';
 import sipCdr from './_lib/routes/voice-sip-cdr.js';
 import sipPrompt from './_lib/routes/voice-sip-prompt.js';
 import sipVoicemail from './_lib/routes/voice-sip-voicemail.js';
+import preferences from './_lib/routes/voice-preferences.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -57,6 +58,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   'sip-cdr': sipCdr,
   'sip-prompt': sipPrompt,
   'sip-voicemail': sipVoicemail,
+  preferences,
 });
 
 export default function handler(req: VercelRequest, res: VercelResponse) {

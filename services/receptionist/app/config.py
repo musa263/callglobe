@@ -59,13 +59,19 @@ class Settings:
     greeting_timeout: float = 20.0
     listen_seconds: int = 20
     silence_threshold: int = 300
-    silence_seconds: int = 2
+    #: How long the caller may pause before the receptionist takes it as the
+    #: end of their turn. Two seconds cut people off mid-thought and answered
+    #: half a sentence; three lets a person finish.
+    silence_seconds: int = 3
     #: How long to wait for the caller to *start* talking before treating the
     #: turn as silent. FreeSWITCH's recorder stops after `silence_seconds` of
     #: quiet whether or not anyone has spoken yet, and two seconds is less than
     #: most people take to answer "how can I help?".
     patience_seconds: int = 10
-    max_turns: int = 12
+    #: A turn budget so a stuck conversation cannot hold a line open forever —
+    #: not a conversation length. Twelve was six exchanges, which is a real
+    #: caller cut short.
+    max_turns: int = 30
 
     @classmethod
     def from_env(cls) -> "Settings":

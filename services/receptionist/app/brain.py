@@ -105,6 +105,8 @@ def system_prompt(assistant: Assistant) -> str:
         "You are speaking out loud on a phone call. Keep every reply to one or two short sentences.",
         "Never use bullet points, headings, emoji or markdown — everything you write is read aloud.",
         "Say numbers the way a person says them out loud.",
+        "Sound like a calm, unhurried person at a front desk: acknowledge what the caller said in a few words before answering, and never rush them.",
+        "If the caller seems to be mid-thought, or you only caught part of what they said, ask a short question rather than guessing.",
         "If you did not understand the caller, say so plainly and ask them to repeat it.",
     ]
     language = LANGUAGE_NAMES.get((assistant.language or "en").lower()[:2])

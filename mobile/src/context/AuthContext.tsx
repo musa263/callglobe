@@ -41,13 +41,24 @@ function mobileProfile(value: UserProfileResponse['profile']): Omit<Profile, 'ba
   return { id: value.id, email: value.email, full_name: value.fullName, photo_url: value.photoUrl, job_title: value.jobTitle, department: value.department, mobile: value.mobile, location: value.location, bio: value.bio };
 }
 
+/**
+ * Every country, with the server's rates laid over the ones it names.
+ *
+ * The server's table lists only the destinations it has a price for, and it
+ * used to replace the directory outright — so a country it had no line for,
+ * the United Arab Emirates among them, could not be searched or dialled at
+ * all. The web app has always merged; the phone now does the same.
+ */
 function normalizeRates(values: CallRate[]) {
-  const seen = new Set<string>();
-  return values.filter((rate) => {
-    if (!rate?.id || !/^[A-Z]{2}$/.test(rate.country_code) || !/^\+\d{1,4}$/.test(rate.dial_code) || seen.has(rate.id)) return false;
-    seen.add(rate.id);
-    return true;
-  }).map((rate) => ({ ...rate, rate_per_min: Number(rate.rate_per_min) || 0 }));
+  const known = new Map<string, CallRate>();
+  for (const rate of values) {
+    if (!rate?.id || !/^[A-Z]{2}$/.test(rate.country_code) || !/^\+\d{1,4}$/.test(rate.dial_code) || known.has(rate.country_code)) continue;
+    known.set(rate.country_code, { ...rate, rate_per_min: Number(rate.rate_per_min) || 0 });
+  }
+  return fallbackRates.map((fallback) => {
+    const rate = known.get(fallback.country_code);
+    return rate ? { ...fallback, ...rate, id: fallback.id, flag: fallback.flag } : fallback;
+  });
 }
 
 const legacyHistoryKey = 'vocivo.secure-history';

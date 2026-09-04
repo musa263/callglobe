@@ -424,12 +424,27 @@ export function useSipVoice(token, enabled, identity = {}) {
     mergeCalls: unsupported,
     removeConferenceParticipant: unsupported,
     transferCall: unsupported,
-    sendDtmf: (digit) => sessionRef.current?.info?.({ contentType: 'application/dtmf-relay', body: `Signal=${digit}\r\nDuration=250` }),
+    sendDtmf: (digit) => {
+      // Keyed digits travel in the media (RFC 2833), which is what the switch
+      // and the voice menus listen for; SIP INFO reached the proxy and nothing
+      // behind it, so "press 1 for sales" from the web phone did nothing.
+      const pc = sessionRef.current?.sessionDescriptionHandler?.peerConnection;
+      const sender = pc?.getSenders?.().find((item) => item.track?.kind === 'audio');
+      if (sender?.dtmf && typeof sender.dtmf.insertDTMF === 'function') {
+        sender.dtmf.insertDTMF(String(digit), 200, 80);
+        return;
+      }
+      sessionRef.current?.info?.({ contentType: 'application/dtmf-relay', body: `Signal=${digit}\r\nDuration=250` });
+    },
     answer,
     decline,
     hangup,
     toggleMute,
     toggleHold,
     disconnect,
+    // The last call's failure is not the next screen's: switching between
+    // external and extension dialling used to carry "Use a complete
+    // international destination" over onto the extension keypad.
+    clearError: () => setError(''),
   };
 }

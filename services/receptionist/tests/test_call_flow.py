@@ -275,7 +275,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         parts = freeswitch.recordings[0].split(" ")
         self.assertEqual(len(parts), 4)
         self.assertTrue(parts[0].endswith(".wav"))
-        self.assertEqual(parts[1:], ["2", "300", "2"])
+        self.assertEqual(parts[1:], ["2", "300", "3"], "three seconds of quiet is the end of a turn; two cut callers off mid-thought")
 
     async def test_a_silent_caller_is_asked_once_and_then_handed_to_a_person(self):
         freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[])
@@ -322,7 +322,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
             assistant=RECEPTION,
             turns=["What are your opening hours on Saturday?"],
             decisions=[Decision(action="hangup", say="Nine to one on Saturdays.")],
-            model_delay=1.6,
+            model_delay=3.0,
         )
         answer = slow.said.index("Nine to one on Saturdays.")
         self.assertIn(slow.said[answer - 1], FILLERS, "a filler should be spoken while the model thinks")

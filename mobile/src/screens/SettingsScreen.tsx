@@ -20,6 +20,14 @@ function Row({ icon: Icon, title, subtitle, danger, onPress }: { icon: React.Ele
 const Label = ({ children }: { children: React.ReactNode }) => <Text style={styles.fieldLabel}>{children}</Text>;
 type VoiceOption = { id: string; name: string; gender: string; language: string; accent: string; provider: string };
 const adminRoles = ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'];
+
+/**
+ * A person's own call handling — theirs to set whatever their role. The
+ * voicemail row above this one is the company's, and only administrators see
+ * it, which left everyone else with no voicemail switch at all.
+ */
+type CallPreferences = { voicemailEnabled: boolean; noAnswerSeconds: number; schedule: 'Always available' | 'Use office hours'; simultaneousRing: string; forwardUnavailable: string };
+const defaultCallPreferences: CallPreferences = { voicemailEnabled: true, noAnswerSeconds: 25, schedule: 'Always available', simultaneousRing: '', forwardUnavailable: '' };
 const fallbackVoices: VoiceOption[] = [
   { id: 'AWS.Polly.Joanna-Neural', name: 'Joanna', gender: 'female', language: 'English', accent: 'American', provider: 'carrier' },
   { id: 'AWS.Polly.Matthew-Neural', name: 'Matthew', gender: 'male', language: 'English', accent: 'American', provider: 'carrier' },
@@ -34,6 +42,9 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   const [showPassword, setShowPassword] = useState(false);
   const [showRingtones, setShowRingtones] = useState(false);
   const [showVoicemail, setShowVoicemail] = useState(false);
+  const [showMyCalls, setShowMyCalls] = useState(false);
+  const [myCalls, setMyCalls] = useState<CallPreferences>(defaultCallPreferences);
+  const [myCallsLoaded, setMyCallsLoaded] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [draft, setDraft] = useState<BusinessProfile>(business);
   const [saving, setSaving] = useState(false);
@@ -60,6 +71,31 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
     onBusinessConsumed?.();
   }, [onBusinessConsumed, openBusinessNonce]);
   useEffect(() => { loadIncomingRingtone().then(setRingtone).catch(() => undefined); }, []);
+  const loadMyCalls = async () => {
+    if (isPreview) { setMyCallsLoaded(true); return; }
+    try {
+      const result = await api.get<{ preferences: CallPreferences }>('/api/voice/preferences');
+      setMyCalls({ ...defaultCallPreferences, ...result.preferences });
+      setMyCallsLoaded(true);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load your call handling.');
+    }
+  };
+  const saveMyCalls = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      if (!isPreview) {
+        const result = await api.put<{ preferences: CallPreferences }>('/api/voice/preferences', myCalls);
+        setMyCalls({ ...defaultCallPreferences, ...result.preferences });
+      }
+      setShowMyCalls(false);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save your call handling.');
+    } finally {
+      setSaving(false);
+    }
+  };
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
   const canManagePhoneSystem = isPreview || adminRoles.includes(profile?.role || '');
@@ -166,6 +202,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
       <View style={styles.group}>
         {canManagePhoneSystem && <Row icon={Building2} title="Professional Voice" subtitle={business.enabled ? `${business.companyName} IVR is active` : 'Greeting, departments and waiting message'} onPress={() => setShowBusiness(true)} />}
         {canManagePhoneSystem && <Row icon={Voicemail} title="Voicemail" subtitle={business.voicemailEnabled ? `On after ${business.voicemailDelaySeconds} seconds` : 'Off · unanswered calls keep ringing'} onPress={() => { setDraft(business); setError(''); setShowVoicemail(true); }} />}
+        {businessAccount && <Row icon={Voicemail} title="My call handling" subtitle={myCallsLoaded ? `${myCalls.voicemailEnabled ? `Voicemail after ${myCalls.noAnswerSeconds} seconds` : 'No voicemail'} · ${myCalls.schedule === 'Use office hours' ? 'office hours' : 'always available'}` : 'Voicemail, ring time and availability for your extension'} onPress={() => { setError(''); setShowMyCalls(true); loadMyCalls(); }} />}
         <Row icon={BellRing} title="Incoming ringtone" subtitle={ringtoneOptions.find((option) => option.id === ringtone)?.label} onPress={() => { setError(''); setShowRingtones(true); }} />
         <Row icon={Signal} title="Calls when app is closed" subtitle={pushRegistration === 'registered' ? 'Registered with iPhone CallKit' : pushRegistration === 'registering' ? 'Registering this iPhone...' : 'Needs registration'} onPress={() => refreshIncomingCalls().then(() => Alert.alert('Incoming calls ready', 'This iPhone is registered to ring through CallKit when Vocivo is closed.')).catch((registrationError) => Alert.alert('Registration failed', registrationError instanceof Error ? registrationError.message : 'Reopen Vocivo and try again.'))} />
         <Row icon={CreditCard} title="Calling balance" subtitle={profile?.balance == null ? 'Managed by your organization' : `${profile?.currency || 'USD'} ${Number(profile.balance).toFixed(2)} available`} onPress={onWallet} />
@@ -222,6 +259,25 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Pressable disabled={saving} onPress={saveVoicemail} style={[styles.save, saving && styles.disabled]}>{saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.saveText}>Save voicemail settings</Text>}</Pressable>
         <Text style={styles.note}>Messages appear under Recents → Voicemail. Recordings are stored privately and require your Vocivo sign-in.</Text>
+      </View>
+    </Modal>
+
+    <Modal visible={showMyCalls} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowMyCalls(false)}>
+      <View style={[styles.modalPage, styles.passwordPage]}>
+        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>YOUR EXTENSION</Text><Text style={styles.modalTitle}>My call handling</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowMyCalls(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.enableRow}><View style={styles.enableCopy}><Text style={styles.fieldTitle}>Send my unanswered calls to voicemail</Text><Text style={styles.fieldHelp}>When you do not pick up in time, callers can leave you a message instead of ringing out.</Text></View><Switch value={myCalls.voicemailEnabled} onValueChange={(voicemailEnabled) => setMyCalls((value) => ({ ...value, voicemailEnabled }))} trackColor={{ false: colors.line, true: colors.mintDark }} thumbColor={colors.text} /></View>
+        <Label>RING MY PHONE FOR</Label>
+        <View style={styles.choice}>{[15, 25, 40, 60].map((seconds) => <Pressable key={seconds} onPress={() => setMyCalls((value) => ({ ...value, noAnswerSeconds: seconds }))} style={[styles.choiceButton, myCalls.noAnswerSeconds === seconds && styles.choiceActive]}><Clock3 size={14} color={myCalls.noAnswerSeconds === seconds ? colors.mint : colors.textFaint} /><Text style={[styles.choiceText, myCalls.noAnswerSeconds === seconds && styles.choiceTextActive]}>{seconds}s</Text></Pressable>)}</View>
+        <Label>AVAILABILITY</Label>
+        <View style={styles.choice}>{(['Always available', 'Use office hours'] as const).map((schedule) => <Pressable key={schedule} onPress={() => setMyCalls((value) => ({ ...value, schedule }))} style={[styles.choiceButton, myCalls.schedule === schedule && styles.choiceActive]}><Text style={[styles.choiceText, myCalls.schedule === schedule && styles.choiceTextActive]}>{schedule}</Text></Pressable>)}</View>
+        <Text style={styles.fieldHelp}>Outside your availability, calls go straight to voicemail (or to the number below) without ringing you.</Text>
+        <Label>ALSO RING THIS NUMBER OR EXTENSION</Label>
+        <TextInput value={myCalls.simultaneousRing} onChangeText={(simultaneousRing) => setMyCalls((value) => ({ ...value, simultaneousRing }))} style={styles.field} keyboardType="phone-pad" placeholder="+1 212 555 0142 or 2002" placeholderTextColor={colors.textFaint} />
+        <Label>WHEN I CANNOT BE REACHED, SEND CALLS TO</Label>
+        <TextInput value={myCalls.forwardUnavailable} onChangeText={(forwardUnavailable) => setMyCalls((value) => ({ ...value, forwardUnavailable }))} style={styles.field} keyboardType="phone-pad" placeholder="Leave empty for voicemail" placeholderTextColor={colors.textFaint} />
+        {!!error && <Text style={styles.error}>{error}</Text>}
+        <Pressable disabled={saving || !myCallsLoaded} onPress={saveMyCalls} style={[styles.save, (saving || !myCallsLoaded) && styles.disabled]}>{saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.saveText}>Save my call handling</Text>}</Pressable>
+        <Text style={styles.note}>These settings apply to your extension only. The company greeting, menu and voice are set by an administrator.</Text>
       </View>
     </Modal>
 

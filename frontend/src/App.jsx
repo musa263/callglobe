@@ -8,6 +8,7 @@ import {
 import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { api, clearSession, getStoredSession, storeSession } from './lib/api';
 import { buildDialingDirectory } from './lib/countries';
+import { resolveDialedNumber } from './voice/dialedNumber';
 import { useVoice } from './hooks/useVoice';
 import AdminConsole from './admin/AdminConsole';
 import { describeIncoming } from './voice/callIdentity';
@@ -226,7 +227,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
   }, [initialNumber, businessAccount]);
   useEffect(() => { if (!country && rates.length) setCountry(rates[0]); }, [country, rates]);
   const filteredRates = rates.filter((rate) => `${rate.country_name} ${rate.dial_code}`.toLowerCase().includes(search.toLowerCase()));
-  const fullNumber = number.startsWith('+') ? number : `${country?.dial_code || ''}${number}`;
+  const fullNumber = resolveDialedNumber(number, country?.country_code, country?.dial_code);
   const minutes = country?.rate_per_min && Number.isFinite(balance) ? Math.floor(balance / country.rate_per_min) : null;
   const destinationCountry = parsePhoneNumberFromString(fullNumber)?.country || country?.country_code;
   const callerCountry = selectedNumber?.country_code || parsePhoneNumberFromString(selectedNumber?.phone_number || '')?.country;
@@ -275,7 +276,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
       <header className="workspace-header"><div><p className="eyebrow">WEB PHONE</p><h1>Make a call</h1></div><div className={`status-badge ${voice.ready ? 'online' : ''}`}>{voice.ready ? <Wifi size={15} /> : <WifiOff size={15} />}{preview ? 'Preview mode' : voice.ready ? 'Ready for calls' : voice.statusLabel}</div></header>
       <div className="dialer-layout">
         <div className="dialer-panel">
-          {businessAccount && <div className="dial-mode" role="group" aria-label="Call type"><button className={dialMode === 'external' ? 'active' : ''} onClick={() => { setDialMode('external'); setNumber(''); setCallError(''); }}><Globe2 size={16} /> External</button><button className={dialMode === 'extension' ? 'active' : ''} onClick={() => { setDialMode('extension'); setNumber(''); setCallError(''); }}><ContactRound size={16} /> Extension</button></div>}
+          {businessAccount && <div className="dial-mode" role="group" aria-label="Call type"><button className={dialMode === 'external' ? 'active' : ''} onClick={() => { setDialMode('external'); setNumber(''); setCallError(''); voice.clearError?.(); }}><Globe2 size={16} /> External</button><button className={dialMode === 'extension' ? 'active' : ''} onClick={() => { setDialMode('extension'); setNumber(''); setCallError(''); voice.clearError?.(); }}><ContactRound size={16} /> Extension</button></div>}
           {dialMode === 'external' && <CallerIdMenu numbers={numbers} selected={selectedNumber} onSelect={(value) => { setSelectedNumber(value); setCallerOpen(false); }} open={callerOpen} onToggle={() => setCallerOpen((value) => !value)} />}
           <div className="destination-field">
             {dialMode === 'external' ? <button className="country-trigger" onClick={() => setCountryOpen((value) => !value)} aria-label="Choose destination country"><span>{country?.country_code || '--'}</span><ChevronDown size={15} /></button> : <span className="extension-prefix">EXT</span>}
