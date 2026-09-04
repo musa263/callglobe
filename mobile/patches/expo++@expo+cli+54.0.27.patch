@@ -1,0 +1,17 @@
+diff --git a/node_modules/expo/node_modules/@expo/cli/build/src/run/ios/XcodeBuild.js b/node_modules/expo/node_modules/@expo/cli/build/src/run/ios/XcodeBuild.js
+--- a/node_modules/expo/node_modules/@expo/cli/build/src/run/ios/XcodeBuild.js
++++ b/node_modules/expo/node_modules/@expo/cli/build/src/run/ios/XcodeBuild.js
+@@ -238,6 +238,13 @@
+         const developmentTeamId = await (0, _configureCodeSigning.ensureDeviceIsCodeSignedForDeploymentAsync)(props.projectRoot);
+         if (developmentTeamId) {
+             args.push(`DEVELOPMENT_TEAM=${developmentTeamId}`, '-allowProvisioningUpdates', '-allowProvisioningDeviceRegistration');
++        } else {
++            // Vocivo: null means signing was already configured in Xcode, which
++            // is the documented way to set it up — but xcodebuild still cannot
++            // create or refresh a provisioning profile without being told it
++            // may. Skipping these flags here failed every device build with
++            // "Automatic signing is disabled and unable to generate a profile".
++            args.push('-allowProvisioningUpdates', '-allowProvisioningDeviceRegistration');
+         }
+     }
+     // Add last
