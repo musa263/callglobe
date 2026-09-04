@@ -29,6 +29,23 @@ export function newSipPassword() {
   return randomBytes(24).toString('base64url');
 }
 
+/**
+ * Which of a person's phones a SIP password is being issued to.
+ *
+ * One extension is regularly signed in on a browser and a handset at the same
+ * time, and each needs a password of its own — a single stored credential
+ * meant whichever signed in last quietly took the other off the registrar.
+ * The client says which it is; when it does not, the user agent is enough to
+ * tell an app from a browser.
+ */
+export function sipCredentialClient(req: { body?: unknown; headers?: Record<string, unknown> }) {
+  const asked = (req.body as { client?: unknown } | undefined)?.client;
+  const named = typeof asked === 'string' ? asked.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40) : '';
+  if (named) return named;
+  const agent = String(req.headers?.['user-agent'] || '');
+  return /react-?native|expo|okhttp|darwin|android|vocivo-?mobile/i.test(agent) ? 'mobile' : 'web';
+}
+
 export function signedSipNonce(username: string, expiresAt: number) {
   return createHmac('sha256', `${requiredEnv('AUTH_SECRET')}:sip-nonce`).update(`${username}:${expiresAt}`).digest('base64url');
 }

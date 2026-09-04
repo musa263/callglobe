@@ -25,6 +25,11 @@ export function useSipVoice(token, enabled, identity = {}) {
   const [mediaReady, setMediaReady] = useState(false);
   const [endedCall, setEndedCall] = useState(null);
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+  // Bumped when the SIP password needs replacing, which tears the phone down
+  // and brings it back with a new one. Without it the password expired under a
+  // running phone: the next re-registration was refused and calls stopped
+  // arriving, with "Ready for calls" still on screen.
+  const [credentialEpoch, setCredentialEpoch] = useState(0);
   const ringbackRef = useRef(null);
 
   const stopRingback = useCallback(() => {
@@ -77,9 +82,25 @@ export function useSipVoice(token, enabled, identity = {}) {
     if (!enabled || !token) return undefined;
     let cancelled = false;
     setStatusLabel('Connecting SIP…');
-    api('/api/voice/sip-credentials', { method: 'POST', body: {} }).then(async (credentials) => {
+    let renewal;
+    api('/api/voice/sip-credentials', { method: 'POST', body: { client: 'web' } }).then(async (credentials) => {
       if (cancelled) return;
       if (!credentials.wsUri) throw new Error('VOCIVO_SIP_WSS_URI is not configured.');
+      // Replaced at four fifths of its life, and never sooner than five
+      // minutes from now however short the answer says it is. Getting a new
+      // password means building the phone again, so a call in progress is
+      // waited out rather than cut off.
+      const lifetime = Number(credentials.expires_in) * 1000;
+      const renewIn = Math.min(Math.max(5 * 60 * 1000, (Number.isFinite(lifetime) && lifetime > 0 ? lifetime : 60 * 60 * 1000) * 0.8), 2 ** 31 - 1);
+      const renew = () => {
+        if (cancelled) return;
+        if (sessionRef.current || incomingRef.current) {
+          renewal = setTimeout(renew, 60_000);
+          return;
+        }
+        setCredentialEpoch((epoch) => epoch + 1);
+      };
+      renewal = setTimeout(renew, renewIn);
       const connection = await connectSipUserAgent({
         username: credentials.username,
         password: credentials.password,
@@ -128,6 +149,9 @@ export function useSipVoice(token, enabled, identity = {}) {
       if (cancelled) return;
       setError(failure instanceof Error ? failure.message : 'The SIP phone could not register.');
       setStatusLabel('SIP unavailable');
+      // A network that was not there when the tab opened left the phone dead
+      // until the page was reloaded. Try again, slowly.
+      renewal = setTimeout(() => { if (!cancelled) setCredentialEpoch((epoch) => epoch + 1); }, 30_000);
     });
     // A tab that comes back into view or a network that comes back gets the
     // phone registered again at once rather than on the back-off timer.
@@ -139,11 +163,12 @@ export function useSipVoice(token, enabled, identity = {}) {
     document.addEventListener('visibilitychange', refresh);
     return () => {
       cancelled = true;
+      if (renewal) clearTimeout(renewal);
       window.removeEventListener('online', refresh);
       document.removeEventListener('visibilitychange', refresh);
       disconnect();
     };
-  }, [disconnect, enabled, identity.name, token]);
+  }, [credentialEpoch, disconnect, enabled, identity.name, token]);
 
   useEffect(() => {
     if (!enabled || !token || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;

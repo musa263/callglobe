@@ -5,7 +5,7 @@ import { getExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { digestHa1 } from '../sip-digest.js';
 import { saveSipCredential } from '../sip-credential-store.js';
-import { newSipPassword } from '../sip-edge-auth.js';
+import { newSipPassword, sipCredentialClient } from '../sip-edge-auth.js';
 import { accessForSession } from '../saas-access.js';
 import { sessionOrganizationId } from '../tenancy.js';
 import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../voice-provider.js';
@@ -26,7 +26,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!extension.sipUsername) return res.status(409).json({ error: 'This extension has no SIP username.' });
     const realm = sipRealm();
     const password = newSipPassword();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    // A phone registers once and then re-registers with the same password for
+    // as long as the app is open. At an hour, the password died under a
+    // running phone: the next re-registration was refused, the registrar
+    // dropped the contact, and calls stopped arriving with nothing on screen
+    // to say so. A week outlives any session, and the client asks for a fresh
+    // one well before it runs out.
+    const expiresIn = 7 * 24 * 60 * 60;
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
     await saveSipCredential({
       username: extension.sipUsername,
       extensionId: extension.id,
@@ -34,6 +41,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       realm,
       ha1: digestHa1(extension.sipUsername, realm, password),
       expiresAt,
+      client: sipCredentialClient(req),
+      issuedAt: new Date().toISOString(),
     });
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({
@@ -43,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       domain: sipDomain(),
       wsUri: sipWsUri(),
       expiresAt,
-      expires_in: 3600,
+      expires_in: expiresIn,
       ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
       voice_edge: voiceEdge(config),
     });

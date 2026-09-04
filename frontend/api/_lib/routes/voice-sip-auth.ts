@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { allowMobile, methodNotAllowed, publicError } from '../http.js';
 import { authorizeSipCall, type SipCallAuthorization } from '../sip-call-authorization.js';
 import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
-import { readSipCredential } from '../sip-credential-store.js';
+import { readSipCredentials } from '../sip-credential-store.js';
 import { sipEdgeAuthorized, sipNonceIsValid } from '../sip-edge-auth.js';
 
 function text(value: unknown, max: number) {
@@ -58,18 +58,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Only an answer to a nonce this API issued, and recently, counts. A
     // digest is otherwise replayable for as long as the password stands.
     if (!sipNonceIsValid(challenge.nonce, challenge.username)) return res.status(403).json({ ok: false, reason: 'stale_nonce' });
-    const stored = await readSipCredential(challenge.username);
-    if (!stored || stored.realm !== challenge.realm) return res.status(403).json({ ok: false });
-    const ok = digestMatches(stored.ha1, challenge);
+    // One extension is signed in on a browser and a handset at once, and each
+    // holds a password of its own. Any of the live ones authenticates.
+    const stored = (await readSipCredentials(challenge.username)).filter((credential) => credential.realm === challenge.realm);
+    const matched = stored.find((credential) => digestMatches(credential.ha1, challenge));
+    if (!stored.length) return res.status(403).json({ ok: false });
+    const ok = Boolean(matched);
     // The route is only vouched for once the password has been: a caller ID
     // returned beside a failed Digest would be a caller ID for the asking.
     const call = ok && routeToken
-      ? authorizeSipCall({ routeToken, requestUser, organizationId: stored.organizationId })
+      ? authorizeSipCall({ routeToken, requestUser, organizationId: matched!.organizationId })
       : null;
     return res.status(ok ? 200 : 403).json({
       ok,
-      extensionId: ok ? stored.extensionId : undefined,
-      organizationId: ok ? stored.organizationId : undefined,
+      extensionId: ok ? matched!.extensionId : undefined,
+      organizationId: ok ? matched!.organizationId : undefined,
       ...routeFields(call),
     });
   } catch (error) {

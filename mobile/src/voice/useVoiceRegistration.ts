@@ -51,6 +51,7 @@ export function useVoiceRegistration({
     let sessionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     let activeRegistrationTimer: ReturnType<typeof setTimeout> | undefined;
     let networkRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let sipCredentialTimer: ReturnType<typeof setTimeout> | undefined;
     let appStateSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
     let networkSubscription: (() => void) | undefined;
 
@@ -83,22 +84,64 @@ export function useVoiceRegistration({
         // Which engine carries the call. Until this point the app has been
         // registering with a carrier and with Vocivo's own edge both; from here
         // exactly one of them is the client the UI talks to.
-        let onSipEdge = false;
-        if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
+        // The SIP password has a life of its own, and re-registering with an
+        // expired one is refused: the registrar drops the phone and calls stop
+        // arriving with nothing on screen to say so. Ask for a new one at four
+        // fifths of its life, and register again with it.
+        const registerOnSipEdge = async () => {
           const sip = await api.post<{
             username: string;
             password: string;
             domain: string;
             wsUri?: string;
-          }>('/api/voice/sip-credentials', {});
+            expires_in?: number;
+          }>('/api/voice/sip-credentials', { client: 'mobile' });
+          await registerVocivoSip({
+            username: sip.username,
+            password: sip.password,
+            domain: sip.domain,
+            wsUri: sip.wsUri,
+            displayName: sip.username,
+          });
+          scheduleSipCredentialRefresh(Number(sip.expires_in));
+        };
+
+        const scheduleSipCredentialRefresh = (expiresInSeconds: number) => {
+          if (sipCredentialTimer) clearTimeout(sipCredentialTimer);
+          const lifetime = Number.isFinite(expiresInSeconds) && expiresInSeconds > 0 ? expiresInSeconds * 1000 : 60 * 60 * 1000;
+          const delay = Math.min(Math.max(5 * 60_000, lifetime * 0.8), 2 ** 31 - 1);
+          sipCredentialTimer = setTimeout(() => {
+            refreshSipCredentials().catch((failure) => reportVoiceError('scheduled SIP credential refresh', failure));
+          }, delay);
+        };
+
+        const refreshSipCredentials = async () => {
+          if (canceled || !onSipEdge) return;
+          // Registering again re-offers the phone's contact, which a call in
+          // progress does not need disturbed.
+          if (activeCallRef.current) {
+            if (sipCredentialTimer) clearTimeout(sipCredentialTimer);
+            sipCredentialTimer = setTimeout(() => {
+              refreshSipCredentials().catch((failure) => reportVoiceError('deferred SIP credential refresh', failure));
+            }, 60_000);
+            return;
+          }
           try {
-            await registerVocivoSip({
-              username: sip.username,
-              password: sip.password,
-              domain: sip.domain,
-              wsUri: sip.wsUri,
-              displayName: sip.username,
-            });
+            await registerOnSipEdge();
+          } catch (failure) {
+            reportVoiceError('renew Vocivo SIP credentials', failure);
+            if (canceled) return;
+            if (sipCredentialTimer) clearTimeout(sipCredentialTimer);
+            sipCredentialTimer = setTimeout(() => {
+              refreshSipCredentials().catch((error) => reportVoiceError('SIP credential refresh retry', error));
+            }, 60_000);
+          }
+        };
+
+        let onSipEdge = false;
+        if (shouldUseSipNative(voiceEdgeFromConfig(edgeConfig), NativeModules)) {
+          try {
+            await registerOnSipEdge();
             const engine = sipEngine();
             voice.use(engine.name, engine.client, engine.platform);
             onSipEdge = true;
@@ -266,6 +309,7 @@ export function useVoiceRegistration({
       if (sessionRefreshTimer) clearTimeout(sessionRefreshTimer);
       if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
       if (networkRefreshTimer) clearTimeout(networkRefreshTimer);
+      if (sipCredentialTimer) clearTimeout(sipCredentialTimer);
       appStateSubscription?.remove();
       networkSubscription?.();
     };
