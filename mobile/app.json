@@ -64,6 +64,7 @@
       "./plugins/withTelnyxVoip",
       "./plugins/withVocivoSip",
       "./plugins/withFmtXcode26",
+      "./plugins/withQuotedBundlePath",
       [
         "expo-splash-screen",
         {
