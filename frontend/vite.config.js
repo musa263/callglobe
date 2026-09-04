@@ -17,6 +17,17 @@ export default defineConfig({
   server: {
     host: true,
     port: 3000,
+    // Debugging runs the real UI from source against a real backend: the
+    // serverless functions in api/ are not run by Vite, so /api is sent to a
+    // deployment instead. Sessions are Bearer tokens, not cookies, so nothing
+    // else has to be rewritten. Dev only; the production build is untouched.
+    proxy: {
+      '/api': {
+        target: process.env.VOCIVO_API_ORIGIN || 'https://vocivo.app',
+        changeOrigin: true,
+        secure: true,
+      },
+    },
   },
   build: {
     outDir: 'dist',
