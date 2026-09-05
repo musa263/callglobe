@@ -397,7 +397,7 @@ jobs:
                 if [ -n "$detected" ]; then
                   sed -i "/^PUBLIC_IP=/d" "$STAGE/.env"
                   printf "PUBLIC_IP=%s\n" "$detected" >> "$STAGE/.env"
-                  echo "PUBLIC_IP was not set; using this host's address $detected"
+                  echo "PUBLIC_IP was not set; using the address of this host, $detected"
                 else
                   echo "::warning::PUBLIC_IP is not set in .env and could not be detected"
                 fi
