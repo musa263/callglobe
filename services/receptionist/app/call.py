@@ -68,7 +68,11 @@ class CallHandler:
             conversation.add("assistant", assistant.greeting)
 
             silent_turns = 0
-            for _ in range(self._settings.max_turns):
+            # No turn budget: the conversation lasts as long as the caller
+            # needs it to. A line nobody is talking on is still released — two
+            # silent turns in a row transfer or end the call below — and the
+            # caller hanging up ends it at once.
+            while True:
                 if connection.hungup.is_set():
                     outcome = "caller_hung_up"
                     break
@@ -121,12 +125,6 @@ class CallHandler:
                 if decision.action == "hangup":
                     outcome = "message_taken" if notes else "completed"
                     break
-            else:
-                # The turn budget exists so a stuck conversation cannot hold a
-                # line open indefinitely.
-                outcome = "turn_limit"
-                await self._speak(connection, CANNED["turn_limit"], assistant.voice)
-                await connection.hangup()
         except Exception as error:  # noqa: BLE001 - never leave a caller on a dead line
             log.exception("call %s failed: %s", call_id[:8], error)
             outcome = "error"
@@ -185,23 +183,36 @@ class CallHandler:
         own synthesis starts as soon as the model replies, before the filler
         has finished, so the two overlap rather than add up.
         """
-        thinking = asyncio.create_task(self._brain.respond(conversation))
-        # A quick reply ("yes", "goodbye") comes back before a filler would be
-        # worth saying, and "one moment" before "goodbye" sounds wrong. The
-        # filler is what made the receptionist sound scripted — the same three
-        # phrases at the top of every answer — so it is kept for the turns
-        # that would otherwise be dead air, and only those.
-        done, _ = await asyncio.wait({thinking}, timeout=2.5)
+        # The model streams. Its first sentence goes to the voice engine the
+        # moment it is complete — usually well under a second in — so by the
+        # time the whole answer has arrived the opening is already on disk and
+        # playback starts at once. Previously synthesis began only after the
+        # entire reply, and that serial wait was most of the pause before every
+        # answer.
+        first_ready = asyncio.Event()
+        early: list[asyncio.Task[Path]] = []
+
+        def render_first(sentence: str) -> None:
+            if not early:
+                early.append(asyncio.create_task(self._voice.say(sentence, voice)))
+            first_ready.set()
+
+        thinking = asyncio.create_task(self._brain.respond(conversation, render_first))
+        # A filler ("one moment") only when the model has not even begun to
+        # answer after a few seconds — the same phrase at the top of every
+        # reply is what made the receptionist sound scripted, so it is kept
+        # for the turns that would otherwise be dead air, and only those.
+        waiter = asyncio.create_task(first_ready.wait())
+        done, _ = await asyncio.wait({thinking, waiter}, timeout=3.0, return_when=asyncio.FIRST_COMPLETED)
         if not done:
             filler = FILLERS[self._filler_index % len(FILLERS)]
             self._filler_index += 1
             await self._speak(connection, filler, voice)
         decision = await thinking
-        first = split_sentences(decision.say)[:1]
-        if first:
-            # Start rendering the opening sentence now; _speak finds it on disk.
+        waiter.cancel()
+        if early:
             try:
-                await self._voice.say(first[0], voice)
+                await early[0]
             except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
                 log.debug("early render failed: %s", error)
         return decision

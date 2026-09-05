@@ -29,7 +29,6 @@ CANNED = {
     "not_heard": "Sorry, I couldn't hear you. Are you still there?",
     "transfer_fallback": "I'll put you through to someone.",
     "goodbye_no_speech": "I'll let the team know you called. Goodbye.",
-    "turn_limit": "Let me pass this on to the team. Thanks for calling.",
 }
 
 # Said while the language model and the voice engine work on the real answer:

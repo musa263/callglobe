@@ -42,7 +42,7 @@ class Settings:
     llm_api_key: str = ""
     llm_model: str = "claude-haiku-4-5"
     llm_base_url: str = "https://api.anthropic.com"
-    llm_max_tokens: int = 300
+    llm_max_tokens: int = 220
     #: Required by identity-linked API keys: the workspace the requests act in
     #: (console → Settings → Workspaces). A key of that kind without it is
     #: refused with 400 on every turn, and the receptionist could only ever
@@ -60,18 +60,19 @@ class Settings:
     listen_seconds: int = 20
     silence_threshold: int = 300
     #: How long the caller may pause before the receptionist takes it as the
-    #: end of their turn. Two seconds cut people off mid-thought and answered
-    #: half a sentence; three lets a person finish.
-    silence_seconds: int = 3
+    #: end of their turn. This is the floor on every reply's delay, so it is
+    #: kept at the natural gap between speakers; the recorder no longer
+    #: counts the caller's *thinking* time against it (see _listen), which is
+    #: what used to cut people off.
+    silence_seconds: int = 2
     #: How long to wait for the caller to *start* talking before treating the
     #: turn as silent. FreeSWITCH's recorder stops after `silence_seconds` of
     #: quiet whether or not anyone has spoken yet, and two seconds is less than
     #: most people take to answer "how can I help?".
     patience_seconds: int = 10
-    #: A turn budget so a stuck conversation cannot hold a line open forever —
-    #: not a conversation length. Twelve was six exchanges, which is a real
-    #: caller cut short.
-    max_turns: int = 30
+    #: Kept for older deployments' environment files; the conversation no
+    #: longer has a turn budget.
+    max_turns: int = 0
 
     @classmethod
     def from_env(cls) -> "Settings":
