@@ -268,6 +268,13 @@ export function useSipVoice(token, enabled, identity = {}) {
             setReady(false);
             setStatusLabel('Reconnecting…');
             if (reason) reportWebVoiceError('SIP registration', new Error(reason));
+            // The registrar refused the password (401/403 after the retry with
+            // credentials). Retrying the same one every thirty seconds never
+            // ends — the phone sat on "Reconnecting…" for an hour with a
+            // password the API had stopped accepting. Fetch a fresh one.
+            if (/^40[13]\b/.test(String(reason || '')) && !renewal) {
+              renewal = setTimeout(() => { if (!cancelled) setCredentialEpoch((epoch) => epoch + 1); }, 3000);
+            }
           }
         },
         onInvite: (invitation) => {

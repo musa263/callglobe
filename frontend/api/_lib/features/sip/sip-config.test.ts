@@ -28,7 +28,11 @@ test('late REGISTER appends to a bounded transaction, never an eight-second poll
 test('known dialog routing precedes initial INVITE and conferences fail closed', () => {
   const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
   assert.ok(config.indexOf('if (has_totag())') < config.indexOf('route(INVITE)'));
-  assert.match(config, /!loose_route\(\) \|\| !is_known_dlg\(\)/);
+  // A dialog the proxy does not remember still gets its ACK and BYE relayed
+  // (refusing them left both sides on a dead call); only other methods 481.
+  assert.match(config, /if \(!loose_route\(\)\)/);
+  assert.match(config, /if \(!is_known_dlg\(\)\)/);
+  assert.match(config, /if \(\$rp == "5080"\)/);
   assert.match(config, /sl_send_reply\("403", "Conference admission required"\)/);
   const xml = readFileSync(new URL('../../../../../services/sip/freeswitch/dialplan/public.xml', import.meta.url), 'utf8');
   assert.doesNotMatch(xml, /application="conference"/);

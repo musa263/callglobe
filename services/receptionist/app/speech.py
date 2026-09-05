@@ -11,6 +11,7 @@ import wave
 from pathlib import Path
 
 import httpx
+from dataclasses import dataclass
 
 from .config import Settings
 
@@ -26,18 +27,19 @@ log = logging.getLogger("vocivo.speech")
 # tenant's voice when the receptionist is saved (frontend/api/_lib/receptionist.ts
 # carries the same list), and the first caller never waits for them.
 CANNED = {
-    "not_heard": "Sorry, I couldn't hear you. Are you still there?",
-    "transfer_fallback": "I'll put you through to someone.",
-    "goodbye_no_speech": "I'll let the team know you called. Goodbye.",
+    "not_heard": "Sorry, I didn't catch that. Are you still there?",
+    "transfer_fallback": "Let me put you through to someone who can help.",
+    "goodbye_no_speech": "I'll let the team know you called. Bye for now.",
 }
 
 # Said while the language model and the voice engine work on the real answer:
 # three to eight seconds of dead air after a question is what makes callers
 # hang up or repeat themselves. Short, so the answer follows almost at once.
 FILLERS = (
-    "One moment.",
-    "Let me check that for you.",
-    "Sure, one second.",
+    "Mm-hm, one moment.",
+    "Right, let me check.",
+    "Okay, one second.",
+    "Let me see.",
 )
 
 
@@ -239,6 +241,57 @@ class Ears:
         except Exception as error:  # noqa: BLE001 - distinguish failures from silence
             log.exception("speech recognition failed")
             raise SpeechRecognitionError("Speech recognition is temporarily unavailable") from error
+
+
+@dataclass(frozen=True)
+class RecordingStats:
+    seconds: float
+    rms: int
+    has_audio: bool
+
+
+def recording_stats(path: Path, *, minimum_seconds: float = 0.35, minimum_rms: int = 120) -> RecordingStats:
+    """Length, loudness and the has-audio verdict in one read, for the turn log."""
+    try:
+        with wave.open(str(path), "rb") as handle:
+            frames = handle.getnframes()
+            rate = handle.getframerate() or 8000
+            width = handle.getsampwidth()
+            seconds = frames / rate
+            samples = handle.readframes(frames) if frames else b""
+    except (wave.Error, OSError):
+        return RecordingStats(0.0, 0, False)
+    if width != 2 or not samples:
+        return RecordingStats(round(seconds, 2), 0, False)
+    rms = int(_rms(samples))
+    return RecordingStats(round(seconds, 2), rms, seconds >= minimum_seconds and rms >= minimum_rms)
+
+
+def drop_hallucinated_transcript(heard: str, known_phrases: list[str]) -> str:
+    """
+    The recogniser is primed with the business's name and the people it can
+    transfer to, and on a stretch of line noise it tends to answer with that
+    prompt — or with the greeting it has just heard echoed down the line. A
+    transcript that is nothing but one of those phrases is not the caller.
+    """
+    text = " ".join(heard.split()).strip()
+    if not text:
+        return ""
+    normalised = _plain(text)
+    if len(normalised) < 2:
+        return ""
+    for phrase in known_phrases:
+        plain = _plain(phrase or "")
+        if len(plain) >= 8 and (normalised == plain or normalised in plain or (plain in normalised and len(normalised) <= len(plain) + 12)):
+            return ""
+    # Whisper's silence fillers.
+    if normalised in {"thank you", "thanks for watching", "you", "bye", "thank you for watching", "subtitles by the amara org community"}:
+        return ""
+    return text
+
+
+def _plain(value: str) -> str:
+    return " ".join("".join(character.lower() if character.isalnum() or character.isspace() else " " for character in value).split())
 
 
 def recording_has_audio(path: Path, *, minimum_seconds: float = 0.35, minimum_rms: int = 120) -> bool:

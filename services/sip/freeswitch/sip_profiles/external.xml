@@ -10,7 +10,12 @@
     <param name="rtp-ip" value="0.0.0.0"/>
     <param name="sip-ip" value="127.0.0.1"/>
     <param name="ext-rtp-ip" value="$${PUBLIC_IP}"/>
-    <param name="ext-sip-ip" value="$${PUBLIC_IP}"/>
+    <!-- No ext-sip-ip. This profile only ever talks to Kamailio on loopback,
+         and 127.0.0.1 is not in localnet.auto, so with ext-sip-ip set sofia
+         put the public address in every Contact and Via it sent — where no
+         profile listens. The carrier's ACK for an answered call and every
+         BYE toward the switch went there and were lost; FreeSWITCH gave up
+         when its ACK timer expired, 32 seconds into every inbound call. -->
     <param name="inbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="manage-presence" value="false"/>

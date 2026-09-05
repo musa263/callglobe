@@ -9,7 +9,7 @@ from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, channel_variable
-from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, Voice, recording_has_audio, split_sentences
+from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, Voice, drop_hallucinated_transcript, recording_stats, split_sentences
 
 log = logging.getLogger("vocivo.call")
 
@@ -56,6 +56,14 @@ class CallHandler:
         # small enough that transcription starts the moment they stop talking.
         await connection.set("record_sample_rate", "8000")
         await connection.set("playback_terminators", "none")
+        # Only the caller's side. The recorder mixes both directions by default,
+        # so our own prompts and their echo were in every turn recording — the
+        # recogniser heard the greeting back and answered it.
+        await connection.set("RECORD_READ_ONLY", "true")
+        # The recorder deletes anything shorter than RECORD_MIN_SEC (three
+        # seconds by default) as if nothing had been said. "Yes." is a second
+        # long: the caller answered and was asked again.
+        await connection.set("RECORD_MIN_SEC", "0")
 
         conversation = Conversation(assistant=assistant, caller_number=caller)
         started = time.time()
@@ -133,6 +141,7 @@ class CallHandler:
             except Exception:  # noqa: BLE001
                 log.exception("call %s could not be terminated after failure", call_id[:8])
         finally:
+            log.info("call %s ended: %s after %.0fs, %d turns%s", call_id[:8], outcome, time.time() - started, len(conversation.turns), f", transferred to {transferred_to}" if transferred_to else "")
             try:
                 await self._api.record_conversation({
                     "callId": call_id,
@@ -237,18 +246,32 @@ class CallHandler:
                 str(self._settings.silence_threshold),
                 str(self._settings.silence_seconds),
             ])
+            recording_started = time.monotonic()
             await connection.execute("record", argument, timeout=self._settings.listen_seconds + 10)
-            if recording_has_audio(path):
+            recorded_for = time.monotonic() - recording_started
+            stats = recording_stats(path)
+            if stats.has_audio:
                 break
+            log.info("call %s nothing yet (%.1fs, rms %d)", call_id[:8], recorded_for, stats.rms)
             self._discard(path)
             if connection.hungup.is_set() or time.monotonic() >= deadline:
                 return ""
         hints = [assistant.name, *(target.label for target in assistant.targets)]
+        transcribing = time.monotonic()
         try:
             heard = await self._ears.transcribe(path, assistant.language, hints)
         finally:
             self._discard(path)
-        log.info("call %s heard %r", call_id[:8], heard[:120])
+        heard = drop_hallucinated_transcript(heard, [assistant.greeting, assistant.name, *hints])
+        # Timing per turn, so a slow answer can be blamed on the right stage
+        # from the logs alone: how long the recorder ran (and whether it hit
+        # its limit instead of hearing silence), and how long recognition took.
+        log.info(
+            "call %s heard %r (recorded %.1fs%s, rms %d, transcribed in %.1fs)",
+            call_id[:8], heard[:120], recorded_for,
+            " — hit the time limit, silence was never detected" if recorded_for >= self._settings.listen_seconds - 0.5 else "",
+            stats.rms, time.monotonic() - transcribing,
+        )
         return heard
 
     def _discard(self, path: Path) -> None:

@@ -322,13 +322,13 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         parts = freeswitch.recordings[0].split(" ")
         self.assertEqual(len(parts), 4)
         self.assertTrue(parts[0].endswith(".wav"))
-        self.assertEqual(parts[1:], ["2", "300", "2"], "two seconds of quiet is the end of a turn; the caller's thinking time before speaking is not counted (see _listen)")
+        self.assertEqual(parts[1:], ["2", "450", "2"], "two seconds of quiet is the end of a turn; the caller's thinking time before speaking is not counted (see _listen)")
 
     async def test_a_silent_caller_is_asked_once_and_then_handed_to_a_person(self):
         freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[])
-        self.assertIn("Sorry, I couldn't hear you.", voice.said)
+        self.assertIn("Sorry, I didn't catch that.", voice.said)
         self.assertIn("Are you still there?", voice.said)
-        self.assertIn("I'll put you through to someone.", voice.said)
+        self.assertIn("Let me put you through to someone who can help.", voice.said)
         self.assertEqual([arg for app, arg in freeswitch.applications if app == "transfer"], ["+18447161777 XML public"])
         self.assertEqual(api.filed[0]["outcome"], "transferred")
 
@@ -346,9 +346,11 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
             turns=["Hi."],
             decisions=[Decision(action="hangup", say="Bye.")],
         )
-        settings = dict(freeswitch.applications)
-        self.assertEqual(settings.get("set"), "playback_terminators=none")
+        self.assertIn(("set", "playback_terminators=none"), freeswitch.applications)
         self.assertIn(("set", "record_sample_rate=8000"), freeswitch.applications)
+        # Only the caller's side is recorded, and a one-word answer is kept.
+        self.assertIn(("set", "RECORD_READ_ONLY=true"), freeswitch.applications)
+        self.assertIn(("set", "RECORD_MIN_SEC=0"), freeswitch.applications)
 
     async def test_a_call_the_dialplan_already_answered_is_not_answered_again(self):
         # The dialplan answers and pauses before the socket; doing both again
@@ -412,7 +414,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         )
         records = [app for app, _ in freeswitch.applications if app == "record"]
         self.assertGreaterEqual(len(records), 3, "kept listening through the quiet")
-        self.assertNotIn("Sorry, I couldn't hear you.", voice.said)
+        self.assertNotIn("Sorry, I didn't catch that.", voice.said)
         self.assertIn("It is. Goodbye.", voice.said)
 
 

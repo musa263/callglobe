@@ -57,8 +57,15 @@ class Settings:
     #: Turn shape. A caller who says nothing twice is transferred or released
     #: rather than left listening to a machine ask again forever.
     greeting_timeout: float = 20.0
-    listen_seconds: int = 20
-    silence_threshold: int = 300
+    #: The most one turn may run before the recogniser gets it. Anything a
+    #: caller says in one breath fits; a long story arrives in pieces and the
+    #: model follows along, rather than the caller waiting on a twenty-second
+    #: recording every time silence detection misses.
+    listen_seconds: int = 12
+    #: Mean sample level below which a frame counts as silence. Speech on a
+    #: phone line sits well above a thousand; a mobile caller's background
+    #: sits around three hundred, which is why 300 never let a turn end.
+    silence_threshold: int = 450
     #: How long the caller may pause before the receptionist takes it as the
     #: end of their turn. This is the floor on every reply's delay, so it is
     #: kept at the natural gap between speakers; the recorder no longer

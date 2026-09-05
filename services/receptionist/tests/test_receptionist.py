@@ -432,3 +432,14 @@ class FirstSentence(unittest.TestCase):
         self.assertEqual(first_complete_sentence("We close at five. Would"), "We close at five.")
         self.assertEqual(first_complete_sentence("Ask for Dr. Ahmed at"), "", "a title is not the end of a sentence")
         self.assertEqual(first_complete_sentence("Certainly, one moment please! I'll"), "Certainly, one moment please!")
+
+
+class HallucinationFilter(unittest.TestCase):
+    def test_prompt_and_greeting_echoes_are_not_the_caller(self):
+        from app.speech import drop_hallucinated_transcript
+        known = ["Welcome to Global Heritage. How can I help?", "Global Heritage Receptionist", "Sam"]
+        self.assertEqual(drop_hallucinated_transcript("Welcome to Global Heritage Receptionist.", known), "")
+        self.assertEqual(drop_hallucinated_transcript("Global Heritage.", known), "")
+        self.assertEqual(drop_hallucinated_transcript("Thank you.", known), "")
+        self.assertEqual(drop_hallucinated_transcript("Can I speak to Sam about my order?", known), "Can I speak to Sam about my order?")
+        self.assertEqual(drop_hallucinated_transcript("  yes   please ", known), "yes please")

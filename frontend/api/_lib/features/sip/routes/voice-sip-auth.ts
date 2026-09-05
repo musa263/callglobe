@@ -70,8 +70,11 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       // holds a password of its own. Any of the live ones authenticates.
       const stored = (await deps.readSipCredentials(challenge.username)).filter((credential) => credential.realm === challenge.realm);
       const matched = stored.find((credential) => digestMatches(credential.ha1, challenge));
-      if (!stored.length) return res.status(403).json({ ok: false });
+      // The reason is for the edge's log, which is where a phone that cannot
+      // register is diagnosed from; it says nothing a caller could use.
+      if (!stored.length) return res.status(403).json({ ok: false, reason: 'no_credential_for_user' });
       const ok = Boolean(matched);
+      if (!ok) return res.status(403).json({ ok: false, reason: 'password_mismatch', credentials: stored.length });
       if (ok) {
         const replayKey = sipDigestReplayKey(challenge);
         if (!replayKey || !await deps.claimReplayKey(replayKey, new Date(Number(challenge.nonce.split('.')[0]) * 1000))) {
