@@ -4,6 +4,8 @@
 
 1. Read `docs/FEATURES.md`, the owning feature's README, and `ARCHITECTURE.md`.
 2. Identify the owning layer before editing code.
+   For an agent-led bug hunt, F8 debug, and fix pass, start from
+   `docs/prompts/codex-astra-6-debug-and-fix.md`.
 3. Keep changes within one domain unless a contract intentionally changes.
 4. Add a regression test before or with every signaling, authorization, or billing fix.
 

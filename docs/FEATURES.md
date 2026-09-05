@@ -42,6 +42,9 @@ where they implement the same domain; they are not separate copies of one module
 Record the build SHA, platform, timestamp, engine, and redacted call/route ID.
 Never paste bearer tokens, passwords, full SIP Authorization headers or push tokens.
 
+For a Codex Astra 6 bug-hunt / F8-debug / fix session, use the paste-ready prompt in
+[docs/prompts/codex-astra-6-debug-and-fix.md](prompts/codex-astra-6-debug-and-fix.md).
+
 ## How to Find a Function
 
 ```bash
