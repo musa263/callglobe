@@ -48,7 +48,10 @@ FILLERS = (
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 
 
-def split_sentences(text: str, *, minimum: int = 12, maximum_parts: int = 8) -> list[str]:
+_CLAUSE_BREAK = re.compile(r"[,;:]\s+|\s[—–-]\s")
+
+
+def split_sentences(text: str, *, minimum: int = 12, maximum_parts: int = 8, opening: int = 60) -> list[str]:
     """
     Breaks an answer into the pieces it is spoken in.
 
@@ -72,6 +75,16 @@ def split_sentences(text: str, *, minimum: int = 12, maximum_parts: int = 8) -> 
             parts[-1] = f"{parts[-1]} {piece}"
         else:
             parts.append(piece)
+    # The opening piece is what the caller waits for: the engine renders at
+    # about a third of real time, so a long first sentence is four or five
+    # seconds of silence before a word is heard. A first sentence over
+    # `opening` characters is split at its first natural pause — a comma, a
+    # dash, a semicolon — so the caller hears the answer begin after the
+    # clause, and the rest of the sentence renders while that clause plays.
+    if parts and len(parts[0]) > opening:
+        clause = _CLAUSE_BREAK.search(parts[0], 24)
+        if clause and clause.start() <= opening and len(parts[0]) - clause.end() >= minimum:
+            parts[0:1] = [parts[0][: clause.end()].rstrip(), parts[0][clause.end():].lstrip()]
     if len(parts) > maximum_parts:
         head, tail = parts[: maximum_parts - 1], " ".join(parts[maximum_parts - 1 :])
         parts = [*head, tail]

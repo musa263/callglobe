@@ -3,6 +3,7 @@ import { isRecommendedVoice, vocivoVoices, voiceDefinition, voiceGradeRank } fro
 import type { PbxConfig } from '../organizations/pbx-config-store.js';
 import { normalizeE164 } from '../organizations/tenancy.js';
 import { officeHoursDecision } from '../organizations/office-hours.js';
+import { shippedCompanyKnowledge } from './company-knowledge/global-heritage.js';
 
 /**
  * The control plane for Vocivo's own AI receptionist.
@@ -189,7 +190,7 @@ export async function receptionistFor(input: ProfileInput): Promise<Receptionist
     greeting: ai.greeting,
     // The knowledge base is part of the brief, not a separate retrieval step:
     // a receptionist's worth of company facts fits in a prompt.
-    instructions: [ai.instructions, ai.knowledge].filter((part) => part && part.trim()).join('\n\n'),
+    instructions: [ai.instructions, ai.knowledge?.trim() || shippedCompanyKnowledge(tenant.company?.name || '')].filter((part) => part && part.trim()).join('\n\n'),
     voice: receptionistVoice(ai.voice),
     language: ai.language || 'en',
     transferEnabled: Boolean(ai.transferEnabled) && targets.length > 0,

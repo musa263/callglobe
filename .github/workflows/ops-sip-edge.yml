@@ -321,6 +321,10 @@ jobs:
               docker compose exec -T freeswitch sh -c "tail -n 4000 /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null \
                 | { grep -E "Hangup|hangup_cause|HANGUP|BYE|ACK|Timer|timeout|TIMEOUT|MEDIA_TIMEOUT|RECOVERY|received 4|received 5|Cannot locate|Fail|fail|ERR\]|CRIT\]|New Channel|socket|Transfer|EXECUTE.*(answer|socket|record|playback|transfer|hangup|bridge)" || echo "(nothing)"; } \
                 | grep -vE "sofia_glue|switch_rtp|switch_core_media|send_dtmf|SCHED_FIFO|nice level|rtp-timeout-sec|rtp-hold-timeout-sec|sofia_presence|Cannot locate domain" | cut -c1-240 | tail -90
+              echo "--- freeswitch.log: hold music, ringback, files it could not open ---"
+              docker compose exec -T freeswitch sh -c "grep -E \"ringback|Ringback|hold_music|hold-music|speech-bed|displace|Cannot open|Failed to open|File not found|No such file\" /var/log/freeswitch/freeswitch.log 2>/dev/null | tail -40" 2>/dev/null | cut -c1-240 || echo "(nothing)"
+              ls -la /opt/vocivo/sip/freeswitch/sounds/ 2>/dev/null || echo "(no sounds directory shipped)"
+              docker compose exec -T freeswitch sh -c "ls -la /opt/vocivo-fs/sounds/ 2>&1" 2>/dev/null || true
               echo "--- kamailio: call signalling ---"
               docker compose logs -t --since "'"$since"'" --no-color kamailio 2>&1 \
                 | { grep -E "INVITE|BYE|CANCEL|inbound DID|RELAY FS|refusing|reject|sip-cdr|Not here|481|advertis" || echo "(nothing)"; } \

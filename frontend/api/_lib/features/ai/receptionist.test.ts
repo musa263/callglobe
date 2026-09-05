@@ -196,3 +196,10 @@ test('office hours are described the way a person says them', async () => {
   } }), 'Monday to Friday, 9 am to 5 pm; Saturday, 10 am to 2:30 pm. Closed Sunday.');
   assert.equal(describeOfficeHours({ timezone: 'UTC', holidays: [], weekdays: Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((name) => [name, day('00:00', '23:59')])) }), 'Monday to Sunday, all day.');
 });
+
+test('the receptionist knows the company from its website when the knowledge box is empty', async () => {
+  const { shippedCompanyKnowledge } = await import('./company-knowledge/global-heritage.js');
+  assert.match(shippedCompanyKnowledge('Global Heritage'), /\+966 53 545 8080/);
+  assert.match(shippedCompanyKnowledge('GHSL'), /info@ghsl\.us/);
+  assert.equal(shippedCompanyKnowledge('Acme Dental'), '');
+});

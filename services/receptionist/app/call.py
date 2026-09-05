@@ -64,6 +64,11 @@ class CallHandler:
         # seconds by default) as if nothing had been said. "Yes." is a second
         # long: the caller answered and was asked again.
         await connection.set("RECORD_MIN_SEC", "0")
+        if self._settings.speech_bed:
+            # Mixed ("m") into what the caller hears, looped ("l"), for the
+            # whole call. The file is rendered quiet, so the voice sits on top
+            # of it; the caller's side is untouched, so recognition is not.
+            await connection.execute("displace_session", f"{self._settings.speech_bed} ml", timeout=5)
 
         conversation = Conversation(assistant=assistant, caller_number=caller)
         started = time.time()
@@ -322,4 +327,8 @@ class CallHandler:
         # sip-dialplan backToReceptionistActions) instead of to a recording.
         await connection.set("vocivo_from_receptionist", "1")
         await connection.set("vocivo_transfer_failed", "")
+        if self._settings.speech_bed:
+            # The hold music takes over while the extension rings; the bed
+            # must not carry into a conversation with a person.
+            await connection.execute("stop_displace_session", self._settings.speech_bed, timeout=5)
         await connection.execute("transfer", f"{dialled or extension} XML public", timeout=10)

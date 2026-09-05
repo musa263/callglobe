@@ -31,6 +31,11 @@ class Settings:
     #: played from here, and recordings arrive the same way.
     audio_dir: str = "/var/lib/vocivo-receptionist"
 
+    #: Soft music mixed under the receptionist's voice for the whole call, the
+    #: way a company's phone system sounds. A path FreeSWITCH can read (the
+    #: edge ships it in services/sip/freeswitch/sounds); empty turns it off.
+    speech_bed: str = "/opt/vocivo-fs/sounds/speech-bed.wav"
+
     #: faster-whisper. "base" is enough for phone-band English and fits beside
     #: a live SIP process; "small" is better and wants its own box.
     stt_model: str = "base"
@@ -100,6 +105,7 @@ class Settings:
             tts_secret=text("TTS_SERVICE_SECRET", ""),
             tts_voice=text("TTS_VOICE", cls.tts_voice),
             audio_dir=text("RECEPTIONIST_AUDIO_DIR", cls.audio_dir),
+            speech_bed=text("RECEPTIONIST_SPEECH_BED", cls.speech_bed),
             stt_model=text("STT_MODEL", cls.stt_model),
             stt_compute_type=text("STT_COMPUTE_TYPE", cls.stt_compute_type),
             stt_language=text("STT_LANGUAGE", cls.stt_language),

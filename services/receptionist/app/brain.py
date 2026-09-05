@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
@@ -239,6 +240,7 @@ def decision_from_response(payload: dict[str, Any], assistant: Assistant) -> Dec
 
 
 _SENTENCE_END = (".", "!", "?")
+_CLAUSE_BREAK = re.compile(r"[,;:]\s+|\s[—–-]\s")
 _ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "st", "no", "vs", "etc", "jr", "sr", "mt", "e.g", "i.e"}
 
 
@@ -257,6 +259,13 @@ def first_complete_sentence(text: str) -> str:
         if character == "." and (word in _ABBREVIATIONS or (word.isdigit())):
             continue
         return stripped[: index + 1].strip()
+    # A long opening sentence is spoken in clauses (see speech.split_sentences),
+    # so the first clause can go to the voice engine as soon as the comma after
+    # it arrives, rather than waiting for the full stop.
+    if len(stripped) > 60:
+        clause = _CLAUSE_BREAK.search(stripped, 24)
+        if clause and clause.start() <= 60:
+            return stripped[: clause.end()].strip()
     return ""
 
 
