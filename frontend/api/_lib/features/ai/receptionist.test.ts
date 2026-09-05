@@ -185,3 +185,14 @@ test('after hours the receptionist still answers, but takes messages instead of 
   assert.equal(open!.officeOpen, true);
   assert.equal(open!.transferEnabled, true);
 });
+
+test('office hours are described the way a person says them', async () => {
+  const { describeOfficeHours } = await import('./receptionist.js');
+  const day = (start: string, end: string) => ({ enabled: true, start, end });
+  const off = { enabled: false, start: '09:00', end: '17:00' };
+  assert.equal(describeOfficeHours({ timezone: 'Asia/Riyadh', holidays: [], weekdays: {
+    Monday: day('09:00', '17:00'), Tuesday: day('09:00', '17:00'), Wednesday: day('09:00', '17:00'), Thursday: day('09:00', '17:00'), Friday: day('09:00', '17:00'),
+    Saturday: day('10:00', '14:30'), Sunday: off,
+  } }), 'Monday to Friday, 9 am to 5 pm; Saturday, 10 am to 2:30 pm. Closed Sunday.');
+  assert.equal(describeOfficeHours({ timezone: 'UTC', holidays: [], weekdays: Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((name) => [name, day('00:00', '23:59')])) }), 'Monday to Sunday, all day.');
+});

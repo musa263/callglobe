@@ -7,6 +7,7 @@ import math
 import re
 import struct
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -30,6 +31,7 @@ CANNED = {
     "not_heard": "Sorry, I didn't catch that. Are you still there?",
     "transfer_fallback": "Let me put you through to someone who can help.",
     "goodbye_no_speech": "I'll let the team know you called. Bye for now.",
+    "transfer_unanswered": "Sorry about that — no one's picking up right now. I can take a message and have someone call you back, or is there anything else I can help with?",
 }
 
 # Said while the language model and the voice engine work on the real answer:
@@ -92,7 +94,15 @@ class Voice:
         # A prompt the engine has never rendered can take several seconds on
         # the SIP edge's share of the CPU; giving up at twenty meant a long
         # answer was sometimes replaced by silence.
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=5.0))
+        # The engine's server closes idle keep-alive connections after a few
+        # seconds; a pooled connection reused just after that fails with
+        # "Server disconnected without sending a response" and the sentence was
+        # skipped. Connections are let go before the server drops them, and a
+        # request that still hits it is made once more on a fresh one.
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(45.0, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=3.0),
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -117,12 +127,21 @@ class Voice:
         # /v1/audio/speech answers with the WAV itself. (/v1/audio/render
         # answers with JSON naming a public URL — the first deploy wrote that
         # JSON into a .wav and every word the receptionist said was silence.)
-        response = await self._client.post(
-            f"{self._settings.tts_url}/v1/audio/speech",
-            headers=self._headers(),
-            json={"input": text, "voice": chosen, "format": "wav"},
-        )
+        started = time.monotonic()
+        try:
+            response = await self._client.post(
+                f"{self._settings.tts_url}/v1/audio/speech",
+                headers=self._headers(),
+                json={"input": text, "voice": chosen, "format": "wav"},
+            )
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
+            response = await self._client.post(
+                f"{self._settings.tts_url}/v1/audio/speech",
+                headers=self._headers(),
+                json={"input": text, "voice": chosen, "format": "wav"},
+            )
         response.raise_for_status()
+        log.info("rendered %d chars of speech in %.1fs", len(text), time.monotonic() - started)
         content_type = response.headers.get("content-type", "")
         if "audio" not in content_type or len(response.content) < 64 or not response.content.startswith(b"RIFF"):
             raise RuntimeError(f"voice engine answered with {content_type or 'no content type'}, not audio")

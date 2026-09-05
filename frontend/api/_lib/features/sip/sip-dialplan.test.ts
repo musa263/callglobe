@@ -70,7 +70,7 @@ function request(overrides: Partial<XmlCurlRequest> = {}): XmlCurlRequest {
     section: 'dialplan', context: 'public', destinationNumber: did, callerNumber: '+15559876543', callerName: 'Jane Caller',
     uuid: 'call-uuid-1', networkAddr: '192.0.2.10', switchAddr: '203.0.113.5', vocivoCallerIdHeader: '', vocivoFlowHeader: '',
     stage: '', organizationId: '', did: '', arg: '', digit: '', disposition: '', depth: 0, visited: [], attempt: 0,
-    waitingAnnounced: false, callerFrom: '', callerDisplay: '',
+    waitingAnnounced: false, callerFrom: '', callerDisplay: '', fromReceptionist: false,
     ...overrides,
   };
 }
@@ -491,4 +491,19 @@ test('an enabled receptionist answers at any hour, and its fallback follows the 
   const rung = actions(renderSipDialplan(input({ pbx: direct })));
   assert.ok(!rung.some((item) => item.app === 'socket'));
   assert.equal(rung.find((item) => item.app === 'bridge')?.data, 'sofia/external/alice@127.0.0.1:5060');
+});
+
+test('a caller waiting for a person hears hold music, and a failed transfer from the receptionist goes back to it', () => {
+  const ringing = renderSipDialplan(input({ request: request({ stage: 'ext-select', digit: '2001' }) }));
+  assert.match(ringing, /hold_music=\/opt\/vocivo-fs\/sounds\/hold-music\.wav/);
+  assert.match(ringing, /ringback=\/opt\/vocivo-fs\/sounds\/hold-music\.wav/);
+  assert.doesNotMatch(ringing, /us-ring/);
+  const withAi = pbx();
+  withAi.ai = { ...withAi.ai, enabled: true };
+  const back = renderSipDialplan(input({ pbx: withAi, request: request({ stage: 'after-ring', arg: 'e1', disposition: 'NO_ANSWER', fromReceptionist: true }) }));
+  assert.match(back, /vocivo_transfer_failed=1/);
+  assert.match(back, /application="socket"/);
+  // Without the receptionist flag the old path stands.
+  const plain = renderSipDialplan(input({ pbx: withAi, request: request({ stage: 'after-ring', arg: 'e1', disposition: 'NO_ANSWER' }) }));
+  assert.doesNotMatch(plain, /vocivo_transfer_failed/);
 });

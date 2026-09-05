@@ -33,6 +33,8 @@ export type ReceptionistProfile = {
   targets: ReceptionistTarget[];
   /** Whether the business is open right now: closed, the receptionist takes messages rather than transferring. */
   officeOpen: boolean;
+  officeHoursText: string;
+  timezone: string;
 };
 
 export type ReceptionistOutcome =
@@ -194,7 +196,42 @@ export async function receptionistFor(input: ProfileInput): Promise<Receptionist
     fallbackExtension: fallback,
     targets,
     officeOpen,
+    // The one question every receptionist gets: when are you open. Spoken
+    // form, so the model reads it out as-is instead of guessing.
+    officeHoursText: describeOfficeHours(tenant.officeHours),
+    timezone: tenant.officeHours.timezone,
   };
+}
+
+const spokenDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+function spokenClock(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return value;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const suffix = hours >= 12 ? 'pm' : 'am';
+  const twelve = hours % 12 === 0 ? 12 : hours % 12;
+  return minutes ? `${twelve}:${match[2]} ${suffix}` : `${twelve} ${suffix}`;
+}
+
+/** "Monday to Friday, 9 am to 5 pm; Saturday, 10 am to 2 pm. Closed Sunday." */
+export function describeOfficeHours(hours: PbxConfig['officeHours']) {
+  const runs: Array<{ days: string[]; span: string }> = [];
+  const closed: string[] = [];
+  for (const day of spokenDays) {
+    const entry = hours.weekdays[day];
+    if (!entry?.enabled) { closed.push(day); continue; }
+    const allDay = entry.start === '00:00' && ['23:59', '24:00'].includes(entry.end);
+    const span = allDay ? 'all day' : `${spokenClock(entry.start)} to ${spokenClock(entry.end)}`;
+    const last = runs[runs.length - 1];
+    if (last && last.span === span && spokenDays.indexOf(last.days[last.days.length - 1]) === spokenDays.indexOf(day) - 1) last.days.push(day);
+    else runs.push({ days: [day], span });
+  }
+  if (!runs.length) return 'Closed every day.';
+  const parts = runs.map((run) => `${run.days.length > 2 ? `${run.days[0]} to ${run.days[run.days.length - 1]}` : run.days.join(' and ')}, ${run.span}`);
+  const closedText = closed.length ? ` Closed ${closed.length > 2 ? `${closed[0]} to ${closed[closed.length - 1]}` : closed.join(' and ')}.` : '';
+  return `${parts.join('; ')}.${closedText}`;
 }
 
 /** Validates what the edge reports about a finished call before it is stored. */

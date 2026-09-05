@@ -72,8 +72,16 @@ class CallHandler:
         notes: list[str] = []
 
         try:
-            await self._speak(connection, assistant.greeting, assistant.voice)
-            conversation.add("assistant", assistant.greeting)
+            if channel_variable(channel, "variable_vocivo_transfer_failed", "vocivo_transfer_failed") == "1":
+                # Back from a transfer nobody answered. The caller already has
+                # our attention; say so and carry on rather than greeting again.
+                conversation.add("assistant", assistant.greeting)
+                conversation.add("caller", "(the caller asked to be put through, and the receptionist transferred the call)")
+                conversation.add("assistant", CANNED["transfer_unanswered"])
+                await self._speak(connection, CANNED["transfer_unanswered"], assistant.voice)
+            else:
+                await self._speak(connection, assistant.greeting, assistant.voice)
+                conversation.add("assistant", assistant.greeting)
 
             silent_turns = 0
             # No turn budget: the conversation lasts as long as the caller
@@ -206,6 +214,7 @@ class CallHandler:
                 early.append(asyncio.create_task(self._voice.say(sentence, voice)))
             first_ready.set()
 
+        thinking_started = time.monotonic()
         thinking = asyncio.create_task(self._brain.respond(conversation, render_first))
         # A filler ("one moment") only when the model has not even begun to
         # answer after a few seconds — the same phrase at the top of every
@@ -219,11 +228,16 @@ class CallHandler:
             await self._speak(connection, filler, voice)
         decision = await thinking
         waiter.cancel()
+        model_seconds = time.monotonic() - thinking_started
         if early:
             try:
                 await early[0]
             except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
                 log.debug("early render failed: %s", error)
+        log.info(
+            "model answered in %.1fs (%s), first sentence ready %.1fs after the caller finished%s",
+            model_seconds, decision.action, time.monotonic() - thinking_started, "" if early else " (no early render)",
+        )
         return decision
 
     async def _listen(self, connection: EslConnection, call_id: str, assistant: Assistant) -> str:
@@ -262,7 +276,10 @@ class CallHandler:
             heard = await self._ears.transcribe(path, assistant.language, hints)
         finally:
             self._discard(path)
+        raw = heard
         heard = drop_hallucinated_transcript(heard, [assistant.greeting, assistant.name, *hints])
+        if raw.strip() and not heard:
+            log.info("call %s dropped %r as an echo or a recogniser filler", call_id[:8], raw[:120])
         # Timing per turn, so a slow answer can be blamed on the right stage
         # from the logs alone: how long the recorder ran (and whether it hit
         # its limit instead of hearing silence), and how long recognition took.
@@ -301,4 +318,8 @@ class CallHandler:
         """
         await connection.set("vocivo_stage", "ext-select")
         await connection.set("vocivo_digit", "".join(character for character in extension if character.isdigit())[:5])
+        # If nobody answers, the dialplan hands the caller back here (see
+        # sip-dialplan backToReceptionistActions) instead of to a recording.
+        await connection.set("vocivo_from_receptionist", "1")
+        await connection.set("vocivo_transfer_failed", "")
         await connection.execute("transfer", f"{dialled or extension} XML public", timeout=10)

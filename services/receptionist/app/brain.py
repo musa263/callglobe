@@ -42,6 +42,9 @@ class Assistant:
     #: False after hours: the API then also sends no transfer targets, so the
     #: receptionist takes messages rather than putting callers through to nobody.
     office_open: bool = True
+    #: Spoken form of the opening hours, e.g. "Monday to Friday, 9 am to 5 pm."
+    office_hours: str = ""
+    timezone: str = ""
 
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> "Assistant":
@@ -60,6 +63,8 @@ class Assistant:
             fallback_extension=str(payload.get("fallbackExtension") or ""),
             targets=targets,
             office_open=payload.get("officeOpen", True) is not False,
+            office_hours=str(payload.get("officeHoursText") or ""),
+            timezone=str(payload.get("timezone") or ""),
         )
 
 
@@ -115,6 +120,9 @@ def system_prompt(assistant: Assistant) -> str:
     language = LANGUAGE_NAMES.get((assistant.language or "en").lower()[:2])
     if language and not assistant.language.lower().startswith("en"):
         lines.append(f"Speak {language}: the business set its receptionist to {language}, and the caller expects it.")
+    if assistant.office_hours:
+        lines += ["", f"Opening hours: {assistant.office_hours}" + (f" (times are {assistant.timezone.replace('_', ' ')} local time)." if assistant.timezone else "")]
+        lines.append("When asked about hours, answer with them directly; do not transfer the call for that.")
     if assistant.instructions.strip():
         lines += ["", "What this business wants you to know:", assistant.instructions.strip()]
     if assistant.transfer_enabled and assistant.targets:

@@ -39,6 +39,7 @@ export type XmlCurlRequest = {
   attempt: number;
   waitingAnnounced: boolean;
   callerFrom: string;
+  fromReceptionist: boolean;
   callerDisplay: string;
 };
 
@@ -78,6 +79,9 @@ export function parseXmlCurlRequest(body: unknown): XmlCurlRequest {
     attempt: Number.isFinite(attempt) ? Math.max(0, attempt) : 0,
     waitingAnnounced: field(source, 'variable_vocivo_waiting') === '1',
     callerFrom: field(source, 'variable_vocivo_from'),
+    // Set by the receptionist before it transfers, so a person who does not
+    // answer hands the caller back to it rather than to a recording.
+    fromReceptionist: field(source, 'variable_vocivo_from_receptionist') === '1',
     callerDisplay: field(source, 'variable_vocivo_name'),
   };
 }
@@ -290,6 +294,14 @@ function callerVars(input: SipDialplanInput) {
   return { number, name };
 }
 
+/**
+ * What a caller hears while a person is being found: soft music, the way a
+ * front desk puts you on hold, rather than a ringing tone. The file ships with
+ * the edge (services/sip/freeswitch/sounds) and FreeSWITCH loops it for as
+ * long as the wait lasts.
+ */
+export const holdMusic = '/opt/vocivo-fs/sounds/hold-music.wav';
+
 function bridgeActions(input: SipDialplanInput, legs: string[], timeoutSeconds: number, options: { announceWaiting: boolean; ringback?: boolean }) {
   const actions: Action[] = [];
   if (options.announceWaiting && !input.request.waitingAnnounced) {
@@ -300,14 +312,34 @@ function bridgeActions(input: SipDialplanInput, legs: string[], timeoutSeconds: 
     set('continue_on_fail', 'true'),
     set('ignore_early_media', 'true'),
     set('call_timeout', String(Math.min(900, Math.max(5, Math.round(timeoutSeconds))))),
-    set('ringback', '$${us-ring}'),
+    set('hold_music', holdMusic),
+    set('ringback', holdMusic),
+    set('transfer_ringback', holdMusic),
     action('bridge', legs.join(':_:')),
   );
   return actions;
 }
 
-function unavailableActions(input: SipDialplanInput, voicemailEnabled: boolean) {
+/**
+ * The receptionist put the caller through and nobody picked up. Rather than
+ * "no one is available, please try again later" and a hangup, the call goes
+ * back to the receptionist, which says so and offers to take a message —
+ * the caller already has its attention and should not lose it to a recording.
+ */
+function backToReceptionistActions(input: SipDialplanInput): Action[] {
+  const address = input.receptionist || defaultReceptionist;
+  return [
+    set('vocivo_transfer_failed', '1'),
+    set('vocivo_stage', 'entry'),
+    action('socket', `${address} async full`),
+    ...unavailableActions(input, true, { fromReceptionist: false }),
+  ];
+}
+
+function unavailableActions(input: SipDialplanInput, voicemailEnabled: boolean, options: { fromReceptionist?: boolean } = {}) {
   const business = input.business;
+  const fromReceptionist = options.fromReceptionist ?? (input.request.fromReceptionist && Boolean(input.pbx.ai?.enabled));
+  if (fromReceptionist) return backToReceptionistActions(input);
   const useVoicemail = business.voicemailEnabled && voicemailEnabled;
   if (!useVoicemail) {
     return [
