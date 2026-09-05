@@ -61,7 +61,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 async function getSessionToken() {
   if (cachedToken !== undefined) return cachedToken;
-  tokenRequest ||= SecureStore.getItemAsync(tokenKey).then((token) => {
+  tokenRequest ||= SecureStore.getItemAsync(tokenKey).then(async (token) => {
+    // A VoIP wake on a locked phone must read the existing session. Still
+    // device-only; never available before the first unlock following reboot.
+    if (token) await SecureStore.setItemAsync(tokenKey, token, { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
     cachedToken = token;
     return token;
   }).finally(() => { tokenRequest = null; });
@@ -70,7 +73,7 @@ async function getSessionToken() {
 
 async function saveSessionToken(token: string) {
   cachedToken = token;
-  await SecureStore.setItemAsync(tokenKey, token, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  await SecureStore.setItemAsync(tokenKey, token, { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
 }
 
 async function clearSessionToken() {

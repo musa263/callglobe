@@ -34,8 +34,8 @@ export async function connectSipUserAgent(input) {
     },
     delegate: {
       onInvite: (invitation) => input.onInvite?.(invitation),
-      onConnect: () => keeper?.onConnect(),
-      onDisconnect: (error) => keeper?.onDisconnect(error),
+      onConnect: () => { input.onTransport?.(true); keeper?.onConnect(); },
+      onDisconnect: (error) => { input.onTransport?.(false); keeper?.onDisconnect(error); },
     },
   });
   const registerer = new Registerer(userAgent, { expires: 600 });

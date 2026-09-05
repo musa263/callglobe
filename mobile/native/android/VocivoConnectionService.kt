@@ -32,6 +32,7 @@ class VocivoConnectionService : ConnectionService() {
     // up. JavaScript has to hear about it or the caller rings into nothing.
     request?.extras?.getString(EXTRA_CALL_ID)?.let {
       VocivoSipCallRegistry.emit("callUiEnd", "callId" to it)
+      VocivoSipCallRegistry.end(it, DisconnectCause.ERROR)
     }
   }
 
@@ -39,11 +40,12 @@ class VocivoConnectionService : ConnectionService() {
     val callId = request.extras?.getString(EXTRA_CALL_ID)
       ?: return Connection.createFailedConnection(DisconnectCause(DisconnectCause.ERROR))
 
-    val connection = VocivoConnection(callId)
+    val connection = VocivoConnection(callId, applicationContext)
     connection.setAddress(request.address, TelecomManager.PRESENTATION_ALLOWED)
     request.extras?.getString(EXTRA_CALLER_NAME)?.let { connection.setCallerDisplayName(it, TelecomManager.PRESENTATION_ALLOWED) }
     connection.setExtras(request.extras)
     VocivoSipCallRegistry.register(callId, connection)
+    if (connection.state == Connection.STATE_DISCONNECTED) return connection
     if (incoming) connection.markRinging() else connection.markDialing()
     return connection
   }

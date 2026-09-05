@@ -6,6 +6,10 @@
 // does not exist as far as JavaScript is concerned.
 @interface RCT_EXTERN_MODULE (VocivoSip, RCTEventEmitter)
 
+RCT_EXTERN_METHOD(startCallUiEvents:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(stopCallUiEvents:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(completeAnswer:(NSDictionary *)input resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(reportIncomingCall
                   : (NSDictionary *)input resolver
                   : (RCTPromiseResolveBlock)resolve rejecter

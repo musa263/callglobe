@@ -1,4 +1,7 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
+import { api } from './api';
+import type { SipStackConfig } from '../voice/sipStack';
 import { bindCallUi, type CallUiEventSource, type NativeCallUi } from '../voice/callUi';
 import { SipEventBus, SipStackBridge } from '../voice/sipBridge';
 import { SipVoiceClient } from '../voice/sipCallEngine';
@@ -33,6 +36,42 @@ let bus: SipEventBus | null = null;
 let bridge: SipStackBridge | null = null;
 let client: SipVoiceClient | null = null;
 let binding: { remove: () => void } | null = null;
+let registrationRequest: Promise<number> | null = null;
+let registeredConfig: SipStackConfig | null = null;
+let registrationEpoch = 0;
+const sipSessionKey = 'vocivo.secure.sip-session.v1';
+
+/** Shared by foreground registration and a native killed-state wake. */
+export function ensureSipRegistration(forceRenew = false): Promise<number> {
+  if (registrationRequest) return registrationRequest;
+  const epoch = registrationEpoch;
+  registrationRequest = (async () => {
+    const sessionToken = await api.getSessionToken();
+    if (!sessionToken) throw new Error('Sign in before receiving calls.');
+    const raw = await SecureStore.getItemAsync(sipSessionKey);
+    let cached: { sessionToken: string; config: SipStackConfig; expiresAt: number } | null = null;
+    try { cached = raw ? JSON.parse(raw) : null; }
+    catch { console.warn('[Vocivo SIP] Ignoring invalid secure session cache'); }
+    if (forceRenew || cached?.sessionToken !== sessionToken || !cached?.config?.password || !Number.isFinite(cached?.expiresAt) || Date.now() >= cached!.expiresAt - 30_000) cached = null;
+    if (!cached) {
+      const sip = await api.post<{ username: string; password: string; domain: string; wsUri: string; expires_in: number; ice_servers?: SipStackConfig['iceServers'] }>('/api/voice/sip-credentials', { client: 'mobile' });
+      if (!sip.username || !sip.password || !sip.wsUri || !(sip.expires_in > 0)) throw new Error('Incomplete SIP credentials.');
+      cached = { sessionToken, expiresAt: Date.now() + sip.expires_in * 1000, config: {
+        username: sip.username, password: sip.password, domain: sip.domain, wsUri: sip.wsUri, iceServers: sip.ice_servers,
+      } };
+    }
+    if (epoch !== registrationEpoch || await api.getSessionToken() !== sessionToken) throw new Error('Calling session changed.');
+    await SecureStore.setItemAsync(sipSessionKey, JSON.stringify(cached), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
+    if (epoch !== registrationEpoch) {
+      await SecureStore.deleteItemAsync(sipSessionKey);
+      throw new Error('Calling session changed.');
+    }
+    await registerVocivoSip(cached.config);
+    if (epoch !== registrationEpoch) throw new Error('Calling session changed.');
+    return Math.max(0, (cached.expiresAt - Date.now()) / 1000);
+  })().finally(() => { registrationRequest = null; });
+  return registrationRequest;
+}
 
 function ensureBridge() {
   if (bridge && bus) return { bridge, bus };
@@ -66,12 +105,24 @@ export async function registerVocivoSip(config: {
   displayName?: string;
   iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
 }) {
+  if (registeredConfig && registeredConfig.username === config.username && registeredConfig.password === config.password && registeredConfig.domain === config.domain) {
+    await ensureBridge().bridge.refresh();
+    return;
+  }
   await ensureBridge().bridge.register(config);
+  registeredConfig = config;
 }
 
 export async function unregisterVocivoSip() {
-  if (!bridge) return;
-  await bridge.unregister();
+  registrationEpoch += 1;
+  registeredConfig = null;
+  // Invalidate first, then drain a boot already in flight before the final stop.
+  const pending = registrationRequest;
+  if (bridge) await bridge.unregister();
+  if (pending) await pending.catch((error) => console.warn('[Vocivo SIP] Canceled registration', error));
+  if (bridge) await bridge.unregister();
+  registeredConfig = null;
+  await SecureStore.deleteItemAsync(sipSessionKey);
 }
 
 /** Reconnects and re-registers if the app was away or the network moved. */
@@ -130,6 +181,7 @@ export async function callUiAvailable() {
 export function createSipVoiceClient(): SipVoiceClient {
   if (client) return client;
   const { bridge: sipBridge, bus: events } = ensureBridge();
+  client = new SipVoiceClient({ bridge: sipBridge, events, unregister: unregisterVocivoSip });
   const native = vocivoSipModule();
   if (native) {
     binding?.remove();
@@ -138,16 +190,28 @@ export function createSipVoiceClient(): SipVoiceClient {
       bridge: sipBridge,
       native,
       ui: new NativeEventEmitter(NativeModules.VocivoSip) as unknown as CallUiEventSource,
+      onPushWake: async () => {
+        // The native signed-in gate already ran; the API/cache is still bound
+        // to this device's current authenticated session, never to push fields.
+        const { voice } = await import('../voice/voiceClientFacade');
+        const { sipEngine } = await import('../voice/engines');
+        const engine = sipEngine();
+        voice.use(engine.name, engine.client, engine.platform);
+        await ensureSipRegistration();
+      },
     });
   }
-  client = new SipVoiceClient({ bridge: sipBridge, events });
   return client;
 }
 
 /** Drops the client and its listeners. Used on sign-out and in tests. */
 export function disposeSipVoiceClient() {
+  registrationEpoch += 1;
+  registeredConfig = null;
   binding?.remove();
   binding = null;
+  client?.dispose();
+  bridge?.unregister().catch((error) => console.warn('[Vocivo SIP] Disposed client cleanup failed', error));
   client = null;
   bridge = null;
   bus = null;

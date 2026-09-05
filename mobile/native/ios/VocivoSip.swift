@@ -13,13 +13,10 @@ final class VocivoSip: RCTEventEmitter {
 
   override init() {
     super.init()
-    VocivoSipCallManager.shared.onEvent = { [weak self] name, body in
-      guard let self = self, self.listening else { return }
-      self.sendEvent(withName: name, body: body)
-    }
   }
 
   override static func requiresMainQueueSetup() -> Bool { true }
+  override var methodQueue: DispatchQueue! { DispatchQueue.main }
 
   override func supportedEvents() -> [String] {
     [
@@ -36,13 +33,36 @@ final class VocivoSip: RCTEventEmitter {
 
   override func startObserving() {
     listening = true
-    // Anything that happened before JavaScript was running — most importantly a
-    // VoIP push that woke the app — is delivered now.
-    VocivoSipCallManager.shared.flushPendingEvents()
   }
 
   override func stopObserving() {
     listening = false
+    VocivoSipCallManager.shared.onEvent = nil
+  }
+
+  @objc(startCallUiEvents:rejecter:)
+  func startCallUiEvents(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    VocivoSipCallManager.shared.onEvent = { [weak self] name, body in
+      self?.sendEvent(withName: name, body: body)
+    }
+    VocivoSipCallManager.shared.flushPendingEvents()
+    resolve(nil)
+  }
+
+  @objc(stopCallUiEvents:rejecter:)
+  func stopCallUiEvents(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    VocivoSipCallManager.shared.onEvent = nil
+    resolve(nil)
+  }
+
+  @objc(completeAnswer:resolver:rejecter:)
+  func completeAnswer(_ input: NSDictionary, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    guard let callId = input["callId"] as? String else {
+      reject("vocivo_sip_bad_call", "completeAnswer needs a callId", nil)
+      return
+    }
+    VocivoSipCallManager.shared.completeAnswer(callId: callId, success: input["success"] as? Bool ?? false)
+    resolve(nil)
   }
 
   @objc(reportIncomingCall:resolver:rejecter:)

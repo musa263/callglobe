@@ -3,6 +3,8 @@
 Date: 2026-09-05
 Baseline: main, commit 510d1ba. References below point to the local working tree after this review's changes.
 
+Follow-up: [Seven requested SIP fixes and their verification status](sip-seven-fixes-2026-09-05.md). The findings below retain the original audit observations; consult the follow-up for subsequent local remediation and remaining release gates.
+
 ## Release Decision
 
 **Not ready for a commercial release yet.** Local fixes and passing automated tests do not close the remaining native, SIP authorization, routing, and media validation gates.

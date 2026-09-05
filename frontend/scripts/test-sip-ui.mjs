@@ -43,7 +43,10 @@ try {
         window.sessions = [];
         window.makeSession = (incoming) => {
           const listeners = new Set();
+          const pc = new EventTarget();
+          Object.assign(pc, {iceConnectionState:'connected',connectionState:'connected',getSenders:()=>[],getReceivers:()=>[],close(){this.connectionState='closed'}});
           const session = {
+            sessionDescriptionHandler: {peerConnection: pc},
             id: String(window.sessions.length), state: incoming ? 'Initial' : 'Establishing',
             remoteIdentity: {displayName:'Colleague',uri:'sip:2001@test.invalid'},
             stateChange: {addListener:f=>listeners.add(f),removeListener:f=>listeners.delete(f)},
@@ -134,6 +137,21 @@ try {
   assert.deepEqual(await page.evaluate(() => window.commands), ['BYE']);
   assert.equal(await page.evaluate(() => window.sessions.every(session => session.listenerCount === 0)), true);
   console.log('PASS: established hangup sends exactly one BYE and removes listeners');
+
+  await page.getByRole('button', { name: 'Call extension', exact: true }).click();
+  await page.waitForFunction(() => window.invites === 2 && !window.voice.callStarting);
+  await page.evaluate(() => {
+    window.lastSession.emit('Established');
+    // Simulate the dangerous case: the socket vanished and BYE cannot settle.
+    window.lastSession.bye = () => new Promise(() => {});
+    window.sipInput.onTransport(false);
+  });
+  await page.waitForFunction(() => !window.voice.call && !window.voice.connected, null, { timeout: 16_000 });
+  assert.equal(await page.evaluate(() => window.lastSession.listenerCount), 0);
+  assert.equal(await page.evaluate(() => window.lastSession.sessionDescriptionHandler.peerConnection.connectionState), 'closed');
+  await page.evaluate(() => window.sipInput.onTransport(true));
+  assert.equal(await page.evaluate(() => !!window.voice.call), false);
+  console.log('PASS: dropped signaling clears the live call UI, timer source and media without awaiting BYE');
   await page.screenshot({ path: process.env.VOCIVO_TEST_SCREENSHOT || '/tmp/vocivo-sip-ui-qa.png' });
   await page.evaluate(() => window.root.unmount());
   assert.deepEqual(errors, []);

@@ -33,6 +33,9 @@ const ANDROID_SOURCES = [
   'VocivoSipIncomingCall.kt',
   'VocivoSipModule.kt',
   'VocivoSipPackage.kt',
+  'VocivoSipWakeService.kt',
+  'VocivoSipCallNotification.kt',
+  'VocivoSipCallActivity.kt',
 ];
 const ANDROID_PACKAGE = 'app.vocivo.sip';
 
@@ -225,12 +228,32 @@ function withVocivoSipManifest(config) {
     // Lets Vocivo register a self-managed calling account, which is what puts
     // an incoming call on the system call screen instead of in a notification.
     'android.permission.MANAGE_OWN_CALLS',
+    'android.permission.FOREGROUND_SERVICE',
+    'android.permission.FOREGROUND_SERVICE_PHONE_CALL',
+    'android.permission.USE_FULL_SCREEN_INTENT',
+    'android.permission.WAKE_LOCK',
   ]);
 
   return withAndroidManifest(config, (appConfig) => {
     const application = appConfig.modResults.manifest.application?.[0];
     if (!application) throw new Error('Unable to locate the Android application manifest.');
     application.service = application.service || [];
+    for (const service of ['VocivoSipWakeService', 'VocivoSipCallService']) {
+      const name = `${ANDROID_PACKAGE}.${service}`;
+      if (!application.service.some((entry) => entry.$?.['android:name'] === name)) application.service.push({ $: {
+        'android:name': name, 'android:exported': 'false',
+        ...(service === 'VocivoSipCallService' ? { 'android:foregroundServiceType': 'phoneCall' } : {}),
+      } });
+    }
+    application.activity = application.activity || [];
+    if (!application.activity.some((entry) => entry.$?.['android:name'] === `${ANDROID_PACKAGE}.VocivoSipCallActivity`)) application.activity.push({ $: {
+      'android:name': `${ANDROID_PACKAGE}.VocivoSipCallActivity`, 'android:exported': 'false',
+      'android:excludeFromRecents': 'true', 'android:theme': '@android:style/Theme.Material.NoActionBar',
+    } });
+    application.receiver = application.receiver || [];
+    if (!application.receiver.some((entry) => entry.$?.['android:name'] === `${ANDROID_PACKAGE}.VocivoSipDeclineReceiver`)) application.receiver.push({ $: {
+      'android:name': `${ANDROID_PACKAGE}.VocivoSipDeclineReceiver`, 'android:exported': 'false',
+    } });
     const name = `${ANDROID_PACKAGE}.VocivoConnectionService`;
     if (!application.service.some((entry) => entry.$?.['android:name'] === name)) {
       application.service.push({

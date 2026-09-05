@@ -33,7 +33,20 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
 
   override fun initialize() {
     super.initialize()
-    VocivoSipCallRegistry.attach(reactContext)
+  }
+
+  @ReactMethod
+  fun startCallUiEvents(promise: Promise) { VocivoSipCallRegistry.attach(reactContext); promise.resolve(null) }
+
+  @ReactMethod
+  fun stopCallUiEvents(promise: Promise) { VocivoSipCallRegistry.detach(); promise.resolve(null) }
+
+  @ReactMethod
+  fun completeAnswer(input: ReadableMap, promise: Promise) {
+    val id = input.getString("callId") ?: return promise.reject("vocivo_sip_bad_call", "Missing callId")
+    if (input.getBoolean("success")) VocivoSipCallRegistry.connection(id)?.markActive()
+    else VocivoSipCallRegistry.end(id, DisconnectCause.ERROR)
+    promise.resolve(null)
   }
 
   override fun invalidate() {
@@ -57,6 +70,7 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
       return
     }
     try {
+      if (!VocivoSipCallRegistry.prepare(reactContext, callId)) { promise.resolve(null); return }
       registerPhoneAccount()
       val extras = Bundle().apply {
         putString(VocivoConnectionService.EXTRA_CALL_ID, callId)
@@ -67,11 +81,16 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
         )
       }
       telecom.addNewIncomingCall(handle(), extras)
+      VocivoSipIncomingCall.startRuntime(reactContext, callId)
       promise.resolve(null)
     } catch (error: SecurityException) {
       // The user can revoke MANAGE_OWN_CALLS. Falling over here would lose the
       // call entirely, so report it and let JavaScript ring in-app instead.
       promise.reject("vocivo_sip_telecom", error.message ?: "Telecom refused the call", error)
+      VocivoSipCallRegistry.end(callId, DisconnectCause.ERROR)
+    } catch (error: IllegalStateException) {
+      VocivoSipCallRegistry.end(callId, DisconnectCause.ERROR)
+      promise.reject("vocivo_sip_startup", "Android could not start the calling service", error)
     }
   }
 
@@ -119,7 +138,7 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
       "unanswered" -> DisconnectCause.MISSED
       else -> DisconnectCause.REMOTE
     }
-    VocivoSipCallRegistry.connection(callId)?.finish(cause)
+    VocivoSipCallRegistry.end(callId, cause)
     promise.resolve(null)
   }
 

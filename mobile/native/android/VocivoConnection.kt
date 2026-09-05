@@ -3,6 +3,7 @@ package app.vocivo.sip
 import android.telecom.CallAudioState
 import android.telecom.Connection
 import android.telecom.DisconnectCause
+import android.content.Context
 
 /**
  * One call, as Android's telecom stack sees it.
@@ -12,7 +13,13 @@ import android.telecom.DisconnectCause
  * itself: if the two ever disagree about what a call is doing, the SIP side is
  * the one telling the truth, and it corrects this one through the module.
  */
-class VocivoConnection(private val callId: String) : Connection() {
+class VocivoConnection(private val callId: String, private val context: Context) : Connection() {
+  private var answering = false
+  private val main = android.os.Handler(android.os.Looper.getMainLooper())
+  private val answerDeadline = Runnable {
+    VocivoSipCallRegistry.emit("callUiEnd", "callId" to callId)
+    finish(DisconnectCause.ERROR)
+  }
 
   init {
     connectionProperties = PROPERTY_SELF_MANAGED
@@ -22,13 +29,18 @@ class VocivoConnection(private val callId: String) : Connection() {
   }
 
   override fun onShowIncomingCallUi() {
-    // Self-managed connections may draw their own incoming-call screen. Vocivo
-    // lets the system do it, so there is nothing to do but let it ring.
+    VocivoSipCallNotification.show(context, callId, callerDisplayName ?: "Incoming call", true)
   }
 
   override fun onAnswer() {
+    if (answering || state != STATE_RINGING) return
+    if (!context.getSharedPreferences("vocivo_auth", Context.MODE_PRIVATE).getBoolean("voice_signed_in", false)) {
+      finish(DisconnectCause.CANCELED)
+      return
+    }
+    answering = true
+    main.postDelayed(answerDeadline, 12_000)
     VocivoSipCallRegistry.emit("callUiAnswer", "callId" to callId)
-    setActive()
   }
 
   override fun onAnswer(videoState: Int) = onAnswer()
@@ -82,6 +94,8 @@ class VocivoConnection(private val callId: String) : Connection() {
 
   /** Called by the module when SIP — not the user — ended the call. */
   fun finish(cause: Int) {
+    if (state == STATE_DISCONNECTED) return
+    main.removeCallbacks(answerDeadline)
     setDisconnected(DisconnectCause(cause))
     destroy()
     VocivoSipCallRegistry.forget(callId)
@@ -91,5 +105,11 @@ class VocivoConnection(private val callId: String) : Connection() {
 
   fun markDialing() = setDialing()
 
-  fun markActive() = setActive()
+  fun markActive() {
+    if (state == STATE_DISCONNECTED) return
+    main.removeCallbacks(answerDeadline)
+    VocivoSipCallRegistry.connected(callId)
+    VocivoSipCallNotification.show(context, callId, callerDisplayName ?: "Vocivo", false)
+    setActive()
+  }
 }

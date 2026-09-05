@@ -25,7 +25,7 @@ jest.mock('../../src/lib/voipClient', () => ({
 }));
 jest.mock('../../src/lib/sipNative', () => ({
   refreshVocivoSip: jest.fn(async () => undefined),
-  registerVocivoSip: jest.fn(async () => undefined),
+  ensureSipRegistration: jest.fn(async () => 3600),
 }));
 jest.mock('../../src/voice/engines', () => ({
   sipEngine: () => ({ name: 'sip', client: {}, platform: {} }),
@@ -36,7 +36,7 @@ jest.mock('../../src/voice/voiceClientFacade', () => ({
 }));
 
 import { api } from '../../src/lib/api';
-import { registerVocivoSip } from '../../src/lib/sipNative';
+import { ensureSipRegistration } from '../../src/lib/sipNative';
 import { persistVoiceSession, voipClient } from '../../src/lib/voipClient';
 import { useVoiceRegistration } from '../../src/voice/useVoiceRegistration';
 
@@ -70,9 +70,9 @@ afterEach(async () => {
   jest.useRealTimers();
 });
 
-test('SIP startup passes TURN credentials without requesting or persisting a Telnyx session', async () => {
+test('SIP startup shares the native bootstrap without requesting or persisting a Telnyx session', async () => {
   await act(async () => { tree = TestRenderer.create(<Probe />); });
-  expect(registerVocivoSip).toHaveBeenCalledWith(expect.objectContaining({ iceServers, username: 'extension-user' }));
+  expect(ensureSipRegistration).toHaveBeenCalledWith(false);
   expect(api.post).not.toHaveBeenCalledWith('/api/telnyx/token', expect.anything());
   expect(persistVoiceSession).not.toHaveBeenCalled();
   expect(voipClient.loginWithToken).not.toHaveBeenCalled();
@@ -83,11 +83,11 @@ test('configuration failure starts neither engine and retries instead of falling
   (api.get as jest.Mock).mockRejectedValue(new Error('offline'));
   await act(async () => { tree = TestRenderer.create(<Probe />); });
   expect(api.post).not.toHaveBeenCalled();
-  expect(registerVocivoSip).not.toHaveBeenCalled();
+  expect(ensureSipRegistration).not.toHaveBeenCalled();
   expect(inputs.reportVoiceError).toHaveBeenCalledWith('initialize configured voice engine', expect.any(Error));
   (api.get as jest.Mock).mockResolvedValue({ voice_edge: 'sip' });
   await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
-  expect(registerVocivoSip).toHaveBeenCalledTimes(1);
+  expect(ensureSipRegistration).toHaveBeenCalledTimes(1);
 });
 
 test('failed push-token persistence is retried before registration is reported successful', async () => {

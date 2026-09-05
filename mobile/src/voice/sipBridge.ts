@@ -109,6 +109,7 @@ export class SipStackBridge implements NativeSipBridge {
   private readonly sessions = new Map<string, TrackedSession>();
   private stack: SipStack | null = null;
   private speaker = false;
+  private registrationGeneration = 0;
 
   constructor(options: SipStackBridgeOptions) {
     this.createStack = options.createStack;
@@ -116,30 +117,44 @@ export class SipStackBridge implements NativeSipBridge {
   }
 
   async register(config: SipStackConfig) {
+    const generation = ++this.registrationGeneration;
     // Tear down without announcing a disconnection: re-registering must not
     // flash the UI through "signed out" on its way to "connected".
     await this.teardown();
     const stack = await this.createStack(config);
+    if (generation !== this.registrationGeneration) {
+      await stack.stop();
+      throw new Error('SIP registration was canceled.');
+    }
     this.stack = stack;
 
     stack.onRegistrationChange((state, reason) => {
+      if (generation !== this.registrationGeneration) return;
       this.events.emit('registration', { state: registrationState(state), reason });
     });
-    stack.onInvitation((handle) => this.adoptIncoming(handle));
+    stack.onInvitation((handle) => {
+      if (generation === this.registrationGeneration) this.adoptIncoming(handle);
+      else handle.terminate().catch((error) => console.warn('Stale SIP invitation cleanup failed', describe(error)));
+    });
 
     this.events.emit('registration', { state: 'progress' });
     try {
       await stack.start();
+      if (generation !== this.registrationGeneration) {
+        await stack.stop();
+        throw new Error('SIP registration was canceled.');
+      }
     } catch (error) {
-      this.stack = null;
+      if (this.stack === stack) this.stack = null;
       try { await stack.stop(); }
       catch (cleanupError) { console.warn('Vocivo SIP failed-start cleanup', describe(cleanupError)); }
-      this.events.emit('registration', { state: 'failed', reason: describe(error) });
+      if (generation === this.registrationGeneration) this.events.emit('registration', { state: 'failed', reason: describe(error) });
       throw error;
     }
   }
 
   async unregister() {
+    this.registrationGeneration += 1;
     await this.teardown();
     this.events.emit('registration', { state: 'none' });
   }
@@ -155,6 +170,7 @@ export class SipStackBridge implements NativeSipBridge {
       await this.stack.refresh();
     } catch (error) {
       console.warn('Vocivo SIP refresh failed', describe(error));
+      throw error;
     }
   }
 

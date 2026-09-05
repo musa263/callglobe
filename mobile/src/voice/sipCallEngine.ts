@@ -121,6 +121,7 @@ export type SipVoiceClientOptions = {
   events: SipEventSource;
   /** Injected for tests; defaults to the wall clock. */
   now?: () => number;
+  unregister?: () => Promise<void>;
 };
 
 export class SipVoiceClient implements VoiceClient {
@@ -132,9 +133,11 @@ export class SipVoiceClient implements VoiceClient {
   private readonly subscriptions: Array<{ remove: () => void }> = [];
   private readonly bridge: NativeSipBridge;
   private readonly now: () => number;
+  private readonly unregister: () => Promise<void>;
 
   constructor(options: SipVoiceClientOptions) {
     this.bridge = options.bridge;
+    this.unregister = options.unregister ?? (() => this.bridge.unregister());
     this.now = options.now ?? (() => Date.now());
     const { events } = options;
 
@@ -269,8 +272,8 @@ export class SipVoiceClient implements VoiceClient {
     this.calls.clear();
     this.publishCalls();
     this.activeCall$.next(null);
-    await this.bridge.unregister().catch((error) => console.warn('Vocivo SIP unregister failed', error));
-    this.connectionState$.next('DISCONNECTED');
+    try { await this.unregister(); }
+    finally { this.connectionState$.next('DISCONNECTED'); }
   }
 
   /** Removes native listeners. Call when the provider unmounts. */

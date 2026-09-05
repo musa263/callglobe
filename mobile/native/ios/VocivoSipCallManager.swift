@@ -28,6 +28,9 @@ public final class VocivoSipCallManager: NSObject {
   /// talks in call ids, CallKit talks in UUIDs.
   private var uuidsByCallId: [String: UUID] = [:]
   private var callIdsByUuid: [UUID: String] = [:]
+  private var pendingAnswers: [String: CXAnswerCallAction] = [:]
+  private var outgoingCalls = Set<String>()
+  private var ringingDeadlines: [String: DispatchWorkItem] = [:]
 
   /// Events raised before JavaScript attached. A push wake is the reason this
   /// exists: without it the wake is delivered to nobody and the user answers a
@@ -92,6 +95,9 @@ public final class VocivoSipCallManager: NSObject {
   }
 
   private func forget(_ callId: String) {
+    ringingDeadlines.removeValue(forKey: callId)?.cancel()
+    pendingAnswers.removeValue(forKey: callId)?.fail()
+    outgoingCalls.remove(callId)
     guard let uuid = uuidsByCallId.removeValue(forKey: callId) else { return }
     callIdsByUuid.removeValue(forKey: uuid)
   }
@@ -110,13 +116,26 @@ public final class VocivoSipCallManager: NSObject {
     update.supportsDTMF = true
     update.supportsGrouping = false
     update.supportsUngrouping = false
+    let alreadyReported = uuidsByCallId[callId] != nil
     provider.reportNewIncomingCall(with: uuid(for: callId), update: update) { error in
-      if error != nil { self.forget(callId) }
-      completion?(error)
+      DispatchQueue.main.async {
+        if error != nil && !alreadyReported { self.forget(callId) }
+        if error == nil && self.uuidsByCallId[callId] != nil {
+          let deadline = DispatchWorkItem { [weak self] in
+            self?.emit("callUiEnd", ["callId": callId])
+            self?.reportCallEnded(callId: callId, reason: "unanswered")
+          }
+          self.ringingDeadlines.removeValue(forKey: callId)?.cancel()
+          self.ringingDeadlines[callId] = deadline
+          DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: deadline)
+        }
+        completion?(error)
+      }
     }
   }
 
   @objc public func reportOutgoingCall(callId: String, handle: String) {
+    outgoingCalls.insert(callId)
     let uuid = uuid(for: callId)
     let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .phoneNumber, value: handle))
     controller.request(CXTransaction(action: action)) { _ in }
@@ -124,8 +143,14 @@ public final class VocivoSipCallManager: NSObject {
   }
 
   @objc public func reportCallConnected(callId: String) {
+    ringingDeadlines.removeValue(forKey: callId)?.cancel()
     guard let uuid = uuidsByCallId[callId] else { return }
-    provider.reportOutgoingCall(with: uuid, connectedAt: nil)
+    if outgoingCalls.contains(callId) { provider.reportOutgoingCall(with: uuid, connectedAt: nil) }
+  }
+
+  @objc public func completeAnswer(callId: String, success: Bool) {
+    guard let action = pendingAnswers.removeValue(forKey: callId) else { return }
+    if success { action.fulfill() } else { action.fail() }
   }
 
   @objc public func reportCallEnded(callId: String, reason: String) {
@@ -220,6 +245,7 @@ extension VocivoSipCallManager: PKPushRegistryDelegate {
       var body: [String: Any] = ["callId": callId]
       if let callerName = callerName { body["callerName"] = callerName }
       if let callerNumber = callerNumber { body["callerNumber"] = callerNumber }
+      if let expiresAt = data["expiresAt"] as? String { body["expiresAt"] = expiresAt }
       self.emit("callUiPushWake", body)
       completion()
     }
@@ -232,6 +258,11 @@ extension VocivoSipCallManager: CXProviderDelegate {
   public func providerDidReset(_ provider: CXProvider) {
     // The system tore every call down; JavaScript must not think otherwise.
     let ids = Array(callIdsByUuid.values)
+    pendingAnswers.values.forEach { $0.fail() }
+    pendingAnswers.removeAll()
+    ringingDeadlines.values.forEach { $0.cancel() }
+    ringingDeadlines.removeAll()
+    outgoingCalls.removeAll()
     uuidsByCallId.removeAll()
     callIdsByUuid.removeAll()
     ids.forEach { emit("callUiEnd", ["callId": $0]) }
@@ -239,9 +270,21 @@ extension VocivoSipCallManager: CXProviderDelegate {
 
   public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
     guard let callId = callIdsByUuid[action.callUUID] else { action.fail(); return }
+    ringingDeadlines.removeValue(forKey: callId)?.cancel()
     configureAudioSession()
+    pendingAnswers[callId]?.fail()
+    pendingAnswers[callId] = action
     emit("callUiAnswer", ["callId": callId])
-    action.fulfill()
+    // JS resolves this action only after the matching SIP INVITE is accepted.
+    // CallKit's own deadline remains authoritative if JS never starts.
+  }
+
+  public func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
+    guard let answer = action as? CXAnswerCallAction,
+          let callId = callIdsByUuid[answer.callUUID] else { return }
+    pendingAnswers.removeValue(forKey: callId)
+    emit("callUiEnd", ["callId": callId])
+    reportCallEnded(callId: callId, reason: "failed")
   }
 
   public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {

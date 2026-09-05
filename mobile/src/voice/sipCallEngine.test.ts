@@ -225,11 +225,11 @@ test('logout hangs up everything, unregisters, and reports disconnected', async 
   assert.equal(client.currentConnectionState, 'DISCONNECTED');
 });
 
-test('a failing unregister still leaves the client cleanly disconnected', async () => {
+test('a failing unregister surfaces the failure and leaves local UI disconnected', async () => {
   const events = fakeEvents();
   const { bridge } = fakeBridge({ unregister: async () => { throw new Error('native gone'); } });
   const client = new SipVoiceClient({ bridge, events: events.source });
-  await client.logout();
+  await assert.rejects(client.logout(), /native gone/);
   assert.equal(client.currentConnectionState, 'DISCONNECTED');
 });
 

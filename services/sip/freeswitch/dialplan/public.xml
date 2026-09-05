@@ -4,8 +4,10 @@
          E.164 destinations are outbound origination, not inbound DIDs. -->
     <extension name="vocivo-conference">
       <condition field="destination_number" expression="^conf-([A-Za-z0-9_-]+)$">
-        <action application="answer"/>
-        <action application="conference" data="$1@default"/>
+        <!-- Fail closed until SIP conference membership grants are implemented.
+             A guessed room name is not authorization, including on loopback. -->
+        <action application="respond" data="403 Conference admission required"/>
+        <action application="hangup" data="CALL_REJECTED"/>
       </condition>
     </extension>
     <extension name="vocivo-outbound-pstn">

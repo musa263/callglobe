@@ -5,7 +5,7 @@ import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { refreshVocivoSip, registerVocivoSip } from '../lib/sipNative';
+import { ensureSipRegistration, refreshVocivoSip } from '../lib/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
@@ -100,31 +100,16 @@ export function useVoiceRegistration({
         // expired one is refused: the registrar drops the phone and calls stop
         // arriving with nothing on screen to say so. Ask for a new one at four
         // fifths of its life, and register again with it.
-        const registerOnSipEdge = async () => {
-          const sip = await api.post<{
-            username: string;
-            password: string;
-            domain: string;
-            wsUri?: string;
-            expires_in?: number;
-            ice_servers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
-          }>('/api/voice/sip-credentials', { client: 'mobile' });
+        const registerOnSipEdge = async (renew = false) => {
+          const expiresIn = await ensureSipRegistration(renew);
           if (canceled) return;
-          await registerVocivoSip({
-            username: sip.username,
-            password: sip.password,
-            domain: sip.domain,
-            wsUri: sip.wsUri,
-            displayName: sip.username,
-            iceServers: sip.ice_servers,
-          });
-          scheduleSipCredentialRefresh(Number(sip.expires_in));
+          scheduleSipCredentialRefresh(expiresIn);
         };
 
         const scheduleSipCredentialRefresh = (expiresInSeconds: number) => {
           if (sipCredentialTimer) clearTimeout(sipCredentialTimer);
           const lifetime = Number.isFinite(expiresInSeconds) && expiresInSeconds > 0 ? expiresInSeconds * 1000 : 60 * 60 * 1000;
-          const delay = Math.min(Math.max(5 * 60_000, lifetime * 0.8), 2 ** 31 - 1);
+          const delay = Math.min(Math.max(1000, lifetime * 0.8), 2 ** 31 - 1);
           sipCredentialTimer = setTimeout(() => {
             refreshSipCredentials().catch((failure) => reportVoiceError('scheduled SIP credential refresh', failure));
           }, delay);
@@ -142,7 +127,7 @@ export function useVoiceRegistration({
             return;
           }
           try {
-            await registerOnSipEdge();
+            await registerOnSipEdge(true);
           } catch (failure) {
             reportVoiceError('renew Vocivo SIP credentials', failure);
             if (canceled) return;

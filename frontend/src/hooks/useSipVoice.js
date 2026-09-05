@@ -5,12 +5,14 @@ import { reportWebVoiceError } from '../voice/telemetry';
 import { describeCallRejection, isRoutineCallOutcome, sipTargetUri, sipUserFromUri } from '../voice/sipDial';
 import { SessionState } from 'sip.js';
 import { observeSipSession, terminateSipSession } from '../voice/sipCallLifecycle';
+import { monitorSipCall, restartSipMedia } from '../voice/sipCallHealth';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../voice/sipSession';
 
 export function useSipVoice(token, enabled, identity = {}) {
   const sessionRef = useRef(null);
   const incomingRef = useRef(null);
   const sessionTeardownsRef = useRef(new Map());
+  const callHealthRef = useRef(new Map());
   const routeIdRef = useRef(null);
   const credentialsRef = useRef(null);
   // Set for as long as a dial is in flight. A second click while the first
@@ -121,7 +123,35 @@ export function useSipVoice(token, enabled, identity = {}) {
         sessionTeardownsRef.current.delete(session);
       }
     });
-    const dispose = () => { mediaCleanup(); stateCleanup(); };
+    const health = monitorSipCall(session, {
+      isConnected: () => credentialsRef.current?.userAgent?.isConnected?.() !== false,
+      restart: () => restartSipMedia(session),
+      onError: (failure) => reportWebVoiceError('SIP media recovery', failure),
+      onFailure: (message) => {
+        if (sessionRef.current !== session && incomingRef.current !== session) return;
+        const routeId = routeIdRef.current;
+        // Local teardown first. A dead socket cannot acknowledge a BYE.
+        dialEpochRef.current += 1;
+        sessionRef.current = null;
+        incomingRef.current = null;
+        routeIdRef.current = null;
+        dialingRef.current = false;
+        stopRingback();
+        sessionTeardownsRef.current.get(session)?.();
+        sessionTeardownsRef.current.delete(session);
+        setCall(null); setIncomingCall(null); setState(null); setRoutePhase('ended');
+        setMediaReady(false); setAudioBlocked(false); setCallStarting(false); setMuted(false);
+        setError(message);
+        const pc = session.sessionDescriptionHandler?.peerConnection;
+        pc?.getSenders?.().forEach(({ track }) => track?.stop());
+        pc?.getReceivers?.().forEach(({ track }) => track?.stop());
+        pc?.close();
+        terminateSipSession(session).catch((failure) => reportWebVoiceError('SIP failed connection cleanup', failure));
+        if (routeId) api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel disconnected SIP route', failure));
+      },
+    });
+    callHealthRef.current.set(session, health);
+    const dispose = () => { health.stop(); callHealthRef.current.delete(session); mediaCleanup(); stateCleanup(); };
     sessionTeardownsRef.current.set(session, dispose);
     if (session.state === SessionState.Terminated) {
       dispose();
@@ -189,6 +219,9 @@ export function useSipVoice(token, enabled, identity = {}) {
         wsUri: credentials.wsUri,
         displayName: identity.name,
         iceServers: credentials.ice_servers,
+        onTransport: (connected) => {
+          if (!cancelled) callHealthRef.current.forEach((health) => health.transport(connected));
+        },
         // The phone's real state, not the state at sign-in: a dropped socket
         // used to leave "Ready for calls" on screen while calls rang nobody.
         onRegistration: (registration, reason) => {
@@ -443,6 +476,8 @@ export function useSipVoice(token, enabled, identity = {}) {
     cancelRoute(routeIdRef.current);
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
+    sessionTeardownsRef.current.forEach((dispose) => dispose());
+    sessionTeardownsRef.current.clear();
     setEndedCall({ id: sipSessionId(sessionRef.current), identity: remoteIdentity });
     sessionRef.current = null;
     incomingRef.current = null;

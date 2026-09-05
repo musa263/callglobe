@@ -26,6 +26,9 @@ export type NativeCallUi = {
   setSpeaker(on: boolean): Promise<void>;
   /** Whether this build has PushKit/ConnectionService wired at all. */
   isCallUiAvailable(): Promise<boolean>;
+  completeAnswer?(input: { callId: string; success: boolean }): Promise<void>;
+  startCallUiEvents?(): Promise<void>;
+  stopCallUiEvents?(): Promise<void>;
 };
 
 /** What the user did on the system call screen, rather than in the app. */
@@ -40,7 +43,7 @@ export type CallUiEventMap = {
    * SIP stack has to get registered fast enough to receive the INVITE the
    * server is holding.
    */
-  callUiPushWake: { callId: string; callerName?: string; callerNumber?: string };
+  callUiPushWake: { callId: string; callerName?: string; callerNumber?: string; expiresAt?: string };
 };
 
 export type CallUiEventName = keyof CallUiEventMap;
@@ -69,19 +72,72 @@ export function bindCallUi(options: {
   bridge: NativeSipBridge;
   native: NativeCallUi;
   ui: CallUiEventSource;
-  onPushWake?: (payload: CallUiEventMap['callUiPushWake']) => void;
+  onPushWake?: (payload: CallUiEventMap['callUiPushWake']) => unknown;
+  schedule?: (callback: () => void, ms: number) => () => void;
 }): CallUiBinding {
   const { events, bridge, native, ui, onPushWake } = options;
   const subscriptions: Array<{ remove: () => void }> = [];
   const reported = new Set<string>();
+  const invitations = new Set<string>();
+  const accepted = new Set<string>();
+  const answers = new Map<string, { started: boolean; cancelTimer: () => void }>();
+  const wakeTimers = new Map<string, () => void>();
+  // A delayed/replayed push or INVITE must not resurrect a cancelled call.
+  const ended = new Set<string>();
+  let disposed = false;
+  const schedule = options.schedule ?? ((callback, ms) => {
+    const timer = setTimeout(callback, ms);
+    return () => clearTimeout(timer);
+  });
 
   const swallow = (what: string) => (error: unknown) => {
     // Never let a call-UI hiccup take the call down with it.
     console.warn(`Vocivo call UI: ${what} failed`, error instanceof Error ? error.message : error);
   };
+  const completeAnswer = (callId: string, success: boolean) => native.completeAnswer?.({ callId, success }).catch(swallow('complete answer'));
+  const finish = (callId: string) => {
+    answers.get(callId)?.cancelTimer();
+    answers.delete(callId);
+    wakeTimers.get(callId)?.();
+    wakeTimers.delete(callId);
+    invitations.delete(callId);
+    accepted.delete(callId);
+    reported.delete(callId);
+    ended.add(callId);
+    if (ended.size > 128) ended.delete(ended.values().next().value!);
+  };
+  const failAnswer = (callId: string) => {
+    finish(callId);
+    completeAnswer(callId, false);
+    native.reportCallEnded({ callId, reason: 'failed' }).catch(swallow('end unanswered native action'));
+    bridge.hangup(callId).catch(swallow('cancel failed answer'));
+  };
+  const answerWhenInvited = (callId: string) => {
+    const pending = answers.get(callId);
+    if (disposed || ended.has(callId) || !pending || pending.started || !invitations.has(callId)) return;
+    pending.started = true;
+    bridge.answer(callId).then(() => {
+      if (disposed || ended.has(callId) || answers.get(callId) !== pending) return;
+      pending.cancelTimer();
+      answers.delete(callId);
+      accepted.add(callId);
+      completeAnswer(callId, true);
+    }).catch((failure) => {
+      swallow('answer from call UI')(failure);
+      if (!disposed && answers.get(callId) === pending) failAnswer(callId);
+    });
+  };
 
   // Engine -> system call screen.
   subscriptions.push(events.addListener('incoming', (payload) => {
+    if (ended.has(payload.callId)) {
+      bridge.hangup(payload.callId).catch(swallow('reject late INVITE'));
+      return;
+    }
+    invitations.add(payload.callId);
+    wakeTimers.get(payload.callId)?.();
+    wakeTimers.delete(payload.callId);
+    answerWhenInvited(payload.callId);
     if (reported.has(payload.callId)) return;
     reported.add(payload.callId);
     native.reportIncomingCall({
@@ -93,11 +149,14 @@ export function bindCallUi(options: {
 
   subscriptions.push(events.addListener('callState', (payload) => {
     if (payload.state === 'ACTIVE') {
+      if (ended.has(payload.callId)) return;
+      accepted.add(payload.callId);
       native.reportCallConnected(payload.callId).catch(swallow('report connected'));
       return;
     }
     if (payload.state === 'ENDED' || payload.state === 'FAILED' || payload.state === 'DROPPED') {
-      reported.delete(payload.callId);
+      if (answers.has(payload.callId)) completeAnswer(payload.callId, false);
+      finish(payload.callId);
       native.reportCallEnded({ callId: payload.callId, reason: endingFor[payload.state] }).catch(swallow('report ended'));
     }
   }));
@@ -110,10 +169,17 @@ export function bindCallUi(options: {
 
   // System call screen -> engine.
   subscriptions.push(ui.addListener('callUiAnswer', (payload) => {
-    bridge.answer(payload.callId).catch(swallow('answer from call UI'));
+    if (ended.has(payload.callId)) { completeAnswer(payload.callId, false); return; }
+    if (accepted.has(payload.callId)) { completeAnswer(payload.callId, true); return; }
+    if (!answers.has(payload.callId)) answers.set(payload.callId, {
+      started: false, cancelTimer: schedule(() => failAnswer(payload.callId), 12_000),
+    });
+    answerWhenInvited(payload.callId);
   }));
 
   subscriptions.push(ui.addListener('callUiEnd', (payload) => {
+    if (answers.has(payload.callId)) completeAnswer(payload.callId, false);
+    finish(payload.callId);
     bridge.hangup(payload.callId).catch(swallow('hang up from call UI'));
   }));
 
@@ -132,12 +198,35 @@ export function bindCallUi(options: {
   subscriptions.push(ui.addListener('callUiPushWake', (payload) => {
     // The module has already drawn the call. Remember it so the INVITE that
     // follows does not draw a second one on top.
+    if (ended.has(payload.callId)) {
+      native.reportCallEnded({ callId: payload.callId, reason: 'ended' }).catch(swallow('end stale push'));
+      return;
+    }
     reported.add(payload.callId);
-    onPushWake?.(payload);
+    if (!invitations.has(payload.callId) && !wakeTimers.has(payload.callId)) {
+      const expiry = payload.expiresAt ? Date.parse(payload.expiresAt) : Date.now() + 45_000;
+      const delay = Math.max(0, Math.min(45_000, Number.isFinite(expiry) ? expiry - Date.now() : 0));
+      wakeTimers.set(payload.callId, schedule(() => failAnswer(payload.callId), delay));
+    }
+    Promise.resolve().then(() => onPushWake?.(payload)).catch((failure) => {
+      swallow('register after push')(failure);
+      if (!disposed && !invitations.has(payload.callId)) failAnswer(payload.callId);
+    });
   }));
+  // Flush native launch events only after every JS listener is installed.
+  native.startCallUiEvents?.().catch(swallow('start native event delivery'));
 
   return {
     remove: () => {
+      disposed = true;
+      answers.forEach((pending, callId) => { pending.cancelTimer(); completeAnswer(callId, false); });
+      wakeTimers.forEach((cancel) => cancel());
+      answers.clear();
+      wakeTimers.clear();
+      invitations.clear();
+      accepted.clear();
+      ended.clear();
+      native.stopCallUiEvents?.().catch(swallow('stop native event delivery'));
       subscriptions.forEach((subscription) => subscription.remove());
       subscriptions.length = 0;
       reported.clear();

@@ -1,5 +1,8 @@
 package app.vocivo.sip
 
+import android.content.Context
+import android.content.Intent
+import android.telecom.DisconnectCause
 import android.os.Handler
 import android.os.Looper
 import com.facebook.react.bridge.Arguments
@@ -23,6 +26,36 @@ import java.util.ArrayDeque
 object VocivoSipCallRegistry {
   private val main = Handler(Looper.getMainLooper())
   private val connections = HashMap<String, VocivoConnection>()
+  private val ended = LinkedHashSet<String>()
+  private val deadlines = HashMap<String, Runnable>()
+  private var application: Context? = null
+
+  @Synchronized
+  fun prepare(context: Context, callId: String): Boolean {
+    application = context.applicationContext
+    if (ended.contains(callId) || connections.containsKey(callId) || deadlines.containsKey(callId)) return false
+    val timeout = Runnable {
+      emit("callUiEnd", "callId" to callId)
+      end(callId, DisconnectCause.MISSED)
+    }
+    deadlines[callId] = timeout
+    main.postDelayed(timeout, 45_000)
+    return true
+  }
+
+  @Synchronized
+  fun connected(callId: String) {
+    deadlines.remove(callId)?.let { main.removeCallbacks(it) }
+  }
+
+  @Synchronized
+  fun end(callId: String, cause: Int) {
+    val call = connections[callId]
+    if (call != null) call.finish(cause) else forget(callId)
+  }
+
+  @Synchronized
+  fun hasCalls() = connections.isNotEmpty() || deadlines.isNotEmpty()
 
   /** Events raised before the JavaScript runtime attached. */
   private val pending = ArrayDeque<Pair<String, WritableMap>>()
@@ -82,6 +115,7 @@ object VocivoSipCallRegistry {
 
   @Synchronized
   fun register(callId: String, connection: VocivoConnection) {
+    if (ended.contains(callId)) { connection.finish(DisconnectCause.CANCELED); return }
     connections[callId] = connection
   }
 
@@ -91,10 +125,17 @@ object VocivoSipCallRegistry {
   @Synchronized
   fun forget(callId: String) {
     connections.remove(callId)
+    deadlines.remove(callId)?.let { main.removeCallbacks(it) }
+    ended.add(callId)
+    if (ended.size > 128) ended.remove(ended.first())
+    application?.let { context ->
+      VocivoSipCallNotification.cancel(context, callId)
+      if (!hasCalls()) context.stopService(Intent(context, VocivoSipCallService::class.java))
+    }
   }
 
   @Synchronized
   fun forgetAll() {
-    connections.clear()
+    (connections.keys + deadlines.keys).toList().forEach { end(it, DisconnectCause.CANCELED) }
   }
 }
