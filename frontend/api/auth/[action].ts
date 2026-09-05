@@ -11,6 +11,6 @@ const routes = { login, password, session, enroll, profile, bootstrap } as const
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const action = Array.isArray(req.query.action) ? req.query.action[0] : req.query.action;
   // Own keys only, or 'toString' resolves an inherited function that never answers.
-  const route = action && Object.hasOwn(routes, action) ? routes[action as keyof typeof routes] : undefined;
+  const route = action && Object.prototype.hasOwnProperty.call(routes, action) ? routes[action as keyof typeof routes] : undefined;
   return route ? route(req, res) : res.status(404).json({ error: 'Not found' });
 }

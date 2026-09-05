@@ -70,7 +70,7 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   // Own keys only: `routes['toString']` resolves Object.prototype.toString,
   // a function that writes no response, and the invocation ran to its
   // 30-second ceiling for anyone who asked.
-  const voiceHandler = resource && Object.hasOwn(routes, resource) ? routes[resource as keyof typeof routes] : undefined;
+  const voiceHandler = resource && Object.prototype.hasOwnProperty.call(routes, resource) ? routes[resource as keyof typeof routes] : undefined;
 
   if (!voiceHandler) {
     return res.status(404).json({ error: 'Voice resource not found' });

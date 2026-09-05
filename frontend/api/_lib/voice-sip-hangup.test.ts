@@ -12,6 +12,6 @@ test('dispatchers never resolve inherited object members', async () => {
   const fs = await import('node:fs');
   for (const file of ['../voice.ts', '../auth/[action].ts', '../admin/[resource].ts']) {
     const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
-    assert.match(source, /Object\.hasOwn\(routes/, `${file} guards the lookup`);
+    assert.match(source, /hasOwnProperty\.call\(routes/, `${file} guards the lookup`);
   }
 });
