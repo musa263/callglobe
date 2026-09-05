@@ -445,9 +445,11 @@ jobs:
                   key=$(printf "%s" "$url" | sha256sum | cut -c1-16)
                   src="/opt/vocivo/sounds-cache/$key.src"
                   if [ ! -s "$src" ]; then
-                    curl -fsSL -m 180 -A "Vocivo edge" -o "$src" "$url" || { echo "::warning::could not download $name from $url"; rm -f "$src"; continue; }
+                    curl -fsSL -m 180 -A "Vocivo edge" -o "$src" "$url" </dev/null || { echo "::warning::could not download $name from $url"; rm -f "$src"; continue; }
                   fi
-                  if ffmpeg -y -loglevel error -i "$src" -vn -ac 1 -ar 16000 -filter:a "volume=${gain}dB" "$sounds/$name.wav"; then
+                  # -nostdin: ffmpeg otherwise reads the rest of sources.txt as its
+                  # console input and the loop ends after the first track.
+                  if ffmpeg -nostdin -y -loglevel error -i "$src" -vn -ac 1 -ar 16000 -filter:a "volume=${gain}dB" "$sounds/$name.wav" </dev/null; then
                     echo "sound $name: $(du -h "$sounds/$name.wav" | cut -f1) at ${gain} dB"
                   else
                     echo "::warning::could not convert $name"
