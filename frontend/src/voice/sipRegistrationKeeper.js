@@ -29,73 +29,95 @@ function describe(error) {
  *   isRegistered: () => boolean,
  *   notify: (state: 'Unregistered' | 'Reconnecting', reason: string) => void,
  *   schedule?: (callback: () => void, delayMs: number) => unknown,
+ *   cancelSchedule?: (handle: unknown) => void,
  *   isPending?: (error: unknown) => boolean,
  * }} deps
  */
 export function createRegistrationKeeper(deps) {
   const schedule = deps.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+  const cancelSchedule = deps.cancelSchedule ?? ((handle) => clearTimeout(handle));
   const isPending = deps.isPending ?? (() => false);
   let wanted = false;
   let attempt = 0;
-  let timerArmed = false;
+  let timer = null;
+  let generation = 0;
+  let running = false;
+  let needsRegistration = false;
 
-  const register = async (why) => {
+  const clearRetry = () => {
+    if (timer !== null) cancelSchedule(timer);
+    timer = null;
+  };
+
+  const scheduleRetry = () => {
+    if (!wanted || timer !== null) return;
+    const current = generation;
+    timer = schedule(() => {
+      if (current !== generation) return;
+      timer = null;
+      void recover('retry');
+    }, reconnectDelayMs(attempt++));
+  };
+
+  const recover = async (why) => {
+    if (!wanted || running) return;
+    const current = generation;
+    running = true;
     try {
-      await deps.register();
+      if (!deps.isConnected()) {
+        needsRegistration = true;
+        await deps.reconnect();
+      }
+      if (!wanted || current !== generation) return;
+      if (needsRegistration || !deps.isRegistered()) {
+        needsRegistration = false;
+        await deps.register();
+      }
+      if (deps.isRegistered()) {
+        attempt = 0;
+        clearRetry();
+      }
     } catch (error) {
-      if (isPending(error)) return;
-      deps.notify('Unregistered', `${why}: ${describe(error)}`);
-      throw error;
+      if (wanted && current === generation && !isPending(error)) {
+        needsRegistration = true;
+        deps.notify(deps.isConnected() ? 'Unregistered' : 'Reconnecting', `${why}: ${describe(error)}`);
+      }
+    } finally {
+      running = false;
+      if (wanted && current === generation && (needsRegistration || !deps.isConnected() || !deps.isRegistered())) scheduleRetry();
     }
   };
 
-  const scheduleReconnect = () => {
-    if (!wanted || timerArmed) return;
-    timerArmed = true;
-    const delay = reconnectDelayMs(attempt);
-    attempt += 1;
-    schedule(() => {
-      timerArmed = false;
-      if (!wanted || deps.isConnected()) return;
-      deps.reconnect().catch(() => scheduleReconnect());
-    }, delay);
-  };
-
   return {
-    onConnect: () => {
+    onConnect: () => { void recover('reconnected'); },
+    onRegistered: () => {
+      needsRegistration = false;
       attempt = 0;
-      if (!wanted || deps.isRegistered()) return;
-      register('reconnected').catch(() => undefined);
+      clearRetry();
+    },
+    onUnregistered: () => {
+      needsRegistration = true;
+      scheduleRetry();
     },
     onDisconnect: (error) => {
       if (!wanted) return;
+      needsRegistration = true;
       deps.notify('Reconnecting', error ? `connection lost: ${describe(error)}` : 'connection closed');
-      scheduleReconnect();
+      scheduleRetry();
     },
     start: async () => {
       wanted = true;
-      attempt = 0;
-      if (!deps.isRegistered()) await register('register');
+      await recover('register');
     },
     stop: () => {
       wanted = false;
+      generation += 1;
+      clearRetry();
     },
     refresh: async () => {
-      if (!wanted) return;
-      if (!deps.isConnected()) {
-        attempt = 0;
-        try {
-          await deps.reconnect();
-        } catch (error) {
-          deps.notify('Reconnecting', `connection failed: ${describe(error)}`);
-          scheduleReconnect();
-        }
-        return;
-      }
-      if (!deps.isRegistered()) await register('refresh').catch(() => undefined);
+      clearRetry();
+      await recover('refresh');
     },
-    get wanted() {
-      return wanted;
-    },
+    get wanted() { return wanted; },
   };
 }

@@ -19,7 +19,7 @@ const sanitize = (value: string) => value.replace(/[^0-9*#]/g, '').slice(0, 18);
 export function DialerScreen({ onWallet, onConference, target }: { onWallet: () => void; onConference: () => void; target: NavigationTarget | null }) {
   const insets = useSafeAreaInsets();
   const { profile, rates, callerNumbers } = useAuth();
-  const { isReady, error, startCall, startInternalCall } = useVoice();
+  const { isReady, error, notice, startCall, startInternalCall } = useVoice();
   const [selected, setSelected] = useState<CallRate>(() => rates.find((rate) => rate.country_code === 'SA') ?? rates[0]!);
   const [number, setNumber] = useState('');
   const [showRates, setShowRates] = useState(false);
@@ -128,7 +128,7 @@ export function DialerScreen({ onWallet, onConference, target }: { onWallet: () 
 
       {routeRisk && <View style={styles.routeWarning}><AlertTriangle size={17} color={colors.amber} /><View style={styles.routeCopy}><Text style={styles.routeTitle}>Caller ID may not ring locally</Text><Text style={styles.routeText}>Some countries filter same-country caller IDs arriving through international routes.</Text></View>{ownedFallback && <Pressable onPress={() => { setSelectedCaller(ownedFallback); setCallError(''); }} style={styles.routeButton}><Text style={styles.routeButtonText}>Use +1 line</Text></Pressable>}</View>}
 
-      {(callError || error) ? <Text style={styles.error}>{callError || error}</Text> : <NetworkStrength voiceReady={isReady} />}
+      {(callError || error) ? <Text style={styles.error}>{callError || error}</Text> : notice ? <Text accessibilityRole="text" style={styles.notice}>{notice}</Text> : <NetworkStrength voiceReady={isReady} />}
 
       <View style={styles.keypadWrap}><Keypad onPress={(digit) => { setContactName(undefined); setContactPhotoUrl(undefined); setNumber((value) => sanitize(value + digit)); }} /></View>
 
@@ -175,7 +175,8 @@ const styles = StyleSheet.create({
   rate: { color: colors.mint, fontSize: 11, fontWeight: '800' },
   dividerDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: colors.textFaint },
   minutes: { color: colors.textMuted, fontSize: 11 },
-  error: { height: 22, textAlign: 'center', color: colors.coral, fontSize: 11 },
+  error: { minHeight: 22, textAlign: 'center', color: colors.coral, fontSize: 12, lineHeight: 18, marginVertical: 6 },
+  notice: { minHeight: 22, textAlign: 'center', color: colors.text, fontSize: 12, lineHeight: 18, marginVertical: 6 },
   routeWarning: { minHeight: 58, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: '#665423', borderRadius: 8, backgroundColor: '#2B2718' },
   routeCopy: { flex: 1 },
   routeTitle: { color: colors.text, fontSize: 11, fontWeight: '800' },

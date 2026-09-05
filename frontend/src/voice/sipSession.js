@@ -40,8 +40,12 @@ export async function connectSipUserAgent(input) {
   });
   const registerer = new Registerer(userAgent, { expires: 600 });
   const registrationListener = (state) => {
-    if (state === RegistererState.Registered) return notify('Registered');
+    if (state === RegistererState.Registered) {
+      keeper?.onRegistered();
+      return notify('Registered');
+    }
     if (state === RegistererState.Unregistered) {
+      keeper?.onUnregistered();
       // A REGISTER that failed because the socket was down comes back as a
       // synthetic 503: while the keeper is reconnecting that is not "signed out".
       if (keeper?.wanted && !userAgent.isConnected()) return notify('Reconnecting', 'registration lapsed while the connection was down');
@@ -60,6 +64,7 @@ export async function connectSipUserAgent(input) {
     register: () => registerer.register({
       requestDelegate: {
         onReject: (response) => {
+          keeper?.onUnregistered();
           if (!userAgent.isConnected()) return;
           notify('Unregistered', `${response?.message?.statusCode ?? ''} ${response?.message?.reasonPhrase ?? ''}`.trim());
         },
@@ -100,6 +105,7 @@ export async function inviteSipTarget(userAgent, targetUri, extraHeaders = [], h
   // refused call just ended, with no word on why.
   const sending = inviter.invite({
     requestDelegate: {
+      onProgress: (response) => handlers.onProgress?.(response?.message?.statusCode),
       onReject: (response) => handlers.onReject?.(response?.message?.statusCode, response?.message?.reasonPhrase),
     },
   });

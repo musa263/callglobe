@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { registerWebPush } from '../lib/webPush';
 import { reportWebVoiceError } from '../voice/telemetry';
-import { describeCallRejection, sipTargetUri, sipUserFromUri } from '../voice/sipDial';
+import { describeCallRejection, isRoutineCallOutcome, sipTargetUri, sipUserFromUri } from '../voice/sipDial';
 import { SessionState } from 'sip.js';
 import { observeSipSession, terminateSipSession } from '../voice/sipCallLifecycle';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../voice/sipSession';
@@ -20,8 +20,9 @@ export function useSipVoice(token, enabled, identity = {}) {
   const dialingRef = useRef(false);
   const dialEpochRef = useRef(0);
   const [ready, setReady] = useState(false);
-  const [statusLabel, setStatusLabel] = useState('Connecting SIP…');
+  const [statusLabel, setStatusLabel] = useState('Connecting phone…');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [call, setCall] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [state, setState] = useState(null);
@@ -97,8 +98,6 @@ export function useSipVoice(token, enabled, identity = {}) {
       if (sessionRef.current !== session && incomingRef.current !== session) return;
       if (next === SessionState.Establishing && !incoming) {
         setState('requesting');
-        setRoutePhase('ringing');
-        startRingback();
       }
       if (next === SessionState.Established) {
         stopRingback();
@@ -128,7 +127,7 @@ export function useSipVoice(token, enabled, identity = {}) {
       dispose();
       sessionTeardownsRef.current.delete(session);
     }
-  }, [startRingback, stopRingback]);
+  }, [stopRingback]);
 
   const disconnect = useCallback(async () => {
     dialEpochRef.current += 1;
@@ -162,7 +161,8 @@ export function useSipVoice(token, enabled, identity = {}) {
   useEffect(() => {
     if (!enabled || !token) return undefined;
     let cancelled = false;
-    setStatusLabel('Connecting SIP…');
+    setReady(false);
+    setStatusLabel('Connecting phone…');
     let renewal;
     api('/api/voice/sip-credentials', { method: 'POST', body: { client: 'web' } }).then(async (credentials) => {
       if (cancelled) return;
@@ -202,8 +202,8 @@ export function useSipVoice(token, enabled, identity = {}) {
             setStatusLabel('Reconnecting…');
           } else {
             setReady(false);
-            setStatusLabel('SIP unavailable');
-            if (reason) setError(`The SIP phone is not registered (${reason}).`);
+            setStatusLabel('Reconnecting…');
+            if (reason) reportWebVoiceError('SIP registration', new Error(reason));
           }
         },
         onInvite: (invitation) => {
@@ -227,13 +227,10 @@ export function useSipVoice(token, enabled, identity = {}) {
         return;
       }
       credentialsRef.current = connection;
-      setReady(true);
-      setError('');
-      setStatusLabel('Ready for calls');
     }).catch((failure) => {
       if (cancelled) return;
       setError(failure instanceof Error ? failure.message : 'The SIP phone could not register.');
-      setStatusLabel('SIP unavailable');
+      setStatusLabel('Calling unavailable');
       // A network that was not there when the tab opened left the phone dead
       // until the page was reloaded. Try again, slowly.
       renewal = setTimeout(() => { if (!cancelled) setCredentialEpoch((epoch) => epoch + 1); }, 30_000);
@@ -262,10 +259,11 @@ export function useSipVoice(token, enabled, identity = {}) {
 
   const beginOutgoing = useCallback((identity, dialed) => {
     setError('');
+    setNotice('');
     setAudioBlocked(false);
     setRemoteIdentity(identity);
     setDialedNumber(dialed || identity.number);
-    setRoutePhase('ringing');
+    setRoutePhase('requesting');
     setState('requesting');
     setMediaReady(false);
     // True until the INVITE is on the wire. It was only ever set to false, so
@@ -275,8 +273,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     // A previous call may have ended muted; the new call's track starts live.
     setMuted(false);
     setCall({ id: `pending-${Date.now()}`, pending: true });
-    startRingback();
-  }, [startRingback]);
+  }, []);
 
   const place = useCallback(async (destination, options) => {
     const userAgent = credentialsRef.current?.userAgent;
@@ -290,10 +287,22 @@ export function useSipVoice(token, enabled, identity = {}) {
     const domain = credentialsRef.current?.userAgent?.configuration?.uri?.host || '';
     const target = sipTargetUri(destination, domain);
     const session = await inviteSipTarget(userAgent, target, options.headers || [], {
+      onProgress: (statusCode) => {
+        if (options.epoch !== dialEpochRef.current || statusCode !== 180) return;
+        if ([SessionState.Established, SessionState.Terminating, SessionState.Terminated].includes(sessionRef.current?.state)) return;
+        setRoutePhase('ringing');
+        startRingback();
+      },
       onReject: (statusCode, reasonPhrase) => {
         if (options.epoch !== dialEpochRef.current) return;
         reportWebVoiceError('SIP INVITE rejected', new Error(`${statusCode} ${reasonPhrase}`));
-        setError(describeCallRejection(statusCode, reasonPhrase));
+        const message = describeCallRejection(statusCode, reasonPhrase, options.identity?.name);
+        if (isRoutineCallOutcome(statusCode)) {
+          setError('');
+          setNotice(message);
+        } else {
+          setError(message);
+        }
       },
       onError: (failure) => {
         if (options.epoch !== dialEpochRef.current) return;
@@ -310,12 +319,12 @@ export function useSipVoice(token, enabled, identity = {}) {
     setDialedNumber(options.dialedNumber || destination);
     setRemoteIdentity(options.identity);
     setState('requesting');
-    setRoutePhase('ringing');
+    setRoutePhase((phase) => phase === 'ringing' ? phase : 'requesting');
     setMediaReady(false);
     setCallStarting(false);
     watchSession(session, false);
     return session;
-  }, [hangupSession, watchSession]);
+  }, [hangupSession, startRingback, watchSession]);
 
   const cancelRoute = useCallback((routeId) => {
     if (!routeId) return Promise.resolve();
@@ -456,15 +465,8 @@ export function useSipVoice(token, enabled, identity = {}) {
     setMuted((value) => !value);
   }, [muted]);
 
-  const toggleHold = useCallback(async () => {
-    if (!sessionRef.current) return;
-    if (state === 'held') await sessionRef.current.unhold?.();
-    else await sessionRef.current.hold?.();
-    setState((value) => (value === 'held' ? 'active' : 'held'));
-  }, [state]);
-
   const unsupported = useCallback(async () => {
-    throw new Error('Conference merge stays on Telnyx Call Control until inbound SIP cutover.');
+    throw new Error('This call control is not available for this connection.');
   }, []);
 
   const resumeAudio = useCallback(async () => {
@@ -485,6 +487,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     ready,
     statusLabel,
     error,
+    notice,
     call,
     incomingCall,
     heldCall: null,
@@ -496,6 +499,9 @@ export function useSipVoice(token, enabled, identity = {}) {
     endedCall,
     callStarting,
     canMerge: false,
+    canHold: false,
+    canAddCaller: false,
+    canTransfer: false,
     connected: mediaReady || state === 'held',
     incoming: Boolean(incomingCall),
     active: Boolean(call) && !incomingCall,
@@ -533,11 +539,11 @@ export function useSipVoice(token, enabled, identity = {}) {
     decline,
     hangup,
     toggleMute,
-    toggleHold,
+    toggleHold: unsupported,
     disconnect,
     // The last call's failure is not the next screen's: switching between
     // external and extension dialling used to carry "Use a complete
     // international destination" over onto the extension keypad.
-    clearError: () => setError(''),
+    clearError: () => { setError(''); setNotice(''); },
   };
 }

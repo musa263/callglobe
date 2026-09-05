@@ -86,7 +86,7 @@ function terminalState(established: boolean, disposition?: SipDisposition): Voic
   if (established) return 'ENDED';
   const status = disposition?.statusCode ?? 0;
   if (status === 0) return 'ENDED';
-  const expected = status === 486 || status === 487 || status === 600 || status === 603 || status < 400;
+  const expected = status === 408 || status === 480 || status === 486 || status === 487 || status === 600 || status === 603 || status < 400;
   return expected ? 'ENDED' : 'FAILED';
 }
 
@@ -281,12 +281,12 @@ export class SipStackBridge implements NativeSipBridge {
         // a stale handle here would leak a peer connection per call.
         this.sessions.delete(handle.id);
       }
-      if (next) this.emitState(handle.id, next, disposition?.reason);
+      if (next) this.emitState(handle.id, next, disposition?.reason, disposition?.statusCode);
     });
   }
 
-  private emitState(callId: string, state: VoiceCallState, cause?: string) {
-    this.events.emit('callState', { callId, state, cause });
+  private emitState(callId: string, state: VoiceCallState, cause?: string, statusCode?: number) {
+    this.events.emit('callState', { callId, state, cause, ...(statusCode ? { statusCode } : {}) });
   }
 
   private requireStack() {

@@ -16,7 +16,7 @@ fail() {
 command -v git >/dev/null 2>&1 || fail 'git is required.'
 command -v npm >/dev/null 2>&1 || fail 'npm is required.'
 [ -f "$frontend_dir/package-lock.json" ] || fail 'frontend/package-lock.json is missing.'
-[ -f "$frontend_dir/.vercel/project.json" ] || fail 'The frontend is not linked to the Vocivo Vercel project.'
+[ -f "$root_dir/.vercel/project.json" ] || fail 'The repository is not linked to the Vocivo Vercel project.'
 
 current_branch=$(git -C "$root_dir" branch --show-current)
 [ "$current_branch" = "$deploy_branch" ] || fail "Expected branch $deploy_branch, found $current_branch."
@@ -30,7 +30,7 @@ npm --prefix "$frontend_dir" test
 npm --prefix "$frontend_dir" run build
 
 if [ "$run_mobile_checks" = true ]; then
-  printf 'Validating the Telnyx mobile clients...\n'
+  printf 'Validating the mobile clients...\n'
   npm --prefix "$mobile_dir" ci
   npm --prefix "$mobile_dir" run typecheck
   npm --prefix "$mobile_dir" test
@@ -42,7 +42,8 @@ if [ "${DRY_RUN:-false}" = true ]; then
 fi
 
 printf 'Deploying the Node.js API and web client to Vercel %s...\n' "$deploy_environment"
-vercel_args=(deploy --yes --cwd "$frontend_dir")
+# Vercel's saved Root Directory is frontend, relative to this repository.
+vercel_args=(deploy --yes --cwd "$root_dir")
 if [ "$deploy_environment" = production ]; then
   vercel_args+=(--prod)
 fi

@@ -52,6 +52,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const [conference, setConference] = useState<MergedConference | null>(null);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [pushRegistration, setPushRegistration] = useState<VoiceContextValue['pushRegistration']>('registering');
   const callRef = useRef<VoiceCall | null>(null);
   const callMetaRef = useRef(new Map<string, Partial<ActiveCall>>());
@@ -276,6 +277,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     if (isTerminalCallState(initialLifecycle)) return;
 
     const base = describeCall(call);
+    setNotice(null);
     const bindIceListener = () => {
       if (iceListenerCleanupRef.current.has(call.callId)) return;
       const cleanup = attachIceFailureListener(call, (reason) => {
@@ -324,6 +326,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           attachCall(remaining);
         };
         if (phase === 'ended' || phase === 'failed') {
+          if (!call.isIncoming && !callMetaRef.current.get(call.callId)?.connectedAt) {
+            if ([408, 480].includes(call.terminationCode ?? 0)) {
+              setNotice(`${base.displayName || 'The person you called'} is unavailable right now. Please try again later.`);
+            } else if ([486, 600].includes(call.terminationCode ?? 0)) {
+              setNotice('The line is busy. Please try again later.');
+            } else if (call.terminationCode === 603) {
+              setNotice('The call was declined.');
+            }
+          }
           cancelRoutePolling(call.callId);
           stopRingback();
           finalizeCall(phase, call.callId);
@@ -1019,7 +1030,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
   const sendDtmf = useCallback(async (digit: string) => { if (callRef.current) await callRef.current.dtmf(digit); }, []);
 
-  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, isReady: isPreview || connection === ConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
+  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, notice, isReady: isPreview || connection === ConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, notice, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>;
 }

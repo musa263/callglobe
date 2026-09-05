@@ -30,7 +30,8 @@ function harness() {
       state.registered = true;
     },
     notify: (registration, reason) => log.push(`${registration}: ${reason}`),
-    schedule: (callback, delayMs) => { timers.push({ callback, delayMs }); return timers.length; },
+    schedule: (callback, delayMs) => { const entry = { callback, delayMs }; timers.push(entry); return entry; },
+    cancelSchedule: (handle) => { const index = timers.findIndex((entry) => entry === handle); if (index >= 0) timers.splice(index, 1); },
     isPending: (error) => error instanceof PendingError,
   });
 
@@ -143,7 +144,7 @@ test('refresh that cannot reconnect reports it and falls back to the timer', asy
   h.state.connected = false;
   h.failReconnects(1);
   await h.keeper.refresh();
-  assert.equal(h.log.at(-1), 'Reconnecting: connection failed: network unreachable');
+  assert.equal(h.log.at(-1), 'Reconnecting: refresh: network unreachable');
   assert.equal(h.timers.length, 1);
 });
 
@@ -164,4 +165,50 @@ test('onConnect while already registered does nothing', async () => {
   await h.keeper.start();
   h.keeper.onConnect();
   assert.deepEqual(h.log, ['register']);
+});
+test('a failed REGISTER retries even while its WebSocket is connected', async () => {
+  const h = harness();
+  h.failRegister(new Error('503'));
+  await h.keeper.start();
+  assert.equal(h.state.connected, true);
+  assert.equal(h.timers.length, 1);
+  h.failRegister(null);
+  h.fire();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.registered, true);
+  assert.equal(h.log.filter((line) => line === 'register').length, 2);
+});
+
+test('an asynchronous registrar rejection arms recovery', async () => {
+  const h = harness();
+  await h.keeper.start();
+  h.state.registered = false;
+  h.keeper.onUnregistered();
+  assert.equal(h.timers.length, 1);
+  h.fire();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.registered, true);
+});
+
+test('a socket drop forces a REGISTER even if SIP.js still reports Registered', async () => {
+  const h = harness();
+  await h.keeper.start();
+  h.state.connected = false;
+  h.keeper.onDisconnect();
+  h.fire();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.log.filter((line) => line === 'register').length, 2);
+});
+
+test('stop removes a pending retry and invalidates an already queued callback', async () => {
+  const h = harness();
+  await h.keeper.start();
+  h.state.connected = false;
+  h.keeper.onDisconnect();
+  const late = h.timers[0].callback;
+  h.keeper.stop();
+  assert.equal(h.timers.length, 0);
+  late();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.log.filter((line) => line === 'reconnect').length, 0);
 });

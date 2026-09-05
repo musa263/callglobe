@@ -171,6 +171,8 @@ test('a busy far end is an ordinary ending, a server error is a failure', () => 
   assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 486 } }), 'ENDED');
   assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 603 } }), 'ENDED');
   assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 487 } }), 'ENDED');
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 480 } }), 'ENDED');
+  assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 408 } }), 'ENDED');
   assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 503 } }), 'FAILED');
   assert.equal(sessionStateToVoiceState('Terminated', { incoming: false, established: false, held: false, disposition: { statusCode: 403 } }), 'FAILED');
   // A call that was up and then hung up is never a failure, whatever the code.

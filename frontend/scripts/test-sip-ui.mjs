@@ -21,8 +21,9 @@ try {
         input.onRegistration('Registered');
         return { userAgent: { isConnected: () => true, configuration: { uri: { host: 'test.invalid' } } }, stop: async () => {}, refresh: async () => {} };
       }
-      export async function inviteSipTarget() {
+      export async function inviteSipTarget(ua, target, headers, handlers) {
         window.invites++;
+        window.inviteHandlers = handlers;
         return window.lastSession = window.makeSession(false);
       }
       export function attachSipMedia() { return () => {}; }
@@ -56,7 +57,12 @@ try {
           window.sessions.push(session);
           return session;
         };
-        window.Audio = class {play(){return Promise.resolve()} pause(){} };
+        window.tones = [];
+        window.Audio = class {
+          constructor(){this.playing=false;window.tones.push(this)}
+          play(){this.playing=true;return Promise.resolve()}
+          pause(){this.playing=false}
+        };
         window.fetch = async (path) => {
           if (path === '/api/voice/route' && window.holdRoute) await new Promise(resolve=>window.finishRoute=resolve);
           return {ok:true,json:async()=>path==='/api/voice/sip-credentials'
@@ -100,6 +106,7 @@ try {
   await page.evaluate(() => { window.holdRoute = true; });
   await page.getByRole('button', { name: 'Call extension', exact: true }).click();
   await page.waitForFunction(() => window.voice.callStarting && !!window.finishRoute);
+  assert.equal(await page.evaluate(() => window.tones.some(t => t.playing)), false);
   await page.getByRole('button', { name: 'End call', exact: true }).click();
   await page.evaluate(() => window.finishRoute());
   await page.waitForFunction(() => !window.voice.callStarting && !window.voice.call);
@@ -109,8 +116,19 @@ try {
   await page.evaluate(() => { window.holdRoute = false; });
   await page.getByRole('button', { name: 'Call extension', exact: true }).click();
   await page.waitForFunction(() => window.invites === 1 && !window.voice.callStarting);
+  assert.equal(await page.evaluate(() => window.tones.some(t => t.playing)), false);
+  await page.evaluate(() => window.inviteHandlers.onProgress(100));
+  assert.equal(await page.evaluate(() => window.tones.some(t => t.playing)), false);
+  await page.evaluate(() => window.inviteHandlers.onProgress(180));
+  await page.waitForFunction(() => window.voice.state === 'ringing' && window.tones.some(t => t.playing));
+  console.log('PASS: only a real SIP 180 response starts outgoing ringback');
   await page.evaluate(() => window.lastSession.emit('Established'));
   await page.waitForFunction(() => window.voice.state === 'active');
+  assert.equal(await page.evaluate(async () => {
+    try { await window.voice.toggleHold(); return false; }
+    catch { return window.voice.state === 'active'; }
+  }), true, 'unsupported hold must fail without changing live call state');
+  assert.equal(await page.evaluate(() => window.tones.some(t => t.playing)), false);
   await page.getByRole('button', { name: 'End call', exact: true }).click();
   await page.waitForFunction(() => !window.voice.call);
   assert.deepEqual(await page.evaluate(() => window.commands), ['BYE']);

@@ -264,6 +264,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const enterPreview = useCallback(() => {
+    if (!__DEV__) return;
     setProfile(previewProfile);
     setRates(fallbackRates);
     setCallerNumbers(previewNumbers);

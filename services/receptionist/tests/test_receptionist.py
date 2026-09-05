@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import json
+import io
 import unittest
 import wave
 from pathlib import Path
@@ -10,10 +11,11 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.brain import Assistant, Conversation, TransferTarget, decision_from_response, system_prompt, tool_definitions
+from app.brain import Assistant, Brain, Conversation, TransferTarget, decision_from_response, system_prompt, tool_definitions
 from app.esl import EslConnection, Message, parse_header_block
 from app.config import Settings
-from app.speech import Voice, recording_has_audio, split_sentences
+from app.speech import Ears, SpeechRecognitionError, Voice, recording_has_audio, split_sentences
+from unittest.mock import AsyncMock, Mock
 
 RECEPTION = Assistant(
     name="Reception",
@@ -23,6 +25,70 @@ RECEPTION = Assistant(
     fallback_extension="1001",
     targets=(TransferTarget("1001", "Sam"), TransferTarget("1002", "Accounts")),
 )
+
+
+def audio_fixture() -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x01\x00" * 800)
+    return output.getvalue()
+
+
+class RecognitionRecovery(unittest.IsolatedAsyncioTestCase):
+    async def test_model_load_failure_is_not_returned_as_silence(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "caller.wav"
+            path.write_bytes(b"recorded audio fixture")
+            ears = Ears(Settings())
+            ears._load = AsyncMock(side_effect=RuntimeError("load failed"))
+            with self.assertRaises(SpeechRecognitionError):
+                await ears.transcribe(path)
+
+    async def test_inference_failure_is_not_returned_as_silence(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "caller.wav"
+            path.write_bytes(b"recorded audio fixture")
+            ears = Ears(Settings())
+            model = Mock()
+            model.transcribe.side_effect = RuntimeError("inference failed")
+            ears._load = AsyncMock(return_value=model)
+            with self.assertRaises(SpeechRecognitionError):
+                await ears.transcribe(path)
+
+
+class ModelRecovery(unittest.IsolatedAsyncioTestCase):
+    async def test_transient_provider_errors_do_not_transfer_or_end_a_live_conversation(self):
+        import httpx
+        for status in (408, 429, 503):
+            brain = Brain(Settings(llm_api_key="test"))
+            await brain._client.aclose()
+            brain._client = httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(status, json={"error": "unavailable"})
+            ))
+            try:
+                conversation = Conversation(RECEPTION)
+                conversation.add("caller", "I need some information.")
+                decision = await brain.respond(conversation)
+                self.assertEqual(decision.action, "speak")
+            finally:
+                await brain.close()
+
+    async def test_auth_failure_cannot_transfer_to_an_unlisted_fallback(self):
+        import httpx
+        brain = Brain(Settings(llm_api_key="test"))
+        await brain._client.aclose()
+        brain._client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(401, json={"error": "unauthorized"})
+        ))
+        try:
+            assistant = Assistant(transfer_enabled=True, fallback_extension="9999", targets=RECEPTION.targets)
+            decision = await brain.respond(Conversation(assistant))
+            self.assertEqual(decision.action, "speak")
+        finally:
+            await brain.close()
 
 
 class HeaderParsing(unittest.TestCase):
@@ -255,6 +321,23 @@ if __name__ == "__main__":
 class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
     """The receptionist must ask the voice engine for audio, and refuse anything else."""
 
+    async def test_old_json_cache_is_replaced_and_simultaneous_renders_are_atomic(self):
+        import httpx
+        async def handle(request):
+            await asyncio.sleep(0.01)
+            return httpx.Response(200, content=audio_fixture(), headers={"content-type": "audio/wav"})
+        with TemporaryDirectory() as directory:
+            voice = self._voice(directory, httpx.MockTransport(handle))
+            corrupt = voice._path_for("Please hold.", "am_adam")
+            corrupt.write_text('{"url": "not-a-wave"}')
+            try:
+                paths = await asyncio.gather(voice.say("Please hold.", "am_adam"), voice.say("Please hold.", "am_adam"))
+                self.assertEqual(paths[0], paths[1])
+                self.assertEqual(paths[0].read_bytes(), audio_fixture())
+                self.assertEqual(list(paths[0].parent.glob("*.partial")), [])
+            finally:
+                await voice.close()
+
     def _voice(self, directory: str, transport):
         import httpx
 
@@ -270,7 +353,7 @@ class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
 
         def handle(request: httpx.Request) -> httpx.Response:
             seen.append(request)
-            return httpx.Response(200, content=b"RIFF" + b"\x00" * 100, headers={"content-type": "audio/wav"})
+            return httpx.Response(200, content=audio_fixture(), headers={"content-type": "audio/wav"})
 
         with TemporaryDirectory() as directory:
             voice = self._voice(directory, httpx.MockTransport(handle))

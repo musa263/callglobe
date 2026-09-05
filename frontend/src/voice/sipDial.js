@@ -31,20 +31,21 @@ export function describeSipSession(session) {
 
 /**
  * What to tell the person when the edge, the switch or the carrier refused a
- * call before it was answered. The SIP status is the one fact worth showing:
- * "480" means nobody was reachable, "403" means the edge did not let the call
- * out, "503" means the carrier or the switch was down — and a blank screen
- * meant nothing at all.
+ * call before it was answered. Protocol diagnostics belong in logs; routine
+ * outcomes should not look like application errors.
  */
-export function describeCallRejection(statusCode, reasonPhrase) {
+export function describeCallRejection(statusCode, _reasonPhrase, name = '') {
   const code = Number(statusCode) || 0;
-  const reason = String(reasonPhrase || '').trim();
-  const detail = code ? `${code}${reason ? ` ${reason}` : ''}` : reason;
-  if (code === 486 || code === 600) return `The line is busy (${detail}).`;
-  if (code === 480 || code === 408 || code === 487) return `No one was available to take the call (${detail}).`;
-  if (code === 404 || code === 410 || code === 484) return `That number could not be reached (${detail}).`;
-  if (code === 401 || code === 407) return `The phone could not sign in to the calling service (${detail}).`;
-  if (code === 402 || code === 403) return `The call was not allowed (${detail}).`;
-  if (code >= 500) return `The calling service could not place the call (${detail}).`;
-  return detail ? `The call could not be completed (${detail}).` : 'The call could not be completed.';
+  if (code === 486 || code === 600) return 'The line is busy. Please try again later.';
+  if (code === 480 || code === 408) return `${name || 'The person you called'} is unavailable right now. Please try again later.`;
+  if (code === 487) return 'Call cancelled.';
+  if (code === 603) return 'The call was declined.';
+  if (code === 404 || code === 410 || code === 484) return 'That number could not be reached. Check the number and try again.';
+  if (code === 401 || code === 407) return 'Your calling session needs to reconnect. Please try again shortly.';
+  if (code === 402 || code === 403) return 'This call is not allowed. Contact your company administrator.';
+  return 'The calling service could not complete the call. Please try again.';
+}
+
+export function isRoutineCallOutcome(code) {
+  return [408, 480, 486, 487, 600, 603].includes(Number(code));
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownLeft, ArrowUpRight, ArrowLeftRight, AlertTriangle, BellRing, CreditCard, Delete, Check, ChevronDown, CircleDollarSign,
   Clock3, ContactRound, Globe2, Headphones, History, LogOut, Mic, MicOff, Pause,
@@ -10,8 +10,9 @@ import { api, clearSession, getStoredSession, storeSession } from './lib/api';
 import { buildDialingDirectory } from './lib/countries';
 import { resolveDialedNumber } from './voice/dialedNumber';
 import { useVoice } from './hooks/useVoice';
-import AdminConsole from './admin/AdminConsole';
 import { describeIncoming } from './voice/callIdentity';
+
+const AdminConsole = lazy(() => import('./admin/AdminConsole'));
 
 const KEYS = [
   ['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
@@ -93,7 +94,7 @@ function Login({ onLogin, onPreview }) {
           <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="Your password" minLength={8} required /></label>
           {error && <div className="form-error" role="alert">{error}</div>}
           <button className="primary-button" type="submit" disabled={loading}>{loading ? 'Signing in...' : <><PhoneCall size={18} /> Sign in</>}</button>
-          <button className="secondary-button" type="button" onClick={onPreview}>Preview interface</button>
+          {import.meta.env.DEV && <button className="secondary-button" type="button" onClick={onPreview}>Preview interface</button>}
         </form>
       </section>
     </main>
@@ -181,12 +182,12 @@ function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) {
         {voice.remoteIdentity?.photoUrl ? <img className="call-avatar call-avatar-photo" src={voice.remoteIdentity.photoUrl} alt="" /> : <div className="call-avatar">{name.charAt(0).toUpperCase()}</div>}<h2>{name}</h2><p className="call-number">{voice.remoteIdentity?.internal ? remote : formatPhone(remote)}</p>{voice.connected ? <strong className="call-timer">{formatDuration(elapsed)}</strong> : null}
         <div className="call-controls">
           <button className={voice.muted ? 'control active' : 'control'} onClick={voice.toggleMute} title={voice.muted ? 'Unmute' : 'Mute'}>{voice.muted ? <MicOff /> : <Mic />}<span>{voice.muted ? 'Unmute' : 'Mute'}</span></button>
-          <button className={voice.state === 'held' ? 'control active' : 'control'} onClick={voice.toggleHold} title="Hold call"><Pause /><span>Hold</span></button>
+          <button className={voice.state === 'held' ? 'control active' : 'control'} disabled={!voice.connected || busy || voice.canHold === false} onClick={() => action(voice.toggleHold)} title="Hold call"><Pause /><span>Hold</span></button>
           <button className="control" onClick={() => openTool('keypad')} title="Open keypad"><Grid3X3 /><span>Keypad</span></button>
-          <button className="control" disabled={!voice.connected || voice.heldCall || voice.conference} onClick={() => openTool('add')} title="Add caller"><UserPlus /><span>Add caller</span></button>
+          <button className="control" disabled={!voice.connected || voice.heldCall || voice.conference || voice.canAddCaller === false} onClick={() => openTool('add')} title="Add caller"><UserPlus /><span>Add caller</span></button>
           <button className="control" disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.swapCalls)} title="Swap calls"><ArrowLeftRight /><span>Swap</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.canMerge || busy} onClick={() => action(voice.mergeCalls)} title="Merge calls"><Merge /><span>Merge</span></button>
-          <button className="control" disabled={!voice.connected || !voice.incoming || !profile?.extension || voice.conference} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
+          <button className="control" disabled={!voice.connected || !voice.incoming || !profile?.extension || voice.conference || voice.canTransfer === false} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.conference} onClick={() => openTool('participants')} title="Conference participants"><UserMinus /><span>Participants</span></button>
           <button className={voice.audioBlocked ? 'control attention' : 'control'} disabled={!voice.connected || busy} onClick={() => action(voice.resumeAudio)} title={voice.audioBlocked ? 'Resume browser audio' : 'Refresh browser audio'}><Volume2 /><span>{voice.audioBlocked ? 'Resume audio' : 'Audio'}</span></button>
         </div>
@@ -288,7 +289,7 @@ function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNumber, vo
           </div>
           {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See live rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
           <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key)} onPointerDown={key === '0' ? startZeroHold : undefined} onPointerUp={key === '0' ? endZeroHold : undefined} onPointerLeave={key === '0' ? endZeroHold : undefined}><strong>{key}</strong><small>{letters}</small></button>)}</div>
-          {(callError || voice.error) && <div className="inline-error">{callError || voice.error}</div>}
+          {(callError || voice.error) ? <div className="inline-error" role="alert">{callError || voice.error}</div> : voice.notice && <div className="call-notice" role="status"><PhoneOff size={18} /><span>{voice.notice}</span></div>}
           <button className="call-button" onClick={call} disabled={voice.active || voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !preview && !selectedNumber?.phone_number) || (!preview && !voice.ready)}><Phone size={22} /> {voice.ready || preview ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
         </div>
       </div>
@@ -399,6 +400,7 @@ export default function App() {
         if (!active) return;
         setProfile(resolvedProfile);
         setHistory(readHistory(resolvedProfile.id || session.sub));
+        setLoading(false);
         if (resolvedProfile.admin_only) {
           setBalance(null); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
@@ -515,7 +517,7 @@ export default function App() {
     } catch (error) { setVerificationError(error.message); } finally { setVerificationBusy(false); }
   }
   if (!session && !preview) return <Login onLogin={setSession} onPreview={() => { setPreview(true); setLoading(false); }} />;
-  if (loading) return <div className="loading-screen"><span className="brand-mark"><Globe2 /></span><p>Opening your phone...</p></div>;
+  if (loading) return <div className="loading-screen" role="status" aria-label="Loading Vocivo" aria-busy="true"><div className="loading-brand"><img src="/vocivo-icon-192.png" alt="" width="64" height="64" /><strong>Vocivo</strong></div><div className="loading-track" aria-hidden="true"><span /></div></div>;
   const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ...(shellData.profile?.account_type === 'business' ? [] : [['wallet', WalletCards, 'Top up']]), ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ...(canAdmin ? [['admin', ShieldCheck, shellData.profile?.role === 'superadmin' ? 'Superadmin' : 'Company admin']] : [])];
   return (
     <div className={`app-shell ${view === 'admin' ? 'admin-mode' : ''}`}>
@@ -529,7 +531,7 @@ export default function App() {
         {view === 'wallet' && <WalletView balance={shellData.balance} preview={preview} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}
         {view === 'settings' && <SettingsView profile={shellData.profile} ownedNumbers={shellData.numbers} verifiedNumbers={shellData.verifiedNumbers} voice={voice} preview={preview} verification={{ pending: verificationPending, busy: verificationBusy, error: verificationError, request: requestVerification, verify: confirmVerification, remove: removeVerifiedNumber, cancel: () => { setVerificationPending(null); setVerificationError(''); } }} onLogout={logout} />}
-        {view === 'admin' && !preview && canAdmin && <AdminConsole profile={shellData.profile} />}
+        {view === 'admin' && !preview && canAdmin && <Suspense fallback={<div className="loading-screen" role="status" aria-label="Loading administration"><div className="loading-track" aria-hidden="true"><span /></div></div>}><AdminConsole profile={shellData.profile} /></Suspense>}
         {view === 'admin' && !preview && !canAdmin && <section className="content-view"><div className="empty-state"><ShieldCheck /><h2>Administrator access required</h2></div></section>}
         {view === 'admin' && preview && <section className="content-view"><div className="empty-state"><ShieldCheck /><h2>Admin requires sign in</h2><p>Exit preview and sign in with the owner account to manage the phone system.</p></div></section>}
       </main>

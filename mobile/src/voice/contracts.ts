@@ -28,6 +28,7 @@ export type VoiceContextValue = {
   conference: MergedConference | null;
   duration: number;
   error: string | null;
+  notice?: string | null;
   isReady: boolean;
   pushRegistration: 'not_required' | 'registering' | 'registered' | 'unavailable';
   refreshIncomingCalls: () => Promise<void>;

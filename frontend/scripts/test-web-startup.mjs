@@ -7,12 +7,16 @@ const origin = process.env.VOCIVO_TEST_ORIGIN || 'http://127.0.0.1:5183';
 const browser = await chromium.launch({ headless: true });
 const profile = { id: 'qa-employee', organization_id: 'qa-company', full_name: 'QA Employee', extension: '2000', role: 'user', account_type: 'business', organization_name: 'QA Company' };
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(60_000);
   page.setDefaultNavigationTimeout(90_000);
   const errors = [];
   const requests = [];
   let sessionValid = true;
+  let releaseBootstrap;
+  let holdBootstrap = true;
+  let releaseSession;
+  let holdSession = true;
   page.on('pageerror', (error) => errors.push(error.message));
   await page.addInitScript(() => {
     localStorage.setItem('vocivo.session', JSON.stringify({ sub: 'qa-employee', name: 'QA Employee' }));
@@ -23,13 +27,18 @@ try {
       pause() { this.playing = false; }
     };
   });
-  await page.route('**/api/**', (route) => {
+  await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     requests.push(path);
-    if (path === '/api/auth/session') return route.fulfill({ status: sessionValid ? 200 : 401, json: sessionValid ? { profile } : { error: 'Session expired.' } });
+    if (path === '/api/auth/session') {
+      if (holdSession) await new Promise((resolve) => { releaseSession = resolve; });
+      return route.fulfill({ status: sessionValid ? 200 : 401, json: sessionValid ? { profile } : { error: 'Session expired.' } });
+    }
+    if (path === '/api/mobile/bootstrap' && holdBootstrap) await new Promise((resolve) => { releaseBootstrap = resolve; });
     const data = {
       '/api/mobile/bootstrap': { profile, account: { balance: 0, rates: [] }, numbers: [] },
       '/api/voice/config': { provider: 'sip', voice_edge: 'sip' },
+      '/api/voice/route': { destination: 'sip:qa-colleague@test.invalid', destinationName: 'QA Colleague', routeToken: 'fixture' },
       '/api/voice/sip-credentials': { username: 'qa', password: 'fixture', domain: 'test.invalid', wsUri: 'wss://test.invalid', expires_in: 3600 },
     };
     return route.fulfill({ json: data[path] || {} });
@@ -51,18 +60,48 @@ try {
           };
           window.incomingSession=session;input.onInvite(session);
         };
-        input.onRegistration('Registered');
-        return {userAgent:{},stop:async()=>{},refresh:async()=>{}};
+        // Sending REGISTER is not the registrar acknowledging it.
+        return {userAgent:{isConnected:()=>true,configuration:{uri:{host:'test.invalid'}}},stop:async()=>{},refresh:async()=>{}};
       }
-      export async function inviteSipTarget() {throw new Error('No real calls in startup QA');}
+      export async function inviteSipTarget(ua, target, headers, handlers) {
+        const listeners = new Set();
+        const session = {
+          id:'outgoing-qa',state:'Establishing',
+          stateChange:{addListener:f=>listeners.add(f),removeListener:f=>listeners.delete(f)},
+          emit(state){this.state=state;[...listeners].forEach(f=>f(state));},
+        };
+        window.rejectOutgoing = () => {handlers.onReject(480,'Temporarily Unavailable');session.emit('Terminated');};
+        return session;
+      }
       export function attachSipMedia(session, elementId, onError) {window.blockAudio=()=>onError(new Error('autoplay blocked'));return ()=>{};}
       export function sipSessionId(session) {return session?.id || '';}
     `,
   }));
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('status', { name: 'Loading Vocivo' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('.loading-brand img')?.naturalWidth > 0);
+  await page.screenshot({ path: '/tmp/vocivo-loading-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.screenshot({ path: '/tmp/vocivo-loading-mobile.png' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  assert.equal(typeof releaseSession, 'function');
+  holdSession = false;
+  releaseSession();
+  console.log('PASS: branded loading screen renders its image without overflow on desktop and mobile');
+  await page.getByRole('heading', { name: 'Make a call' }).waitFor();
+  await page.waitForFunction(() => !!window.sipInput);
+  assert.equal(await page.getByText('Ready for calls', { exact: true }).count(), 0);
+  await page.evaluate(() => window.sipInput.onRegistration('Registered'));
   await page.getByText('Ready for calls', { exact: true }).waitFor();
+  assert.equal(typeof releaseBootstrap, 'function');
+  holdBootstrap = false;
+  releaseBootstrap();
+  console.log('PASS: authenticated phone renders before bootstrap completes; only REGISTER acknowledgement makes it ready');
   assert.ok(requests.includes('/api/voice/sip-credentials'));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => !!window.sipInput);
+  await page.evaluate(() => window.sipInput.onRegistration('Registered'));
   await page.getByText('Ready for calls', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => 'token' in JSON.parse(localStorage.getItem('vocivo.session'))), false);
   console.log('PASS: full App starts and re-registers after reload without a stored bearer');
@@ -89,7 +128,27 @@ try {
   await page.waitForFunction(() => window.audioRetried);
   await page.getByTitle('Refresh browser audio', { exact: true }).waitFor();
   console.log('PASS: answering stops ringtone; blocked playback can be retried from Audio');
+  for (const title of ['Hold call', 'Add caller', 'Transfer call']) {
+    assert.equal(await page.getByTitle(title, { exact: true }).isDisabled(), true);
+  }
+  console.log('PASS: unsupported SIP controls are disabled instead of simulating success');
   await page.screenshot({ path: '/tmp/vocivo-full-app-qa.png', fullPage: true });
+  await page.getByRole('button', { name: 'End call', exact: true }).click();
+  await page.getByRole('button', { name: 'Extension', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Company extension', exact: true }).fill('2003');
+  await page.getByRole('button', { name: 'Call extension', exact: true }).click();
+  await page.waitForFunction(() => !!window.rejectOutgoing);
+  await page.evaluate(() => window.rejectOutgoing());
+  const notice = page.locator('.call-notice');
+  await notice.waitFor();
+  assert.equal(await notice.getAttribute('role'), 'status');
+  assert.equal(await notice.innerText(), 'QA Colleague is unavailable right now. Please try again later.');
+  assert.equal(await page.locator('.inline-error').count(), 0);
+  await page.screenshot({ path: '/tmp/vocivo-unavailable-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.screenshot({ path: '/tmp/vocivo-unavailable-mobile.png', fullPage: true });
+  console.log('PASS: SIP 480 shows a neutral, named unavailable notice without raw protocol details on desktop/mobile');
 
   sessionValid = false;
   requests.length = 0;

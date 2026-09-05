@@ -32,6 +32,7 @@ export type VoiceCall = {
   readonly currentIsMuted: boolean;
   readonly currentIsHeld: boolean;
   readonly currentDuration: number;
+  readonly terminationCode?: number;
 
   /**
    * The call's peer connection, when the engine has one to offer.
@@ -104,7 +105,7 @@ export type SipIncomingEvent = {
   sipUsername?: string;
   headers?: VoiceInviteHeader[];
 };
-export type SipCallStateEvent = { callId: string; state: VoiceCallState; cause?: string };
+export type SipCallStateEvent = { callId: string; state: VoiceCallState; cause?: string; statusCode?: number };
 export type SipMediaStateEvent = { callId: string; muted?: boolean; onHold?: boolean; speaker?: boolean };
 
 export type SipEventName = 'registration' | 'incoming' | 'callState' | 'mediaState';

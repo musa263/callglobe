@@ -23,6 +23,7 @@ export type RegistrationKeeperDeps = {
    */
   notify: (state: 'Unregistered' | 'Reconnecting', reason: string) => void;
   schedule?: (callback: () => void, delayMs: number) => unknown;
+  cancelSchedule?: (handle: unknown) => void;
   /** A rejection that means "a REGISTER is already in flight", not a failure. */
   isPending?: (error: unknown) => boolean;
 };
@@ -43,86 +44,90 @@ function describe(error: unknown) {
 
 export function createRegistrationKeeper(deps: RegistrationKeeperDeps) {
   const schedule = deps.schedule ?? ((callback: () => void, delayMs: number) => setTimeout(callback, delayMs));
+  const cancelSchedule = deps.cancelSchedule ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const isPending = deps.isPending ?? (() => false);
-  // Whether a registration is still wanted. `stop()` clears it, and after
-  // that a dropped socket is left dropped instead of being brought back.
   let wanted = false;
   let attempt = 0;
-  let timerArmed = false;
+  let timer: unknown = null;
+  let generation = 0;
+  let running = false;
+  let needsRegistration = false;
 
-  const register = async (why: string) => {
+  const clearRetry = () => {
+    if (timer !== null) cancelSchedule(timer);
+    timer = null;
+  };
+
+  const scheduleRetry = () => {
+    if (!wanted || timer !== null) return;
+    const current = generation;
+    timer = schedule(() => {
+      if (current !== generation) return;
+      timer = null;
+      void recover('retry');
+    }, reconnectDelayMs(attempt++));
+  };
+
+  const recover = async (why: string) => {
+    if (!wanted || running) return;
+    const current = generation;
+    running = true;
     try {
-      await deps.register();
+      if (!deps.isConnected()) {
+        needsRegistration = true;
+        await deps.reconnect();
+      }
+      if (!wanted || current !== generation) return;
+      if (needsRegistration || !deps.isRegistered()) {
+        needsRegistration = false;
+        await deps.register();
+      }
+      if (deps.isRegistered()) {
+        attempt = 0;
+        clearRetry();
+      }
     } catch (error) {
-      // A REGISTER already in flight reports its own outcome through the
-      // registerer's state; anything else is worth a word in the UI.
-      if (isPending(error)) return;
-      deps.notify('Unregistered', `${why}: ${describe(error)}`);
-      throw error;
+      if (wanted && current === generation && !isPending(error)) {
+        needsRegistration = true;
+        deps.notify(deps.isConnected() ? 'Unregistered' : 'Reconnecting', `${why}: ${describe(error)}`);
+      }
+    } finally {
+      running = false;
+      if (wanted && current === generation && (needsRegistration || !deps.isConnected() || !deps.isRegistered())) scheduleRetry();
     }
   };
 
-  const scheduleReconnect = () => {
-    if (!wanted || timerArmed) return;
-    timerArmed = true;
-    const delay = reconnectDelayMs(attempt);
-    attempt += 1;
-    schedule(() => {
-      timerArmed = false;
-      if (!wanted || deps.isConnected()) return;
-      deps.reconnect().catch(() => scheduleReconnect());
-    }, delay);
-  };
-
   return {
-    /** The transport came up (first time or after a drop). */
-    onConnect: () => {
+    onConnect: () => { void recover('reconnected'); },
+    onRegistered: () => {
+      needsRegistration = false;
       attempt = 0;
-      if (!wanted || deps.isRegistered()) return;
-      void register('reconnected').catch(() => undefined);
+      clearRetry();
     },
-
-    /** The transport went down. `error` is set when the network or server dropped it. */
+    onUnregistered: () => {
+      needsRegistration = true;
+      scheduleRetry();
+    },
     onDisconnect: (error?: unknown) => {
       if (!wanted) return;
+      needsRegistration = true;
       deps.notify('Reconnecting', error ? `connection lost: ${describe(error)}` : 'connection closed');
-      scheduleReconnect();
+      scheduleRetry();
     },
-
-    /** Call once the transport has been started. Registers if onConnect has not already. */
     start: async () => {
       wanted = true;
-      attempt = 0;
-      if (!deps.isRegistered()) await register('register');
+      await recover('register');
     },
-
     stop: () => {
       wanted = false;
+      generation += 1;
+      clearRetry();
     },
-
-    /**
-     * After the app comes to the front or the network changes: straight back
-     * on, rather than waiting for the back-off timer.
-     */
     refresh: async () => {
-      if (!wanted) return;
-      if (!deps.isConnected()) {
-        attempt = 0;
-        try {
-          await deps.reconnect();
-        } catch (error) {
-          deps.notify('Reconnecting', `connection failed: ${describe(error)}`);
-          scheduleReconnect();
-        }
-        return;
-      }
-      if (!deps.isRegistered()) await register('refresh').catch(() => undefined);
+      clearRetry();
+      await recover('refresh');
     },
-
-    /** For tests and diagnostics. */
-    get wanted() {
-      return wanted;
-    },
+    get wanted() { return wanted; },
   };
 }
 

@@ -12,7 +12,7 @@ from app.brain import Assistant, Conversation, Decision, TransferTarget
 from app.call import CallHandler
 from app.config import Settings
 from app.esl import EslConnection
-from app.speech import CANNED, FILLERS
+from app.speech import CANNED, FILLERS, SpeechRecognitionError
 
 # A whole call, over a real socket, against the real EslConnection and
 # CallHandler. Only the four things that reach outside the process are faked:
@@ -155,11 +155,16 @@ class FakeEars:
         self._freeswitch = freeswitch
         self.languages: list[str | None] = []
         self.hints: list[list[str]] = []
+        self.failures = 0
 
     async def transcribe(self, path: Path, language: str | None = None, hints: list[str] | None = None) -> str:
         self.languages.append(language)
         self.hints.append(list(hints or []))
-        return self._freeswitch.caller_turns.pop(0) if self._freeswitch.caller_turns else ""
+        text = self._freeswitch.caller_turns.pop(0) if self._freeswitch.caller_turns else ""
+        if self.failures:
+            self.failures -= 1
+            raise SpeechRecognitionError("Recognizer overloaded")
+        return text
 
 
 class FakeBrain:
@@ -197,7 +202,36 @@ RECEPTION = Assistant(
 
 
 class CallFlow(unittest.IsolatedAsyncioTestCase):
-    async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision], answered: bool = False, model_delay: float = 0.0):
+    async def test_recognition_failure_is_not_counted_as_caller_silence(self):
+        freeswitch, voice, api = await self._run(
+            assistant=RECEPTION,
+            turns=["I am still here.", "Can you hear me?", "Goodbye."],
+            decisions=[Decision(action="hangup", say="Goodbye.")],
+            transcription_failures=2,
+        )
+        self.assertEqual(len(freeswitch.recordings), 3)
+        self.assertFalse(any(app == "transfer" for app, _ in freeswitch.applications))
+        self.assertEqual([app for app, _ in freeswitch.applications].count("hangup"), 1)
+        self.assertEqual(api.filed[0]["outcome"], "completed")
+        self.assertIn("Sorry, I couldn't process that.", voice.said)
+        self.assertIn("Could you repeat that, please?", voice.said)
+
+    async def test_message_capture_does_not_hang_up_before_caller_finishes(self):
+        freeswitch, voice, api = await self._run(
+            assistant=RECEPTION,
+            turns=["Please call me back about the invoice.", "Also, it's urgent.", "That's all, goodbye."],
+            decisions=[
+                Decision(action="message", say="I'll pass your message on. Anything else?", note="Call back about the invoice."),
+                Decision(action="message", say="I've added that.", note="Urgent."),
+                Decision(action="hangup", say="Goodbye."),
+            ],
+        )
+        self.assertEqual(len(freeswitch.recordings), 3)
+        self.assertEqual([app for app, _ in freeswitch.applications].count("hangup"), 1)
+        self.assertEqual(api.filed[0]["note"], "Call back about the invoice.\nUrgent.")
+        self.assertEqual(api.filed[0]["outcome"], "message_taken")
+
+    async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision], answered: bool = False, model_delay: float = 0.0, transcription_failures: int = 0):
         with TemporaryDirectory() as directory:
             settings = Settings(
                 audio_dir=directory,
@@ -212,6 +246,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
             voice = FakeVoice(directory)
             api = FakeApi(assistant)
             self.ears = FakeEars(freeswitch)
+            self.ears.failures = transcription_failures
             handler = CallHandler(settings, voice, self.ears, FakeBrain(decisions, delay=model_delay), api)  # type: ignore[arg-type]
 
             async def on_connection(reader, writer):

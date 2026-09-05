@@ -9,7 +9,7 @@ from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, channel_variable
-from .speech import CANNED, FILLERS, Ears, Voice, recording_has_audio, split_sentences
+from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, Voice, recording_has_audio, split_sentences
 
 log = logging.getLogger("vocivo.call")
 
@@ -61,6 +61,7 @@ class CallHandler:
         started = time.time()
         outcome = "completed"
         transferred_to = ""
+        notes: list[str] = []
 
         try:
             await self._speak(connection, assistant.greeting, assistant.voice)
@@ -72,7 +73,15 @@ class CallHandler:
                     outcome = "caller_hung_up"
                     break
 
-                heard = await self._listen(connection, call_id, assistant)
+                try:
+                    heard = await self._listen(connection, call_id, assistant)
+                except SpeechRecognitionError:
+                    if connection.hungup.is_set():
+                        outcome = "caller_hung_up"
+                        break
+                    silent_turns = 0
+                    await self._speak(connection, "Sorry, I couldn't process that. Could you repeat that, please?", assistant.voice)
+                    continue
                 if connection.hungup.is_set():
                     outcome = "caller_hung_up"
                     break
@@ -106,9 +115,11 @@ class CallHandler:
                     break
                 if decision.action == "message":
                     outcome = "message_taken"
-                    break
+                    if decision.note:
+                        notes.append(decision.note)
+                    continue
                 if decision.action == "hangup":
-                    outcome = "completed"
+                    outcome = "message_taken" if notes else "completed"
                     break
             else:
                 # The turn budget exists so a stuck conversation cannot hold a
@@ -122,19 +133,21 @@ class CallHandler:
             try:
                 await connection.hangup()
             except Exception:  # noqa: BLE001
-                pass
+                log.exception("call %s could not be terminated after failure", call_id[:8])
         finally:
-            await self._api.record_conversation({
-                "callId": call_id,
-                "number": dialled,
-                "caller": caller,
-                "outcome": outcome,
-                "transferredTo": transferred_to,
-                "seconds": round(time.time() - started, 1),
-                "transcript": conversation.transcript(),
-                "note": next((turn.text for turn in reversed(conversation.turns) if turn.role == "assistant"), ""),
-            })
-            await connection.close()
+            try:
+                await self._api.record_conversation({
+                    "callId": call_id,
+                    "number": dialled,
+                    "caller": caller,
+                    "outcome": outcome,
+                    "transferredTo": transferred_to,
+                    "seconds": round(time.time() - started, 1),
+                    "transcript": conversation.transcript(),
+                    "note": "\n".join(notes),
+                })
+            finally:
+                await connection.close()
 
     # -- the two halves of a turn ---------------------------------------
 
@@ -220,8 +233,10 @@ class CallHandler:
             if connection.hungup.is_set() or time.monotonic() >= deadline:
                 return ""
         hints = [assistant.name, *(target.label for target in assistant.targets)]
-        heard = await self._ears.transcribe(path, assistant.language, hints)
-        self._discard(path)
+        try:
+            heard = await self._ears.transcribe(path, assistant.language, hints)
+        finally:
+            self._discard(path)
         log.info("call %s heard %r", call_id[:8], heard[:120])
         return heard
 
@@ -230,13 +245,13 @@ class CallHandler:
         try:
             path.unlink(missing_ok=True)
         except OSError:
-            pass
+            log.exception("could not remove temporary caller recording")
 
     async def _act(self, connection: EslConnection, assistant: Assistant, decision: Decision, dialled: str) -> None:
         await self._speak(connection, decision.say, assistant.voice)
         if decision.action == "transfer":
             await self._transfer(connection, decision.extension, dialled)
-        elif decision.action in {"message", "hangup"}:
+        elif decision.action == "hangup":
             await connection.hangup()
 
     async def _transfer(self, connection: EslConnection, extension: str, dialled: str) -> None:

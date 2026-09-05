@@ -27,6 +27,7 @@ class SipCall implements VoiceCall {
   readonly isHeld$ = new VoiceSubject<boolean>(false);
 
   private connectedAt: number | null = null;
+  terminationCode?: number;
 
   constructor(
     private readonly bridge: NativeSipBridge,
@@ -182,6 +183,7 @@ export class SipVoiceClient implements VoiceClient {
         const call = payload?.callId ? this.calls.get(payload.callId) : undefined;
         if (!call) return;
         const state = toVoiceCallState(payload.state);
+        call.terminationCode = payload.statusCode;
         if (!state) {
           // Never leave a call stuck because native sent something unknown.
           console.error('Vocivo SIP sent an unknown call state', payload.state);

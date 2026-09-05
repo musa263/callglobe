@@ -105,7 +105,7 @@ export function AuthScreen() {
             <QrCode size={20} color={colors.mint} /><Text style={styles.qrButtonText}>Scan company setup QR</Text>
           </Pressable>
 
-          {!isApiConfigured && (
+          {__DEV__ && !isApiConfigured && (
             <Pressable onPress={enterPreview} style={styles.preview}>
               <Text style={styles.previewText}>Open design preview</Text>
             </Pressable>

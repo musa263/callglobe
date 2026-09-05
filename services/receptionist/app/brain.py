@@ -273,7 +273,13 @@ class Brain:
             if isinstance(error, httpx.HTTPStatusError):
                 detail = error.response.text[:400]
             log.error("the language model did not answer (%s): %s %s", self._settings.llm_model, error, detail)
-            if assistant.transfer_enabled and assistant.fallback_extension:
+            # A temporary provider failure is not the caller's request to end
+            # or transfer this conversation. Let the next turn retry normally.
+            transient = not isinstance(error, httpx.HTTPStatusError) or error.response.status_code in {408, 429} or error.response.status_code >= 500
+            if transient:
+                return Decision(say="Sorry, I lost that for a moment. Could you repeat that, please?")
+            allowed = {target.extension for target in assistant.targets}
+            if assistant.office_open and assistant.transfer_enabled and assistant.fallback_extension in allowed:
                 return Decision(action="transfer", extension=assistant.fallback_extension, say="One moment, I'll put you through.")
-            return Decision(action="message", say="Sorry, I'm having trouble right now. I'll take a message and someone will call you back.", note="(the receptionist could not reach the language model)")
+            return Decision(say="Sorry, I'm having trouble responding right now. Please tell me your name and the message for the team.")
         return decision_from_response(response.json(), assistant)

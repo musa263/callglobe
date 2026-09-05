@@ -293,6 +293,8 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
 
   const registerer = new Registerer(userAgent, { expires: 600 });
   const registrationListener = (state: RegistererState) => {
+    if (state === RegistererState.Registered) keeper.onRegistered();
+    if (state === RegistererState.Unregistered) keeper.onUnregistered();
     // A REGISTER that failed because the socket was down comes back as a
     // synthetic 503 and an Unregistered state. While the keeper is bringing
     // the socket back that is "reconnecting", not "signed out": the UI keeps
@@ -315,6 +317,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     register: () => registerer.register({
       requestDelegate: {
         onReject: (response) => {
+          keeper.onUnregistered();
           if (!userAgent.isConnected()) return; // the state listener has already said "reconnecting"
           onRegistration?.('Unregistered', `${response.message.statusCode} ${response.message.reasonPhrase}`);
         },

@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import struct
+import tempfile
 import wave
 from pathlib import Path
 
@@ -105,8 +106,13 @@ class Voice:
     async def say(self, text: str, voice: str | None = None) -> Path:
         chosen = voice or self._settings.tts_voice
         path = self._path_for(text, chosen)
-        if path.exists() and path.stat().st_size > 0:
-            return path
+        if path.exists():
+            try:
+                with wave.open(str(path), "rb") as cached:
+                    if cached.getnframes() > 0 and cached.getframerate() > 0:
+                        return path
+            except (OSError, EOFError, wave.Error):
+                log.warning("discarding invalid cached speech audio")
         # /v1/audio/speech answers with the WAV itself. (/v1/audio/render
         # answers with JSON naming a public URL — the first deploy wrote that
         # JSON into a .wav and every word the receptionist said was silence.)
@@ -121,9 +127,15 @@ class Voice:
             raise RuntimeError(f"voice engine answered with {content_type or 'no content type'}, not audio")
         # Written beside the target and moved into place, so a prompt half
         # written while another call reads the same path can never be played.
-        staging = path.with_suffix(".partial")
-        staging.write_bytes(response.content)
-        staging.replace(path)
+        # Concurrent calls can request the same phrase. Each writer needs its
+        # own staging file; otherwise one rename removes another writer's file.
+        with tempfile.NamedTemporaryFile(dir=self._dir, suffix=".partial", delete=False) as output:
+            staging = Path(output.name)
+            output.write(response.content)
+        try:
+            staging.replace(path)
+        finally:
+            staging.unlink(missing_ok=True)
         return path
 
     async def prerender(self, texts: list[str], voice: str | None = None) -> None:
@@ -151,6 +163,10 @@ class Voice:
         except httpx.HTTPError as error:
             # Purely an optimisation; the phrases render on demand if this fails.
             log.debug("could not pre-render %d phrases: %s", len(items), error)
+
+
+class SpeechRecognitionError(RuntimeError):
+    """Recognition failed; this is not evidence that the caller was silent."""
 
 
 class Ears:
@@ -197,7 +213,11 @@ class Ears:
         """
         if not path.exists() or path.stat().st_size == 0:
             return ""
-        model = await self._load()
+        try:
+            model = await self._load()
+        except Exception as error:
+            log.exception("speech recognition model could not be loaded")
+            raise SpeechRecognitionError("Speech recognition is temporarily unavailable") from error
         spoken = (language or self._settings.stt_language or "").strip().lower()[:2] or None
         names = [hint.strip() for hint in (hints or []) if hint and hint.strip()]
         prompt = f"Phone call to {', '.join(dict.fromkeys(names))}." if names else None
@@ -217,9 +237,9 @@ class Ears:
 
         try:
             return await asyncio.to_thread(run)
-        except Exception as error:  # noqa: BLE001 - a failed transcription must not end the call
-            log.warning("could not transcribe %s: %s", path.name, error)
-            return ""
+        except Exception as error:  # noqa: BLE001 - distinguish failures from silence
+            log.exception("speech recognition failed")
+            raise SpeechRecognitionError("Speech recognition is temporarily unavailable") from error
 
 
 def recording_has_audio(path: Path, *, minimum_seconds: float = 0.35, minimum_rms: int = 120) -> bool:
