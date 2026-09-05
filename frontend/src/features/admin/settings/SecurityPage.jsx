@@ -1,0 +1,6 @@
+import { KeyRound, ShieldCheck } from "lucide-react";
+import { Status, PageHeader } from '../components/ui.jsx';
+
+export function SecurityPage({ onChangePassword, isSuperadmin }) {
+  return <div className="page"><PageHeader eyebrow="ACCOUNT SECURITY" title="Password & security" subtitle={`Protect the currently signed-in ${isSuperadmin ? 'Vocivo superadmin' : 'company administrator'} account.`}><button className="primary" onClick={onChangePassword}><KeyRound /> Reset password</button></PageHeader><section className="band"><div className="section-title"><div><h2>Administrator password</h2><p>Reset your sign-in password after confirming the current password.</p></div><Status good>Protected</Status></div><div className="detail-grid"><div><span>Account scope</span><strong>{isSuperadmin ? 'Vocivo platform' : 'Customer workspace only'}</strong></div><div><span>Minimum strength</span><strong>10 characters</strong></div><div><span>Required</span><strong>Uppercase, lowercase and number</strong></div><div><span>Session policy</span><strong>{isSuperadmin ? '30 days' : '12 hours'}</strong></div></div><div className="info-strip"><ShieldCheck /><span>The password is stored only as a one-way security hash and is never displayed after it is changed.</span></div></section></div>;
+}

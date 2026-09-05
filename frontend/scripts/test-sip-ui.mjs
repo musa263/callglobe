@@ -13,7 +13,7 @@ try {
   page.on('pageerror', (error) => { errors.push(error.message); console.error(error.message); });
   await page.route('**/api/**', (route) => route.fulfill({ json: {} }));
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
-  await page.route('**/src/voice/sipSession*', (route) => route.fulfill({
+  await page.route('**/src/features/calling/engine/sipSession*', (route) => route.fulfill({
     contentType: 'application/javascript',
     body: `
       export async function connectSipUserAgent(input) {
@@ -37,7 +37,7 @@ try {
       <script type="module">
         import React from '/node_modules/.vite/deps/react.js';
         import ReactDOM from '/node_modules/.vite/deps/react-dom_client.js';
-        import {useSipVoice} from '/src/hooks/useSipVoice.js';
+        import {useSipVoice} from '/src/features/calling/hooks/useSipVoice.js';
         window.invites = 0;
         window.commands = [];
         window.sessions = [];

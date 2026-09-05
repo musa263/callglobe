@@ -1,117 +1,104 @@
 # Vocivo Architecture
 
-This document is the entry point for engineers working on Vocivo. It describes the production system, source-code ownership, dependency direction, and voice-state rules. Update it whenever a runtime boundary changes.
+Start with the [feature directory](docs/FEATURES.md) to find the code responsible
+for a screen, API, or calling failure. Each feature has a README beside its code.
+This document describes source boundaries, not a certification of production health.
 
-## System Map
-
-```text
-iOS / Android (React Native) -+
-                              +-- HTTPS -- Vercel API -- PostgreSQL
-Web phone / Admin (React) ----+              |
-        |                                    +-- Telnyx REST + signed webhooks (default edge)
-        +-------- Telnyx WebRTC SDK ----------+
-        |                                    +-- Python TTS service
-        +-- (flagged) SIP.js / native SIP --- Kamailio + RTPEngine + FreeSWITCH --- Telnyx SIP trunk --- PSTN
-```
-
-Telnyx is the default signaling and media provider (`VOCIVO_VOICE_EDGE=telnyx`). The self-hosted SIP edge keeps Telnyx as PSTN only. See [ADR 0003](docs/adr/0003-self-hosted-sip-edge.md). Vocivo owns tenant identity, authorization, extensions, routing, call state, administration, messaging, billing, and product behavior. Internal extension calls are free to customer wallets.
-
-## Repository Map
-
-### `mobile/`
-
-- `App.tsx`: composition and navigation only.
-- `src/screens/`: user-facing screens; no direct carrier or database access.
-- `src/context/`: React coordination for authentication, voice, business data, and messaging.
-- `src/voice/`: voice contracts and deterministic, framework-light helpers.
-- `src/lib/voipClient.ts`: the default native Telnyx SDK adapter.
-- `src/lib/sipNative.ts` / `src/lib/voiceEdge.ts`: flagged Vocivo SIP + CallKit path with Telnyx fallback.
-- `src/lib/callLifecycle.ts`: authoritative lifecycle and termination locks.
-- `src/lib/voiceRecovery.ts`: ICE and media recovery.
-- `plugins/withTelnyxVoip.js`: Expo native configuration only.
-- `tests/voip/`: mounted lifecycle and background-call integration tests.
-
-### `frontend/`
-
-- `src/pages/` and `src/admin/`: web-phone and administration UI.
-- `src/hooks/`: React orchestration hooks.
-- `src/voice/`: shared browser call identity and telemetry helpers.
-- `api/`: thin Vercel route entry points.
-- `api/_lib/routes/`: HTTP request validation and response mapping.
-- `api/_lib/voice-webhook/`: Telnyx event contracts and focused event handlers.
-- `api/_lib/*-store.ts`: persistence repositories.
-- `api/_lib/object-store.ts`: shared PostgreSQL transaction and object primitives.
-
-### `services/`
-
-- `tts/`: isolated Python/FastAPI text-to-speech service.
-- `sip/`: Kamailio, RTPEngine, and FreeSWITCH. Telnyx is only the PSTN trunk.
-
-### `docs/`
-
-- Operational guides, readiness evidence, and architecture decision records.
-
-## Dependency Rules
-
-Dependencies flow inward. Lower layers must never import UI or HTTP route modules.
+## Runtime Map
 
 ```text
-UI -> Context/Hook -> Domain helper -> SDK/API adapter
-HTTP route -> Domain service/handler -> Repository -> PostgreSQL/Telnyx
+Web React / Mobile React Native
+    | HTTPS: session, tenant, directory, routes, wallet, messages
+    v
+Vercel API -> PostgreSQL
+    |
+    +-- VOCIVO_VOICE_EDGE=telnyx -> Telnyx SDK + Call Control webhooks
+    |
+    +-- VOCIVO_VOICE_EDGE=sip -> SIP.js -> Kamailio -> RTPEngine
+                                           |
+                                           +-> FreeSWITCH -> Telnyx trunk -> PSTN
+                                                  |
+                                                  +-> Python receptionist / TTS
 ```
 
-1. Screens render state and dispatch user intent. They do not call Telnyx directly.
-2. React contexts coordinate subscriptions and component state. Pure parsing and state conversion live under `voice/` or `lib/`.
-3. API routes authenticate, validate, invoke one domain operation, and map errors to HTTP responses.
-4. Webhook handlers are idempotent and tenant-aware. New event flows belong in focused modules under `api/_lib/voice-webhook/`.
-5. Stores own persistence and transactions. Business services must not issue ad hoc SQL.
-6. Carrier secrets and SIP credentials never cross into browser or mobile bundles.
+`frontend/api/_lib/features/calling/voice-provider.ts::voiceEdge()` selects SIP
+only for the explicit value `sip`; otherwise it selects Telnyx. Read the live
+environment and `/api/voice/config` to establish which path is deployed. Merely
+finding a carrier library in the repository does not establish its active use.
 
-## Voice State Authority
+Vocivo owns the applications and their tenant, authorization, routing, wallet,
+and administration logic. The SIP stack runs on the configured DigitalOcean
+host; Vercel hosts the HTTP application. Telnyx remains an external carrier for
+PSTN/SMS and, when selected, the managed calling engine. Internal SIP-edge calls
+bypass Telnyx credit checks; managed-edge calls still depend on carrier service.
 
-The Telnyx SDK is authoritative for local signaling and media state. Server route state is authoritative for multi-leg orchestration. Native CallKit/Android Telecom mirrors these states and never invents a transition.
+## Source Organization
+
+- `frontend/src/features/<feature>/`: web screens, components, hooks and helpers.
+- `frontend/api/_lib/features/<feature>/`: backend domain, stores, tests and `routes/`.
+- `mobile/src/features/<feature>/`: mobile screens, context and feature logic.
+- `frontend/src/shared/`, `mobile/src/shared/`: cross-feature API clients and UI primitives.
+- `frontend/api/_lib/shared/`: HTTP, persistence, tenant context and carrier transport primitives.
+- `services/{sip,receptionist,tts}/`: independently deployed infrastructure/services.
+- `docs/`: cross-feature architecture, operational procedures and historical audits.
+
+Public Vercel entry points stay in `frontend/api/` so URLs do not change when
+implementation files move. `frontend/src/App.jsx` and `mobile/App.tsx` compose
+features. Native code stays in `mobile/native/`, configured by `mobile/plugins/`;
+generated iOS/Android project paths are not feature folders and must remain stable.
+
+## Dependency Direction
 
 ```text
-IDLE -> CONNECTING -> RINGING -> ACTIVE -> HELD -> ACTIVE -> ENDED
-                         \-> FAILED                  \-> FAILED
+Screen -> Context/Hook -> Engine/Domain -> API or SDK adapter
+HTTP entry -> Feature route -> Domain/Store -> Shared database or carrier client
 ```
 
-- Terminal states never regress.
-- A call timer starts only after confirmed active media.
-- Route polling is advisory and stops when the SDK reports an active call.
-- Every listener and timer has an explicit teardown.
-- Hangup, answer, bridge, and fork-winner operations are idempotent.
-- The first answered fork is claimed atomically; all losing forks are terminated.
+Do not import screens from stores, place SQL in UI, or add hidden network calls
+to a formatting helper. Cross-feature imports must name the owning feature.
+Keep tests next to pure modules; mounted React Native integration tests live in
+`mobile/tests/voip/`. `scripts/test-files.mjs` discovers nested unit tests.
 
-See [ADR 0001](docs/adr/0001-voice-state-authority.md), [ADR 0002](docs/adr/0002-telnyx-pstn-edge.md), and [ADR 0003](docs/adr/0003-self-hosted-sip-edge.md).
+## Calling Boundaries
 
-## Extension Call Flow
+On the SIP edge, the client obtains a session-bound temporary SIP credential,
+registers, requests a signed call route, then sends its INVITE. Kamailio validates
+identity/route grants, looks up the destination and sends push wakes to registered
+devices. The transaction accepts late registrations for a bounded 45-second
+window. In-dialog messages follow tracked routes instead of requesting a new
+one-use call grant. Unauthorised conference/REFER entry is rejected; this SIP
+release does not advertise conference admission as available.
 
-1. The authenticated client requests an internal route with a route ID and extension number.
-2. The API confirms both extensions are active and owned by the same organization.
-3. The API returns a short-lived, signed route authorization.
-4. The Telnyx client creates a parked WebRTC leg containing the signed headers.
-5. `voice-webhook.ts` classifies the event and delegates it to `parked-client-handler.ts`.
-6. The handler validates the signed reservation, fans out to every active destination device, and stores the call pair.
-7. Internal destinations Dial with Telnyx `link_to` so the first answered device is bridged natively. PSTN destinations stay unanswered until they answer, then Vocivo answers the parked caller and bridges.
-8. The first destination to answer is atomically claimed; losing device legs are ended.
-9. Hangup events terminate both legs and write one final route state.
+On the managed edge, `calling/routes/voice-webhook.ts` coordinates parked and
+destination Telnyx legs through the call stores. The stores arbitrate destination
+winners and cancellation. Those files are not the SIP.js transport implementation.
 
-## Tenant Security
+The engine's established state starts the visible call duration. That is a
+signaling timestamp, not proof of audible two-way RTP. Media health is tracked
+separately. A network failure must stop local media/UI within the configured
+recovery bound. Native Answer waits for the real invitation and successful SIP
+accept, with a bounded action timeout. Every subscription has a teardown.
 
-- Every customer resource has an explicit organization owner.
-- Session organization claims fail closed; there is no default customer tenant.
-- Company administrators cannot access Vocivo platform credentials or another tenant's resources.
-- PostgreSQL tenant context and row-level policies backstop application checks.
-- Telnyx webhooks require Ed25519 signature verification and replay protection.
-- Unresolved inbound events are quarantined without customer assignment.
+## Data and Secrets
 
-## Quality Gates
+Sessions and routes must resolve an explicit organization. Feature routes enforce
+role/ownership; stores use shared transaction/CAS helpers and tenant context.
+Some existing platform/directory configuration is shared, so do not assume a
+folder move itself creates a security boundary. Test each cross-tenant operation.
 
-Every pull request must pass:
+Carrier API keys, edge shared secrets and signing keys remain server-side. SIP
+clients receive only the authenticated device's temporary credential over HTTPS;
+mobile caches it in SecureStore. Do not put platform secrets into public build
+variables, fixtures, logs, documentation, or commits.
 
-```bash
-./verify.sh
-```
+## Release Gates
 
-Passing source checks do not replace physical-device acceptance testing. TestFlight and Android release candidates must also pass killed-state ringing, two-way audio, Wi-Fi/cellular migration, multi-device answer cancellation, transfer, hold, and conference scenarios.
+Run `bash verify.sh` from the root. Also run browser UI checks and the relevant
+Python/native suites when those layers change. [CONTRIBUTING.md](CONTRIBUTING.md)
+lists commands. Passing mocks and compilation does not prove physical-device
+ringing, carrier audio or capacity. Keep those acceptance gates explicit.
+
+Strict registration changes require the matching SIP config before Vercel
+promotion. Use the pinned Kamailio image's parser on staged configuration, retain
+the prior server backup, and inspect live container health before promoting HTTP
+changes. Vercel does not ship a TestFlight or APK update.

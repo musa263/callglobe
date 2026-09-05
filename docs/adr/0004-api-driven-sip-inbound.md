@@ -46,7 +46,7 @@ tenant-scoped, in the PBX configuration, and would be untestable outside a live 
 **Not deployed, and now contested.** The FreeSWITCH half of this ADR (`autoload_configs/xml_curl.conf.xml` and the
 entrypoint hook that enables `mod_xml_curl`) never reached `vocivo-sip`, and was removed from `services/sip` when
 the live configuration was imported as the source of truth. It remains in history at `e51204e~1`. The API half —
-`frontend/api/_lib/sip-dialplan.ts` and the `sip-dialplan`, `sip-prompt` and `sip-voicemail` routes — is deployed
+`frontend/api/_lib/features/sip/sip-dialplan.ts` and the `sip-dialplan`, `sip-prompt` and `sip-voicemail` routes — is deployed
 and unit-tested, but nothing calls it.
 
 Meanwhile the running edge carries a different, simpler inbound design: a `curl`-driven dialplan that asks

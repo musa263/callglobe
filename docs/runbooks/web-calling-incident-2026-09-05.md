@@ -9,13 +9,13 @@ before release; it does not certify the production media path.
   `storeSession()` deliberately strips that bearer. Reloading therefore never
   fetched voice configuration or registered either phone provider. Startup now
   uses the server-verified profile identity and cookie-authenticated API calls.
-- `frontend/src/lib/api.js`: legacy credential migration discarded the whole
+- `frontend/src/shared/api.js`: legacy credential migration discarded the whole
   account entry. It now removes the bearer but retains metadata so the existing
   httpOnly cookie can be verified. An invalid cookie still prevents registration.
-- `frontend/src/hooks/useSipVoice.js`: SIP incoming calls had no ringtone path.
+- `frontend/src/features/calling/hooks/useSipVoice.js`: SIP incoming calls had no ringtone path.
   The incoming tone now stops on answer, termination, replacement, and unmount.
   The previously inert Resume audio action now retries browser media playback.
-- `frontend/src/voice/sipSession.js`: the audio element was captured before it
+- `frontend/src/features/calling/engine/sipSession.js`: the audio element was captured before it
   necessarily existed, and tracks arriving after Established were ignored.
   Playback now resolves the element at answer, handles subsequent tracks, and
   releases the owned media binding and listeners during teardown.

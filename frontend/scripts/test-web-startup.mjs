@@ -43,7 +43,7 @@ try {
     };
     return route.fulfill({ json: data[path] || {} });
   });
-  await page.route('**/src/voice/sipSession*', (route) => route.fulfill({
+  await page.route('**/src/features/calling/engine/sipSession*', (route) => route.fulfill({
     contentType: 'application/javascript',
     body: `
       export async function connectSipUserAgent(input) {
@@ -78,8 +78,8 @@ try {
     `,
   }));
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('status', { name: 'Loading Vocivo' }).waitFor();
-  await page.waitForFunction(() => document.querySelector('.loading-brand img')?.naturalWidth > 0);
+  await page.getByRole('status').filter({ has: page.getByRole('heading', { name: /Welcome back|Your business line/ }) }).waitFor();
+  await page.waitForFunction(() => document.querySelector('.opening-art svg')?.getBoundingClientRect().width > 0);
   await page.screenshot({ path: '/tmp/vocivo-loading-desktop.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
@@ -88,7 +88,7 @@ try {
   assert.equal(typeof releaseSession, 'function');
   holdSession = false;
   releaseSession();
-  console.log('PASS: branded loading screen renders its image without overflow on desktop and mobile');
+  console.log('PASS: current branded loading screen renders without overflow on desktop and mobile');
   await page.getByRole('heading', { name: 'Make a call' }).waitFor();
   await page.waitForFunction(() => !!window.sipInput);
   assert.equal(await page.getByText('Ready for calls', { exact: true }).count(), 0);

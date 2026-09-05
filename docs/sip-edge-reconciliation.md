@@ -31,7 +31,7 @@ changed. The tree was retrieved with `Ops · Droplets → dump-config` and verif
 
 **1. The deployed inbound dialplan and the deployed API disagree.**
 `freeswitch/dialplan/public.xml` branches on `"action":"closed|ivr|ai|queue|bridge"` in the `/api/voice/sip-inbound`
-response. `frontend/api/_lib/sip-inbound.ts` returns `{enabled, reason, organizationId, usernames, bridge}` and has
+response. `frontend/api/_lib/features/sip/sip-inbound.ts` returns `{enabled, reason, organizationId, usernames, bridge}` and has
 no `action` field at all. With today's API every inbound call would fall through to `vocivo-inbound-unroutable`
 and answer `480`. The server half of that richer design was never merged here.
 
@@ -47,7 +47,7 @@ so registration works — it just logs an error on every challenge and gives up 
 ## What this means for the inbound project (ADR 0004)
 
 ADR 0004 specified inbound via `mod_xml_curl`, asking the API for a dialplan document at each stage. That work is
-built and unit-tested on the API side (`frontend/api/_lib/sip-dialplan.ts` and its route, prompt and voicemail
+built and unit-tested on the API side (`frontend/api/_lib/features/sip/sip-dialplan.ts` and its route, prompt and voicemail
 endpoints) but its FreeSWITCH half — `autoload_configs/xml_curl.conf.xml` and the entrypoint hook — was never
 deployed, and is removed from `services/sip` by this import. It remains in git history at `e51204e~1`.
 

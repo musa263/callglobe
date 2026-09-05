@@ -42,16 +42,16 @@ jest.mock('@telnyx/react-voice-commons-sdk', () => {
   };
 });
 
-jest.mock('../../src/lib/api', () => ({
+jest.mock('../../src/shared/api', () => ({
   api: { get: jest.fn(), post: jest.fn(async () => ({ token: 'test-token', expires_in: 3600 })) },
 }));
 
-jest.mock('../../src/lib/ringtone', () => ({
+jest.mock('../../src/features/calling/media/ringtone', () => ({
   applyIncomingRingtone: jest.fn(async () => undefined),
   loadIncomingRingtone: jest.fn(async () => 'system'),
 }));
 
-jest.mock('../../src/context/AuthContext', () => {
+jest.mock('../../src/features/auth/AuthContext', () => {
   const auth = {
     loading: false,
     isAuthenticated: false,
@@ -61,7 +61,7 @@ jest.mock('../../src/context/AuthContext', () => {
   return { useAuth: () => auth, __authState: auth };
 });
 
-jest.mock('../../src/lib/voipClient', () => {
+jest.mock('../../src/features/calling/runtime/voipClient', () => {
   class TestSubject {
     private listeners = new Set<any>();
     private currentValue: unknown;
@@ -115,9 +115,9 @@ jest.mock('../../src/lib/voipClient', () => {
 
 import { TelnyxConnectionState, TelnyxVoipClient, VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
 import NetInfo from '@react-native-community/netinfo';
-import { VoiceProvider, VoiceRoot, useVoice } from '../../src/context/VoiceContext';
-import { loadVoiceSession, persistVoiceSession, voipClient } from '../../src/lib/voipClient';
-import { voice } from '../../src/voice/voiceClientFacade';
+import { VoiceProvider, VoiceRoot, useVoice } from '../../src/features/calling/VoiceContext';
+import { loadVoiceSession, persistVoiceSession, voipClient } from '../../src/features/calling/runtime/voipClient';
+import { voice } from '../../src/features/calling/engine/voiceClientFacade';
 
 function immediateSubject<T>(initial: T) {
   const listeners = new Set<(value: T) => void>();
@@ -231,7 +231,7 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
 });
 
 test('killed-state native push bootstraps a fresh secure voice session before HTTP auth completes', async () => {
-  const authState = (require('../../src/context/AuthContext') as any).__authState;
+  const authState = (require('../../src/features/auth/AuthContext') as any).__authState;
   authState.loading = true;
   authState.isAuthenticated = false;
   const freshSession = {

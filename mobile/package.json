@@ -11,7 +11,7 @@
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "node --import tsx --test src/lib/*.test.ts src/voice/*.test.ts tests/voip/voipClient.test.ts",
+    "test:unit": "node ../scripts/test-files.mjs src tests/voip",
     "test:integration": "jest --runInBand"
   },
   "dependencies": {

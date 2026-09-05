@@ -13,32 +13,32 @@ jest.mock('@telnyx/react-voice-commons-sdk', () => ({
   createTokenConfig: jest.fn(),
   TelnyxVoipClient: { isLaunchedFromPushNotification: jest.fn(async () => false) },
 }));
-jest.mock('../../src/lib/api', () => ({ api: { get: jest.fn(), post: jest.fn() } }));
-jest.mock('../../src/lib/ringtone', () => ({
+jest.mock('../../src/shared/api', () => ({ api: { get: jest.fn(), post: jest.fn() } }));
+jest.mock('../../src/features/calling/media/ringtone', () => ({
   applyIncomingRingtone: jest.fn(async () => undefined),
   loadIncomingRingtone: jest.fn(async () => 'system'),
 }));
-jest.mock('../../src/lib/voipClient', () => ({
+jest.mock('../../src/features/calling/runtime/voipClient', () => ({
   getVoicePushToken: jest.fn(async () => 'device-token'),
   persistVoiceSession: jest.fn(async () => undefined),
   voipClient: { loginWithToken: jest.fn() },
 }));
-jest.mock('../../src/lib/sipNative', () => ({
+jest.mock('../../src/features/calling/runtime/sipNative', () => ({
   refreshVocivoSip: jest.fn(async () => undefined),
   ensureSipRegistration: jest.fn(async () => 3600),
 }));
-jest.mock('../../src/voice/engines', () => ({
+jest.mock('../../src/features/calling/engine/engines', () => ({
   sipEngine: () => ({ name: 'sip', client: {}, platform: {} }),
   telnyxEngine: () => ({ name: 'telnyx', client: {}, platform: {} }),
 }));
-jest.mock('../../src/voice/voiceClientFacade', () => ({
+jest.mock('../../src/features/calling/engine/voiceClientFacade', () => ({
   voice: { use: jest.fn(), logout: jest.fn(async () => undefined) },
 }));
 
-import { api } from '../../src/lib/api';
-import { ensureSipRegistration } from '../../src/lib/sipNative';
-import { persistVoiceSession, voipClient } from '../../src/lib/voipClient';
-import { useVoiceRegistration } from '../../src/voice/useVoiceRegistration';
+import { api } from '../../src/shared/api';
+import { ensureSipRegistration } from '../../src/features/calling/runtime/sipNative';
+import { persistVoiceSession, voipClient } from '../../src/features/calling/runtime/voipClient';
+import { useVoiceRegistration } from '../../src/features/calling/engine/useVoiceRegistration';
 
 const iceServers = [{ urls: 'turn:relay.example:3478', username: 'temporary', credential: 'test' }];
 const sipCredentials = { username: 'extension-user', password: 'test', domain: 'sip.example', wsUri: 'wss://sip.example', expires_in: 3600, ice_servers: iceServers };

@@ -25,7 +25,7 @@ No live routing, credentials, database records, or cloud services were modified 
 ### H01. REGISTER authentication is not bound to the AOR being registered
 **Open. Security / SIP authentication.**
 
-Evidence: [frontend/api/_lib/routes/voice-sip-auth.ts:43](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/routes/voice-sip-auth.ts:43>), [services/sip/kamailio/kamailio.cfg:226](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/services/sip/kamailio/kamailio.cfg:226>).
+Evidence: [frontend/api/_lib/features/sip/routes/voice-sip-auth.ts:43](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/features/sip/routes/voice-sip-auth.ts:43>), [services/sip/kamailio/kamailio.cfg:226](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/services/sip/kamailio/kamailio.cfg:226>).
 
 The API validates the Digest username/password but never compares the supplied From/To users with that authenticated username. Kamailio passes those users to the API, then calls save("location") after a successful password check without an ownership comparison. A valid credential for one extension is therefore not sufficient proof that the requested registration AOR belongs to it.
 
@@ -55,12 +55,12 @@ Impact: cold phones can display native ringing but never receive the INVITE, whi
 
 Remediation: registration-driven transaction resumption/forking with a bounded deadline, cancellation guards, one winner, and rejection of late answers. Do not restore the old repeated async_route loop: this configuration documents its prior branch-exhaustion failure. Validate no-contact, web-already-online, two phones, slow registration, and CANCEL-during-wake cases on the actual SIP stack.
 
-**Audible unavailable handling remains missing for direct internal calls.** Those calls bypass FreeSWITCH, while the server-side spoken prompts are in its dialplan. The local UI now displays a friendly message, but that is not an audible announcement. Add a tenant-aware announcement/media route and verify early media or answer/playback/hangup on both clients. The web client currently disables early media at [frontend/src/voice/sipSession.js:101](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipSession.js:101>).
+**Audible unavailable handling remains missing for direct internal calls.** Those calls bypass FreeSWITCH, while the server-side spoken prompts are in its dialplan. The local UI now displays a friendly message, but that is not an audible announcement. Add a tenant-aware announcement/media route and verify early media or answer/playback/hangup on both clients. The web client currently disables early media at [frontend/src/features/calling/engine/sipSession.js:101](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipSession.js:101>).
 
 ### H04. Mid-call re-INVITEs are processed as new outbound/internal calls
 **Open. Signaling / network handover / hold.**
 
-Evidence: [services/sip/kamailio/kamailio.cfg:177](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/services/sip/kamailio/kamailio.cfg:177>), [mobile/src/voice/sipStackSipJs.ts:158](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/sipStackSipJs.ts:158>).
+Evidence: [services/sip/kamailio/kamailio.cfg:177](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/services/sip/kamailio/kamailio.cfg:177>), [mobile/src/features/calling/engine/sipStackSipJs.ts:158](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/sipStackSipJs.ts:158>).
 
 All INVITEs enter route(INVITE) before the has_totag()/loose_route() dialog handler. SIP.js hold and ICE restart send session re-INVITEs without the initial authorization headers. Internal calls consequently encounter the new-call route-token check again; their in-dialog Request-URI may also be a contact rather than the originally authorized extension.
 
@@ -71,7 +71,7 @@ Remediation: validate and route in-dialog requests before initial INVITE authori
 ### H05. Native Answer can be acknowledged before an INVITE exists; push wake is not connected to registration
 **Open. iOS and Android background call lifecycle.**
 
-Evidence: [mobile/src/voice/callUi.ts:112](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/callUi.ts:112>), [mobile/src/voice/callUi.ts:132](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/callUi.ts:132>), [mobile/src/lib/sipNative.ts:130](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/lib/sipNative.ts:130>), [mobile/native/ios/VocivoSipCallManager.swift:240](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:240>).
+Evidence: [mobile/src/features/calling/engine/callUi.ts:112](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/callUi.ts:112>), [mobile/src/features/calling/engine/callUi.ts:132](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/callUi.ts:132>), [mobile/src/features/calling/runtime/sipNative.ts:130](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/runtime/sipNative.ts:130>), [mobile/native/ios/VocivoSipCallManager.swift:240](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:240>).
 
 The native Answer callback immediately invokes bridge.answer(callId); if the INVITE has not arrived, requireSession throws and the binding only logs the failure. There is no pending-answer queue here. CallKit's action is fulfilled immediately after emitting the JS event. createSipVoiceClient does not supply bindCallUi's optional onPushWake callback, so the received push event does not itself refresh/register SIP.
 
@@ -93,7 +93,7 @@ Remediation: implement the supported incoming-call notification/full-screen beha
 ### H07. Registration retry was conditional on socket loss, not registration loss
 **Fixed locally. Web and mobile signaling.**
 
-Evidence: [frontend/src/voice/sipRegistrationKeeper.js:36](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipRegistrationKeeper.js:36>), [mobile/src/voice/sipRegistrationKeeper.ts:38](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/sipRegistrationKeeper.ts:38>), [frontend/src/voice/sipSession.js:42](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipSession.js:42>), [frontend/src/hooks/useSipVoice.js:191](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/hooks/useSipVoice.js:191>).
+Evidence: [frontend/src/features/calling/engine/sipRegistrationKeeper.js:36](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipRegistrationKeeper.js:36>), [mobile/src/features/calling/engine/sipRegistrationKeeper.ts:38](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/sipRegistrationKeeper.ts:38>), [frontend/src/features/calling/engine/sipSession.js:42](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipSession.js:42>), [frontend/src/features/calling/hooks/useSipVoice.js:191](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/hooks/useSipVoice.js:191>).
 
 A failed REGISTER on a still-connected socket could remain unregistered indefinitely. Stale SDK Registered state could also prevent re-registration after transport recovery. The web hook marked Ready immediately after sending the request, before the registrar acknowledged it.
 
@@ -104,7 +104,7 @@ Validation: web/mobile keeper regressions plus the mounted web App test. This do
 ### H08. Web transport loss does not bound the lifetime of an active call UI
 **Open. Web state/media recovery.**
 
-Evidence: [frontend/src/hooks/useSipVoice.js:191](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/hooks/useSipVoice.js:191>), [frontend/src/voice/sipSession.js:37](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipSession.js:37>), [frontend/src/voice/sipSession.js:127](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipSession.js:127>).
+Evidence: [frontend/src/features/calling/hooks/useSipVoice.js:191](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/hooks/useSipVoice.js:191>), [frontend/src/features/calling/engine/sipSession.js:37](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipSession.js:37>), [frontend/src/features/calling/engine/sipSession.js:127](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipSession.js:127>).
 
 Transport loss updates registration readiness and retries signaling, but does not start an active-call media-health deadline or reconcile an orphaned call. The web adapter has no active peer ICE-failure recovery listener. A call whose termination cannot arrive over the broken signaling path can remain displayed as active.
 
@@ -133,7 +133,7 @@ Changes: verify cached WAV structure/frame metadata, regenerate invalid entries,
 ### H11. Public SIP extension lookup permitted untrusted sources
 **Fixed locally; server validation/deployment still required. SIP ingress security.**
 
-Evidence: [services/sip/kamailio/kamailio.cfg:451](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/services/sip/kamailio/kamailio.cfg:451>), [frontend/api/_lib/sip-config.test.ts:7](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/sip-config.test.ts:7>).
+Evidence: [services/sip/kamailio/kamailio.cfg:451](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/services/sip/kamailio/kamailio.cfg:451>), [frontend/api/_lib/features/sip/sip-config.test.ts:7](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/features/sip/sip-config.test.ts:7>).
 
 The public non-loopback extension branch could lookup/fork contacts or trigger pushes without checking that the sender was a trusted trunk. Added TRUNK_SOURCE allowlisting before both lookup and wake-up.
 
@@ -144,14 +144,14 @@ Validation: structural regression guard passes. Kamailio's runtime parser and li
 ### M01. Outgoing ringback represented local setup, not remote ringing
 **Fixed locally on web.**
 
-Evidence: [frontend/src/hooks/useSipVoice.js:259](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/hooks/useSipVoice.js:259>), [frontend/src/hooks/useSipVoice.js:289](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/hooks/useSipVoice.js:289>), [frontend/src/voice/sipSession.js:117](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipSession.js:117>).
+Evidence: [frontend/src/features/calling/hooks/useSipVoice.js:259](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/hooks/useSipVoice.js:259>), [frontend/src/features/calling/hooks/useSipVoice.js:289](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/hooks/useSipVoice.js:289>), [frontend/src/features/calling/engine/sipSession.js:117](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipSession.js:117>).
 
 The web client played a ringtone before route lookup/INVITE progress. It now starts ringback only on SIP 180 and stops on answer/termination; 100 Trying does not ring. The browser regression verifies no tone while route setup is pending and after answer. No simulated network result was introduced.
 
 ### M02. Routine call outcomes were rendered as red protocol errors
 **Fixed locally on SIP web/mobile paths.**
 
-Evidence: [frontend/src/voice/sipDial.js:37](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/voice/sipDial.js:37>), [frontend/src/App.jsx:292](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/App.jsx:292>), [mobile/src/context/VoiceContext.tsx:328](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/context/VoiceContext.tsx:328>), [mobile/src/screens/DialerScreen.tsx:131](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/screens/DialerScreen.tsx:131>).
+Evidence: [frontend/src/features/calling/engine/sipDial.js:37](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/engine/sipDial.js:37>), [frontend/src/App.jsx:292](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/App.jsx:292>), [mobile/src/features/calling/VoiceContext.tsx:328](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/VoiceContext.tsx:328>), [mobile/src/features/calling/screens/DialerScreen.tsx:131](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/screens/DialerScreen.tsx:131>).
 
 480/408, busy, and declined outcomes now use friendly notices; actual failures retain error treatment. Mobile carries the numeric termination code through the bridge instead of losing the distinction, and allows messages to wrap. Desktop/mobile web screenshots confirm the neutral notice and no overflow.
 
@@ -169,7 +169,7 @@ Build result: main app JS decreased from about 206.91 KB to approximately 86 KB;
 ### M04. Shared PBX configuration still lacks a database tenant boundary
 **Open. Storage isolation / concurrency scope.**
 
-Evidence: [frontend/api/_lib/pbx-config-store.ts:61](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/pbx-config-store.ts:61>), [frontend/api/_lib/object-store.ts:148](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/object-store.ts:148>), [frontend/api/_lib/object-store.ts:252](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/object-store.ts:252>), [frontend/api/_lib/object-store.ts:695](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/object-store.ts:695>).
+Evidence: [frontend/api/_lib/features/organizations/pbx-config-store.ts:61](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/features/organizations/pbx-config-store.ts:61>), [frontend/api/_lib/shared/object-store.ts:148](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/shared/object-store.ts:148>), [frontend/api/_lib/shared/object-store.ts:252](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/shared/object-store.ts:252>), [frontend/api/_lib/shared/object-store.ts:695](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/shared/object-store.ts:695>).
 
 Tenant SaaS subscriptions/admins/entitlements have row-scoped queries and RLS policies. PBX configuration still lives in one platform object; the generic object table has no organization column or tenant RLS. Its ownership boundary relies on application filtering.
 
@@ -225,7 +225,7 @@ Remediation: durable idempotent outbox delivery with retry/backoff and dead-lett
 ### M10. Caller identity and native call-history reasons remain inconsistent
 **Open. Mobile identity / native UI.**
 
-Evidence: [mobile/src/voice/useVoiceRegistration.ts:118](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/useVoiceRegistration.ts:118>), [mobile/native/ios/VocivoSipCallManager.swift:104](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:104>), [mobile/native/ios/VocivoSipCallManager.swift:136](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:136>), [mobile/src/voice/callUi.ts:99](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/callUi.ts:99>).
+Evidence: [mobile/src/features/calling/engine/useVoiceRegistration.ts:118](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/useVoiceRegistration.ts:118>), [mobile/native/ios/VocivoSipCallManager.swift:104](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:104>), [mobile/native/ios/VocivoSipCallManager.swift:136](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:136>), [mobile/src/features/calling/engine/callUi.ts:99](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/callUi.ts:99>).
 
 The SIP registration path sets displayName to the opaque SIP username. iOS uses a phoneNumber handle for any non-empty number, including SIP text, and collapses several termination reasons into remote-ended. The binding discards the richer termination distinction when reporting to native UI.
 
@@ -234,7 +234,7 @@ Remediation: resolve verified colleague identity server-side, keep routable SIP 
 ### M11. Push expiration/token refresh coverage differs by platform
 **Open. Background delivery.**
 
-Evidence: [mobile/native/android/VocivoSipIncomingCall.kt:32](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/android/VocivoSipIncomingCall.kt:32>), [mobile/native/ios/VocivoSipCallManager.swift:190](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:190>), [frontend/src/sw.js:9](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/sw.js:9>), [mobile/src/voice/useVoiceRegistration.ts:83](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/voice/useVoiceRegistration.ts:83>).
+Evidence: [mobile/native/android/VocivoSipIncomingCall.kt:32](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/android/VocivoSipIncomingCall.kt:32>), [mobile/native/ios/VocivoSipCallManager.swift:190](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/native/ios/VocivoSipCallManager.swift:190>), [frontend/src/sw.js:9](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/sw.js:9>), [mobile/src/features/calling/engine/useVoiceRegistration.ts:83](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/engine/useVoiceRegistration.ts:83>).
 
 Android's custom incoming handler checks signed-in state but not push expiry. The service worker shows generic incoming notifications without call expiry/cancellation reconciliation. iOS performs an expiry check, but its token-invalidation event only clears native storage. Token changes still depend on app-side registration reaching the server.
 
@@ -268,7 +268,7 @@ Remediation: review each advisory against the installed dependency path and actu
 ### M14. Some displayed SIP call tools were not implemented; Hold simulated success
 **False-success UI fixed locally; signaling implementation remains open. Web feature behavior.**
 
-Evidence: [frontend/src/hooks/useSipVoice.js:468](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/hooks/useSipVoice.js:468>), [frontend/src/App.jsx:185](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/App.jsx:185>).
+Evidence: [frontend/src/features/calling/hooks/useSipVoice.js:468](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/features/calling/hooks/useSipVoice.js:468>), [frontend/src/App.jsx:185](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/App.jsx:185>).
 
 The SIP hook exposes an unsupported handler for advanced call operations while the shared call UI presented those controls. Hold additionally called optional hold/unhold methods absent from SIP.js and then changed local state without sending any request. Feature availability differs from the Telnyx engine.
 
@@ -279,14 +279,14 @@ Changed locally: removed the fake Hold transition; added capability flags; disab
 ### L01. Production design-preview entry points could be mistaken for live data
 **Fixed locally.**
 
-Evidence: [frontend/src/App.jsx:97](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/App.jsx:97>), [mobile/src/screens/AuthScreen.tsx:108](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/screens/AuthScreen.tsx:108>), [mobile/src/context/AuthContext.tsx:267](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/context/AuthContext.tsx:267>).
+Evidence: [frontend/src/App.jsx:97](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/src/App.jsx:97>), [mobile/src/features/auth/screens/AuthScreen.tsx:108](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/auth/screens/AuthScreen.tsx:108>), [mobile/src/features/auth/AuthContext.tsx:267](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/auth/AuthContext.tsx:267>).
 
 Production builds no longer offer the design-preview entry points; mobile also guards the underlying action. Development previews and test fixtures remain available for QA. No production simulated SIP transport was found in the active adapters: they instantiate SIP.js or the selected Telnyx SDK. Tests deliberately mock networks and must not be deleted as though they were live calling code.
 
 ### L02. Health labels and comments misstate the selected architecture
 **Fixed locally for the health response; other documentation cleanup remains.**
 
-Evidence: [frontend/api/platform/[resource].ts:62](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/platform/[resource].ts:62>), [frontend/api/_lib/voice-provider.ts:15](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/voice-provider.ts:15>), [mobile/src/lib/sipNative.ts:25](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/lib/sipNative.ts:25>).
+Evidence: [frontend/api/platform/[resource].ts:62](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/platform/[resource].ts:62>), [frontend/api/_lib/features/calling/voice-provider.ts:15](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/features/calling/voice-provider.ts:15>), [mobile/src/features/calling/runtime/sipNative.ts:25](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/mobile/src/features/calling/runtime/sipNative.ts:25>).
 
 The health endpoint hardcoded mediaPlane=telnyx. It now reports the configured provider and explicitly says telephonyStatus=unchecked. A configuration label is still not a live media probe. Some native comments/errors still imply a Telnyx fallback where a SIP build can instead be unavailable.
 
@@ -304,7 +304,7 @@ Remediation: distinguish compilation/unit/mock integration/native/network gates 
 - Live DNS lookup in this review: sip.vocivo.app resolves to **168.144.183.82**, matching the SIP runbook. The older PBX host **68.183.244.215** is a separate optional host in those docs.
 - Repository architecture supports **Vocivo-operated Kamailio + RTPEngine + FreeSWITCH + coturn**, with Vocivo's Python AI orchestration and web/API. These are active components, not simulated SIP or automatically obsolete migration files.
 - Web/API deployment is configured for **Vercel**, storage uses **Postgres**.
-- **Telnyx remains the configured PSTN trunk/number carrier**, with a managed-SDK fallback path still present. Internal calls on the sip edge are designed not to require Telnyx credit; see [frontend/api/_lib/voice-provider.ts:19](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/voice-provider.ts:19>). That does not make cloud CPU, bandwidth, storage, or AI providers free.
+- **Telnyx remains the configured PSTN trunk/number carrier**, with a managed-SDK fallback path still present. Internal calls on the sip edge are designed not to require Telnyx credit; see [frontend/api/_lib/features/calling/voice-provider.ts:19](</Users/musausman/Desktop/CLAUDE APPS PROJECTS/callglobe-Codex/frontend/api/_lib/features/calling/voice-provider.ts:19>). That does not make cloud CPU, bandwidth, storage, or AI providers free.
 - VOCIVO_VOICE_EDGE must actually be sip in the live environment for that client path. Missing/other values select Telnyx. Reading source alone does not verify the live setting.
 - The public health response observed during this review still used the old hardcoded Telnyx label. It cannot prove which provider carried a particular call.
 - **Legal/account ownership of the cloud resources was not verified.** DNS and source prove addressing/design, not who owns the DigitalOcean/Telnyx/Vercel accounts. This review had no authenticated cloud-account inventory or successful SSH inspection of the live SIP containers. Do not claim the whole service is independent of Telnyx, or that all infrastructure is owned by Vocivo, from these facts alone.

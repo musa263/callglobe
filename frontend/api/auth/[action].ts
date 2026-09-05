@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import login from '../_lib/routes/auth-login.js';
-import password from '../_lib/routes/auth-password.js';
-import session from '../_lib/routes/auth-session.js';
-import enroll from '../_lib/routes/auth-enroll.js';
-import profile from '../_lib/routes/auth-profile.js';
-import bootstrap from '../_lib/routes/mobile-bootstrap.js';
+import login from '../_lib/features/auth/routes/auth-login.js';
+import password from '../_lib/features/auth/routes/auth-password.js';
+import session from '../_lib/features/auth/routes/auth-session.js';
+import enroll from '../_lib/features/enrollment/routes/auth-enroll.js';
+import profile from '../_lib/features/auth/routes/auth-profile.js';
+import bootstrap from '../_lib/features/auth/routes/mobile-bootstrap.js';
 
 const routes = { login, password, session, enroll, profile, bootstrap } as const;
 

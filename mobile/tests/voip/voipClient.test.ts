@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Call } from '@telnyx/react-voice-commons-sdk';
-import { CallLifecycleRegistry, transactCallWaiting } from '../../src/lib/callLifecycle';
-import { attachIceFailureListener, hasConfirmedBidirectionalMedia, isBidirectionalMediaReady, isSetupSignalingBlip, isTransportNetworkMigration, isVoiceSessionFresh, waitForBidirectionalMedia, VoiceMediaRecoveryCoordinator } from '../../src/lib/voiceRecovery';
+import { CallLifecycleRegistry, transactCallWaiting } from '../../src/features/calling/state/callLifecycle';
+import { attachIceFailureListener, hasConfirmedBidirectionalMedia, isBidirectionalMediaReady, isSetupSignalingBlip, isTransportNetworkMigration, isVoiceSessionFresh, waitForBidirectionalMedia, VoiceMediaRecoveryCoordinator } from '../../src/features/calling/media/voiceRecovery';
 
 class MockPeerConnection {
   connectionState = 'connected';

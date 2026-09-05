@@ -2,7 +2,7 @@
 
 ## Start Here
 
-1. Read `ARCHITECTURE.md` and the relevant decision record under `docs/adr/`.
+1. Read `docs/FEATURES.md`, the owning feature's README, and `ARCHITECTURE.md`.
 2. Identify the owning layer before editing code.
 3. Keep changes within one domain unless a contract intentionally changes.
 4. Add a regression test before or with every signaling, authorization, or billing fix.
@@ -21,12 +21,37 @@
 
 ## Naming
 
+Place code under `src/features/<feature>/` in each client and
+`frontend/api/_lib/features/<feature>/` in the backend. Colocate domain tests.
+Feature `routes/` contain HTTP handlers; public files in `frontend/api/` retain
+the deployed URL contract. Keep `App` and `AdminConsole` as composition roots.
+Shared folders are for genuinely cross-feature primitives, not miscellaneous code.
+Add the flow, key function responsibilities, failure modes, and test commands to
+the feature README whenever introducing a behavior or changing an interface.
+
 - `*-store.ts`: persistence only.
 - `*-handler.ts`: one event or request workflow.
 - `*-service.ts`: reusable domain orchestration.
 - `contracts.ts`: transport and domain interfaces with no side effects.
 - `support.ts`: small shared utilities for one bounded domain.
 - Tests use the source filename plus `.test.ts` or `.integration.test.tsx`.
+
+## Local Validation
+
+```bash
+bash verify.sh
+cd frontend
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-sip-ui.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-web-startup.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node --import tsx scripts/test-feature-pages.mjs
+```
+
+The browser scripts expect Vite at `http://127.0.0.1:5183` unless
+`VOCIVO_TEST_ORIGIN` is set. Their HTTP/SIP fixtures mount the real application
+code, but do not exercise the production carrier or place calls. Run Python
+service tests using the dependency instructions in each service README.
+Physical-device acceptance requires separate foreground/background, killed-state,
+two-way audio, cancellation, and network migration checks.
 
 ## Pull Request Checklist
 

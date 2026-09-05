@@ -16,9 +16,9 @@ This is a targeted follow-up to the earlier production-readiness audit, not a cl
 
 Section: backend SIP authentication and Kamailio registrar.
 
-- `frontend/api/_lib/routes/voice-sip-auth.ts:61` rejects REGISTER if the authenticated Digest username does not match both From and To users, their domains, and the actual request target. It performs this check before reading credential records.
-- `frontend/api/_lib/sip-registration-auth.ts:13` contains the strict identity checks. Ambiguous URI encodings are rejected rather than normalized into another account.
-- `frontend/api/_lib/routes/voice-sip-auth.ts:77` consumes a Digest replay key through the existing database-backed atomic replay ledger after successful authentication.
+- `frontend/api/_lib/features/sip/routes/voice-sip-auth.ts:61` rejects REGISTER if the authenticated Digest username does not match both From and To users, their domains, and the actual request target. It performs this check before reading credential records.
+- `frontend/api/_lib/features/sip/sip-registration-auth.ts:13` contains the strict identity checks. Ambiguous URI encodings are rejected rather than normalized into another account.
+- `frontend/api/_lib/features/sip/routes/voice-sip-auth.ts:77` consumes a Digest replay key through the existing database-backed atomic replay ledger after successful authentication.
 - `services/sip/kamailio/kamailio.cfg:250` also checks identity before registrar.save. Stateful replies prevent legitimate UDP retransmissions from consuming the same Digest twice.
 
 Validation: helper and actual HTTP-handler tests cover valid identity, extension/domain impersonation, duplicate Digest rejection, and a fresh nonce count. The HTTP-handler tests inject credential/replay stores; they are not a live Postgres or wire-level penetration test.
@@ -61,11 +61,11 @@ Validation: routing-order/security structural tests, plus a client test verifyin
 
 Section: shared mobile SIP binding, native CallKit/Telecom, and secure bootstrap.
 
-- `mobile/src/voice/callUi.ts:97` tracks pending answers by call ID. Answer waits for the matching INVITE, executes accept once, and only completes the native action after SIP accept succeeds.
+- `mobile/src/features/calling/engine/callUi.ts:97` tracks pending answers by call ID. Answer waits for the matching INVITE, executes accept once, and only completes the native action after SIP accept succeeds.
 - Cancellation, expiry, duplicate Answer, and late INVITE/push events cannot resurrect a locally ended call. Native Answer has a bounded 12-second deadline; unanswered native wake screens also expire.
 - `mobile/native/ios/VocivoSipCallManager.swift:151` and `:271` retain the CallKit answer action instead of immediately fulfilling it. Android likewise does not mark the connection active at button press.
 - `mobile/index.js:6` installs the native/SIP event binding before the visual App is loaded. Native launch events flush only after all JS listeners are attached.
-- `mobile/src/lib/sipNative.ts:45` shares a single-flight bootstrap across foreground and background paths. Cached SIP credentials are bound to the current authenticated session in SecureStore, rejected near expiry, and invalidated on logout. Concurrent logout cannot complete a stale registration.
+- `mobile/src/features/calling/runtime/sipNative.ts:45` shares a single-flight bootstrap across foreground and background paths. Cached SIP credentials are bound to the current authenticated session in SecureStore, rejected near expiry, and invalidated on logout. Concurrent logout cannot complete a stale registration.
 - Cached session access uses after-first-unlock, device-only Keychain storage so a previously unlocked, now locked iPhone can resume a call. A device freshly rebooted and never unlocked is not promised to receive authenticated calls.
 
 Validation: mobile unit races, mounted integration tests, iOS simulator compilation and Android Kotlin compilation. Successful SIP accept/native action completion is not evidence of bidirectional RTP, and no physical PushKit call was tested here.
@@ -86,9 +86,9 @@ Validation: generated Android native project compiled successfully; JS integrati
 
 Section: web SIP session and React calling hook.
 
-- `frontend/src/voice/sipCallHealth.js:2` tracks signaling and ICE/peer-connection health with explicit listener removal and bounded recovery deadlines.
+- `frontend/src/features/calling/engine/sipCallHealth.js:2` tracks signaling and ICE/peer-connection health with explicit listener removal and bounded recovery deadlines.
 - A temporary outage can recover without dropping healthy media. Failed ICE can request one serialized re-INVITE; unrecovered signaling/media clears the call after the 12-second grace window.
-- `frontend/src/hooks/useSipVoice.js:130` clears local call references, timer source, ringtone and media tracks before awaiting BYE/cancel. A hanging signaling promise cannot keep the active screen indefinitely.
+- `frontend/src/features/calling/hooks/useSipVoice.js:130` clears local call references, timer source, ringtone and media tracks before awaiting BYE/cancel. A hanging signaling promise cannot keep the active screen indefinitely.
 - Late session events cannot restore the ended screen, and peer/session listeners are removed on teardown.
 
 Validation: unit tests plus a browser regression using the real React hook. The browser test drops its mocked signaling transport while BYE never resolves, then verifies the call screen clears, the peer closes, and listeners are removed. This is not a real carrier/RTP call.

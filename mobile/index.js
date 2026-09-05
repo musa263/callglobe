@@ -1,6 +1,6 @@
 import { registerRootComponent } from 'expo';
 import { AppRegistry, NativeModules } from 'react-native';
-import { createSipVoiceClient, ensureSipRegistration } from './src/lib/sipNative';
+import { createSipVoiceClient, ensureSipRegistration } from './src/features/calling/runtime/sipNative';
 
 // Install native action listeners before any HTTP session or visual bootstrap.
 if (NativeModules.VocivoSip) createSipVoiceClient();

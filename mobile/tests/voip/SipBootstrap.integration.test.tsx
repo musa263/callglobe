@@ -3,13 +3,13 @@ jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(), setItemAsync: jest.fn(async () => undefined), deleteItemAsync: jest.fn(async () => undefined),
   AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'after-unlock-device-only',
 }));
-jest.mock('../../src/lib/api', () => ({ api: { getSessionToken: jest.fn(), post: jest.fn() } }));
-jest.mock('../../src/voice/sipStackSipJs', () => ({ createSipJsStack: jest.fn() }));
+jest.mock('../../src/shared/api', () => ({ api: { getSessionToken: jest.fn(), post: jest.fn() } }));
+jest.mock('../../src/features/calling/engine/sipStackSipJs', () => ({ createSipJsStack: jest.fn() }));
 
 import * as SecureStore from 'expo-secure-store';
-import { api } from '../../src/lib/api';
-import { createSipJsStack } from '../../src/voice/sipStackSipJs';
-import { createSipVoiceClient, disposeSipVoiceClient, ensureSipRegistration, unregisterVocivoSip } from '../../src/lib/sipNative';
+import { api } from '../../src/shared/api';
+import { createSipJsStack } from '../../src/features/calling/engine/sipStackSipJs';
+import { createSipVoiceClient, disposeSipVoiceClient, ensureSipRegistration, unregisterVocivoSip } from '../../src/features/calling/runtime/sipNative';
 
 const config = { username: 'employee-a', password: 'temporary', domain: 'sip.example', wsUri: 'wss://sip.example/ws', iceServers: [{ urls: 'turns:relay.example', username: 'ephemeral', credential: 'test' }] };
 const response = { ...config, expires_in: 3600, ice_servers: config.iceServers };
