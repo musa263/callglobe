@@ -44,7 +44,7 @@ const VoiceContext = createContext<VoiceContextValue | null>(null);
 const signallingReconnectGraceMs = 45_000;
 
 export function VoiceProvider({ children, bootstrapSession }: { children: React.ReactNode; bootstrapSession?: VoiceLoginConfig | null }) {
-  const { loading, isAuthenticated, isPreview, addHistory, profile } = useAuth();
+  const { loading, isAuthenticated, addHistory, profile } = useAuth();
   const [connection, setConnection] = useState(voice.currentConnectionState);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [waitingCall, setWaitingCall] = useState<ActiveCall | null>(null);
@@ -508,15 +508,14 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup, reportVoiceError]);
 
   useEffect(() => {
-    if (!isAuthenticated || isPreview) return;
+    if (!isAuthenticated) return;
     void ensureCallMicrophonePermission().catch((failure) => reportVoiceError('request microphone permission', failure));
-  }, [isAuthenticated, isPreview, reportVoiceError]);
+  }, [isAuthenticated, reportVoiceError]);
 
   useVoiceRegistration({
     activeCallRef,
     bootstrapSession,
     isAuthenticated,
-    isPreview,
     loading,
     loginConfigRef,
     reportVoiceError,
@@ -623,14 +622,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const startCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null, displayName?: string, photoUrl?: string) => {
     setError(null);
     if (startingCallRef.current) throw new Error('A call is already starting.');
-    if (isPreview) {
-      const previewCall: ActiveCall = { number, displayName: displayName || rate.country_name, destinationCountry: rate.country_name, countryCode: rate.country_code, ratePerMinute: rate.rate_per_min ?? undefined, photoUrl, phase: 'connecting', startedAt: Date.now(), muted: false, speaker: false, onHold: false };
-      activeCallRef.current = previewCall;
-      setActiveCall(previewCall);
-      setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'ringing' } : null), 650);
-      setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 1700);
-      return;
-    }
     startingCallRef.current = true;
     const guardAttempt = startAttemptRef.current;
     try {
@@ -676,10 +667,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     } finally {
       if (startAttemptRef.current === attempt) startingCallRef.current = false;
     }
-  }, [attachCall, followRoute, isPreview, profile?.full_name, startRingback, stopRingback]);
+  }, [attachCall, followRoute, profile?.full_name, startRingback, stopRingback]);
 
   const startSecondCall = useCallback(async (number: string, rate: CallRate, callerNumber?: CallerNumber | null) => {
-    if (isPreview) throw new Error('Add call requires a live calling connection.');
     if (connection !== ConnectionState.CONNECTED) throw new Error('Call service is still connecting.');
     if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
     if (voice.currentCalls.some((call) => call.currentState === CallState.HELD)) throw new Error('Resume or merge the held call before adding another caller.');
@@ -721,18 +711,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     } finally {
       multiCallBusyRef.current = false;
     }
-  }, [attachCall, connection, followRoute, isPreview, profile?.full_name, startRingback, stopRingback]);
+  }, [attachCall, connection, followRoute, profile?.full_name, startRingback, stopRingback]);
 
   const startInternalCall = useCallback(async (sipUsername: string, extension: string, displayName: string, photoUrl?: string) => {
     setError(null);
     if (startingCallRef.current) throw new Error('A call is already starting.');
-    if (isPreview) {
-      const previewCall: ActiveCall = { number: extension, displayName, destinationCountry: 'Internal', photoUrl, phase: 'connecting', startedAt: Date.now(), muted: false, speaker: false, onHold: false };
-      activeCallRef.current = previewCall;
-      setActiveCall(previewCall);
-      setTimeout(() => setActiveCall((current) => current ? { ...current, phase: 'active', connectedAt: Date.now() } : null), 900);
-      return;
-    }
     startingCallRef.current = true;
     const guardAttempt = startAttemptRef.current;
     try {
@@ -789,12 +772,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     } finally {
       if (startAttemptRef.current === attempt) startingCallRef.current = false;
     }
-  }, [attachCall, followRoute, isPreview, profile?.extension, profile?.full_name, startRingback, stopRingback]);
+  }, [attachCall, followRoute, profile?.extension, profile?.full_name, startRingback, stopRingback]);
 
   const transferCall = useCallback(async (targetExtensionId: string) => {
-    if (isPreview) throw new Error('Transfer requires a live routed business call.');
     await api.post('/api/voice/transfer', { targetExtensionId });
-  }, [isPreview]);
+  }, []);
 
   const answerWaitingCall = useCallback(async () => {
     if (!waitingCall?.id) return;
@@ -855,7 +837,6 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [attachCall, heldCall?.id]);
 
   const mergeCalls = useCallback(async () => {
-    if (isPreview) throw new Error('Call merge requires a live calling connection.');
     if (conferenceCallIdsRef.current.size) throw new Error('These calls are already merged.');
     if (multiCallBusyRef.current) throw new Error('Another call action is still completing.');
     const current = voice.currentActiveCall;
@@ -874,7 +855,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     } finally {
       multiCallBusyRef.current = false;
     }
-  }, [describeCall, heldCall?.id, isPreview]);
+  }, [describeCall, heldCall?.id]);
 
   const removeConferenceParticipant = useCallback(async (participantId: string) => {
     const currentConference = conference;
@@ -1039,17 +1020,17 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [reportVoiceError]);
   const sendDtmf = useCallback(async (digit: string) => { if (callRef.current) await callRef.current.dtmf(digit); }, []);
 
-  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, notice, isReady: isPreview || connection === ConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, notice, heldCall, isPreview, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
+  const value = useMemo(() => ({ connection, activeCall, waitingCall, heldCall, conference, duration, error, notice, isReady: connection === ConnectionState.CONNECTED, pushRegistration, refreshIncomingCalls, startCall, startSecondCall, startInternalCall, transferCall, answerWaitingCall, rejectWaitingCall, swapCalls, mergeCalls, removeConferenceParticipant, endCall, answerCall, toggleMute, toggleHold, toggleSpeaker, sendDtmf }), [activeCall, answerCall, answerWaitingCall, conference, connection, duration, endCall, error, notice, heldCall, mergeCalls, pushRegistration, refreshIncomingCalls, rejectWaitingCall, removeConferenceParticipant, sendDtmf, startCall, startInternalCall, startSecondCall, swapCalls, toggleHold, toggleMute, toggleSpeaker, transferCall, waitingCall]);
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>;
 }
 
 export function VoiceRoot({ children }: { children: React.ReactNode }) {
-  const { loading, isAuthenticated, isPreview } = useAuth();
+  const { loading, isAuthenticated } = useAuth();
   const [bootstrapSession, setBootstrapSession] = useState<VoiceLoginConfig | null>(null);
 
   useEffect(() => {
-    if (isPreview || (!loading && !isAuthenticated)) {
+    if (!loading && !isAuthenticated) {
       setBootstrapSession(null);
       return;
     }
@@ -1074,7 +1055,7 @@ export function VoiceRoot({ children }: { children: React.ReactNode }) {
     };
     prepare();
     return () => { canceled = true; };
-  }, [isAuthenticated, isPreview, loading]);
+  }, [isAuthenticated, loading]);
 
   // Mount the native Telnyx runtime on the first render. PushKit and Android
   // Telecom actions must not wait behind the visual account bootstrap.

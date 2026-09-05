@@ -18,7 +18,6 @@ type VoiceRegistrationInput = {
   activeCallRef: MutableRefObject<ActiveCall | null>;
   bootstrapSession?: VoiceLoginConfig | null;
   isAuthenticated: boolean;
-  isPreview: boolean;
   loading: boolean;
   loginConfigRef: MutableRefObject<VoiceLoginConfig | null>;
   reportVoiceError: (operation: string, failure: unknown) => void;
@@ -30,7 +29,6 @@ export function useVoiceRegistration({
   activeCallRef,
   bootstrapSession,
   isAuthenticated,
-  isPreview,
   loading,
   loginConfigRef,
   reportVoiceError,
@@ -39,7 +37,7 @@ export function useVoiceRegistration({
 }: VoiceRegistrationInput) {
   useEffect(() => {
     if (loading) return;
-    if (!isAuthenticated || isPreview) {
+    if (!isAuthenticated) {
       loginConfigRef.current = null;
       // Both stacks. The carrier client alone was signed out, and the SIP
       // user agent kept its registration alive: the signed-out phone went on
@@ -335,5 +333,5 @@ export function useVoiceRegistration({
       appStateSubscription?.remove();
       networkSubscription?.();
     };
-  }, [activeCallRef, bootstrapSession, isAuthenticated, isPreview, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration]);
+  }, [activeCallRef, bootstrapSession, isAuthenticated, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration]);
 }

@@ -66,8 +66,6 @@ audio { display: none; }
 .side-footer small { color:var(--muted); font-size:10px; }
 .side-footer button { width:28px; height:28px; display:grid; place-items:center; border:0; color:var(--muted); background:transparent; }
 .main-area { min-width:0; position:relative; }
-.preview-banner { min-height:42px; padding:8px 28px; display:flex; align-items:center; justify-content:center; gap:18px; color:#674b18; background:#fff1cf; border-bottom:1px solid #ead49e; font-size:12px; font-weight:650; }
-.preview-banner button { display:flex; align-items:center; gap:5px; border:0; color:#674b18; background:transparent; font-weight:700; }
 .toast { position:fixed; top:22px; left:50%; z-index:20; transform:translateX(-50%); padding:11px 12px 11px 15px; display:flex; align-items:center; gap:16px; border:1px solid #c7ded2; border-radius:6px; color:#164f3e; background:white; box-shadow:0 12px 40px rgba(20,35,29,.15); font-size:13px; font-weight:650; }
 .toast button { width:25px; height:25px; display:grid; place-items:center; border:0; background:var(--soft); border-radius:4px; }
 .workspace-header { min-height:94px; padding:25px clamp(22px,4vw,58px) 18px; display:flex; align-items:flex-end; justify-content:space-between; gap:20px; border-bottom:1px solid var(--line); background:rgba(255,255,255,.64); }
@@ -305,7 +303,6 @@ audio { display: none; }
   .app-shell { display:block; min-height:100dvh; background:white; }
   .side-nav { display:none; }
   .main-area { min-height:100dvh; padding-bottom:72px; }
-  .preview-banner { min-height:48px; padding:8px 13px; justify-content:space-between; }
   .workspace-header { min-height:81px; padding:17px 18px 13px; align-items:center; background:white; }
   .workspace-header h1 { font-size:21px; }
   .status-badge { max-width:136px; min-height:30px; padding:0 8px; overflow:hidden; white-space:nowrap; font-size:10px; }

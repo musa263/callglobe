@@ -10,7 +10,7 @@ import { isApiConfigured } from '../lib/api';
 import { colors } from '../theme';
 
 export function AuthScreen() {
-  const { signIn, enrollWithQr, enterPreview } = useAuth();
+  const { signIn, enrollWithQr } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -104,12 +104,6 @@ export function AuthScreen() {
           <Pressable disabled={busy || !isApiConfigured} onPress={openScanner} style={({ pressed }) => [styles.qrButton, pressed && styles.pressed]}>
             <QrCode size={20} color={colors.mint} /><Text style={styles.qrButtonText}>Scan company setup QR</Text>
           </Pressable>
-
-          {__DEV__ && !isApiConfigured && (
-            <Pressable onPress={enterPreview} style={styles.preview}>
-              <Text style={styles.previewText}>Open design preview</Text>
-            </Pressable>
-          )}
         </View>
         <View style={styles.security}><ShieldCheck size={15} color={colors.textFaint} /><Text style={styles.securityText}>Your account and calls are protected in transit.</Text></View>
       </ScrollView>
@@ -143,8 +137,6 @@ const styles = StyleSheet.create({
   submitText: { color: colors.ink, fontSize: 16, fontWeight: '800' },
   pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.45 },
-  preview: { height: 48, alignItems: 'center', justifyContent: 'center' },
-  previewText: { color: colors.mint, fontSize: 14, fontWeight: '700' },
   divider: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 10 },
   dividerLine: { flex: 1, height: 1, backgroundColor: colors.line }, dividerText: { color: colors.textFaint, fontSize: 9, fontWeight: '900' },
   qrButton: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 8, borderWidth: 1, borderColor: colors.mintDark, backgroundColor: colors.panel },
