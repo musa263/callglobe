@@ -23,7 +23,8 @@ per call. From there:
    talking; the recording is transcribed, the conversation goes to the model,
    and the reply is synthesised and played.
 4. Act on what the model decided: keep talking, transfer to an extension, take
-   a message, or say goodbye and hang up.
+   a message, or say goodbye — and stay on the line. The receptionist never
+   hangs up on a caller; the caller ends the call.
 5. File the transcript back to the API.
 
 A transfer is a blind transfer back into the same dialplan, so the rules that
@@ -74,8 +75,19 @@ target's name or one of Whisper's silence fillers ("Thank you.").
 `vocivo_transfer_failed=1`, and `handle` opens with `CANNED["transfer_unanswered"]`
 — an offer to take a message — instead of the greeting.
 
-**There is no turn budget.** A conversation lasts as long as the caller needs;
-two silent turns in a row still release the line.
+**There is no turn budget, and the receptionist never hangs up.** A
+conversation lasts as long as the caller needs; the model's `wrap_up` tool says
+goodbye and leaves the line open for the caller to put down. Silence is met
+with two gentle prompts and then patience. The one exception is a line nobody
+has spoken on for `idle_hangup_seconds` (90 s) — a caller who walked away —
+which is released with a goodbye so it does not sit open for an hour.
+
+**Answers play without stops.** `_speak` sends every sentence to the voice
+engine at once (two at a time) and, whenever the next sentence is already
+rendered when the current one ends, hands both to FreeSWITCH as a single
+`file_string://` playback — no round trip, no gap. Rendering one sentence
+ahead and playing them one file at a time left a beat of silence between
+every sentence.
 
 **Every stage logs its time.** Per turn: how long the recorder ran (and whether
 it hit its limit), loudness, recognition time, model time, when the first

@@ -8,7 +8,7 @@ from pathlib import Path
 from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
-from .esl import EslConnection, channel_variable
+from .esl import EslConnection, EslProtocolError, channel_variable
 from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, Voice, drop_hallucinated_transcript, recording_stats, split_sentences
 
 log = logging.getLogger("vocivo.call")
@@ -89,10 +89,13 @@ class CallHandler:
                 conversation.add("assistant", assistant.greeting)
 
             silent_turns = 0
-            # No turn budget: the conversation lasts as long as the caller
-            # needs it to. A line nobody is talking on is still released — two
-            # silent turns in a row transfer or end the call below — and the
-            # caller hanging up ends it at once.
+            last_heard = time.monotonic()
+            wrapped_up = False
+            # No turn budget, and the receptionist never hangs up on a caller:
+            # the conversation lasts until the caller puts the phone down. The
+            # one exception is a line nobody has spoken on for
+            # `idle_hangup_seconds` — a caller who walked away — which is
+            # released with a goodbye so it does not sit open for an hour.
             while True:
                 if connection.hungup.is_set():
                     outcome = "caller_hung_up"
@@ -112,23 +115,26 @@ class CallHandler:
                     break
                 if not heard:
                     silent_turns += 1
+                    quiet_for = time.monotonic() - last_heard
+                    if quiet_for >= self._settings.idle_hangup_seconds:
+                        if not wrapped_up:
+                            outcome = "caller_went_quiet"
+                            await self._speak(connection, CANNED["goodbye_idle"], assistant.voice)
+                        await connection.hangup()
+                        break
+                    if wrapped_up:
+                        # Goodbyes have been said; the caller is hanging up in
+                        # their own time. Stay on the line quietly.
+                        continue
                     if silent_turns == 1:
                         await self._speak(connection, CANNED["not_heard"], assistant.voice)
-                        continue
-                    # Twice in a row is a bad line or an empty room. Hand the
-                    # caller to a person rather than asking a third time.
-                    outcome = "no_speech"
-                    if assistant.transfer_enabled and assistant.fallback_extension:
-                        await self._speak(connection, CANNED["transfer_fallback"], assistant.voice)
-                        transferred_to = assistant.fallback_extension
-                        await self._transfer(connection, assistant.fallback_extension, dialled)
-                        outcome = "transferred"
-                    else:
-                        await self._speak(connection, CANNED["goodbye_no_speech"], assistant.voice)
-                        await connection.hangup()
-                    break
+                    elif silent_turns == 2:
+                        await self._speak(connection, CANNED["still_here"], assistant.voice)
+                    continue
 
                 silent_turns = 0
+                last_heard = time.monotonic()
+                wrapped_up = False
                 conversation.add("caller", heard)
                 decision = await self._think(connection, conversation, assistant.voice)
                 conversation.add("assistant", decision.say)
@@ -143,9 +149,18 @@ class CallHandler:
                     if decision.note:
                         notes.append(decision.note)
                     continue
-                if decision.action == "hangup":
+                if decision.action == "wrap_up":
+                    # Goodbye has been said. The line stays open until the
+                    # caller hangs up; anything more they say is answered.
+                    wrapped_up = True
                     outcome = "message_taken" if notes else "completed"
-                    break
+                    continue
+        except EslProtocolError as error:
+            # The socket went away under us: FreeSWITCH dropped the channel
+            # because the caller hung up (the hangup event can lose the race
+            # with the command in flight). Not a failure of ours.
+            log.info("call %s: the caller hung up mid-turn (%s)", call_id[:8], error)
+            outcome = "caller_hung_up"
         except Exception as error:  # noqa: BLE001 - never leave a caller on a dead line
             log.exception("call %s failed: %s", call_id[:8], error)
             outcome = "error"
@@ -173,28 +188,53 @@ class CallHandler:
 
     async def _speak(self, connection: EslConnection, text: str, voice: str) -> None:
         """
-        Says `text` a sentence at a time: while one sentence plays, the next is
-        rendering, so the caller hears the answer start after one sentence's
-        worth of synthesis rather than the whole answer's.
+        Says `text` without stops in the middle.
+
+        Every piece of the answer is sent to the voice engine at once (two at
+        a time, so they share the CPU rather than queue behind each other), and
+        playback starts as soon as the first is on disk. When the next piece is
+        ready by the time the current one ends, the two are handed to FreeSWITCH
+        as one `file_string://` so there is no round trip — and no gap — between
+        them. Rendering one piece ahead, and playing them one file at a time,
+        left a beat of silence between every sentence: the "reading with long
+        pauses" callers heard.
         """
         parts = split_sentences(text)
         if not parts:
             return
-        rendering: asyncio.Task[Path] = asyncio.create_task(self._voice.say(parts[0], voice))
-        for index, part in enumerate(parts):
-            if connection.hungup.is_set():
-                rendering.cancel()
-                return
-            try:
-                path = await rendering
-            except Exception as error:  # noqa: BLE001
-                # Losing the voice engine mid-call is survivable; losing the call is not.
-                log.error("could not synthesise %r: %s", part[:60], error)
-                path = None
-            if index + 1 < len(parts):
-                rendering = asyncio.create_task(self._voice.say(parts[index + 1], voice))
-            if path is not None:
-                await connection.execute("playback", str(path), timeout=self._settings.greeting_timeout + 40)
+        gate = asyncio.Semaphore(2)
+
+        async def render(part: str) -> Path | None:
+            async with gate:
+                try:
+                    return await self._voice.say(part, voice)
+                except Exception as error:  # noqa: BLE001
+                    # Losing the voice engine mid-call is survivable; losing the call is not.
+                    log.error("could not synthesise %r: %s", part[:60], error)
+                    return None
+
+        renders = [asyncio.create_task(render(part)) for part in parts]
+        index = 0
+        try:
+            while index < len(renders):
+                if connection.hungup.is_set():
+                    return
+                first = await renders[index]
+                batch: list[Path] = [first] if first is not None else []
+                index += 1
+                # Everything already rendered follows in the same playback.
+                while index < len(renders) and renders[index].done():
+                    ready = renders[index].result()
+                    if ready is not None:
+                        batch.append(ready)
+                    index += 1
+                if not batch:
+                    continue
+                target = str(batch[0]) if len(batch) == 1 else "file_string://" + "!".join(str(path) for path in batch)
+                await connection.execute("playback", target, timeout=self._settings.greeting_timeout + 40 * len(batch))
+        finally:
+            for task in renders:
+                task.cancel()
 
     async def _think(self, connection: EslConnection, conversation: Conversation, voice: str) -> Decision:
         """
@@ -226,7 +266,7 @@ class CallHandler:
         # reply is what made the receptionist sound scripted, so it is kept
         # for the turns that would otherwise be dead air, and only those.
         waiter = asyncio.create_task(first_ready.wait())
-        done, _ = await asyncio.wait({thinking, waiter}, timeout=3.0, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait({thinking, waiter}, timeout=3.5, return_when=asyncio.FIRST_COMPLETED)
         if not done:
             filler = FILLERS[self._filler_index % len(FILLERS)]
             self._filler_index += 1
@@ -307,8 +347,6 @@ class CallHandler:
         await self._speak(connection, decision.say, assistant.voice)
         if decision.action == "transfer":
             await self._transfer(connection, decision.extension, dialled)
-        elif decision.action == "hangup":
-            await connection.hangup()
 
     async def _transfer(self, connection: EslConnection, extension: str, dialled: str) -> None:
         """

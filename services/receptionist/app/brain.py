@@ -16,7 +16,7 @@ log = logging.getLogger("vocivo.brain")
 # recognition and the voice are all self-hosted; this is one request per turn to
 # a language model, and it carries the conversation and nothing else.
 
-Action = Literal["speak", "transfer", "message", "hangup"]
+Action = Literal["speak", "transfer", "message", "wrap_up"]
 
 # The languages the admin offers for a receptionist, as the model should hear them.
 LANGUAGE_NAMES = {"en": "English", "ar": "Arabic", "fr": "French", "es": "Spanish", "it": "Italian", "pt": "Portuguese"}
@@ -144,7 +144,8 @@ def system_prompt(assistant: Assistant) -> str:
     lines += [
         "",
         "Take a message when the caller wants a call back, or when nobody is available.",
-        "End the call once the caller's business is done and they have said goodbye.",
+        "You never hang up. When the caller's business is done, check there is nothing else, say goodbye warmly with wrap_up, and stay on the line: the caller ends the call.",
+        "After a message is taken, confirm it briefly and ask whether there is anything else — do not end the conversation yourself.",
     ]
     return "\n".join(lines)
 
@@ -164,11 +165,11 @@ def tool_definitions(assistant: Assistant) -> list[dict[str, Any]]:
             },
         },
         {
-            "name": "end_call",
-            "description": "Say goodbye and hang up. Only once the caller's business is finished.",
+            "name": "wrap_up",
+            "description": "Say goodbye once the caller has confirmed there is nothing else. The line stays open; the caller hangs up. Never use this to cut a caller off.",
             "input_schema": {
                 "type": "object",
-                "properties": {"say": {"type": "string", "description": "The last thing the caller hears."}},
+                "properties": {"say": {"type": "string", "description": "The goodbye, e.g. 'Thanks for calling Global Heritage, have a good day.'"}},
                 "required": ["say"],
             },
         },
@@ -230,8 +231,8 @@ def decision_from_response(payload: dict[str, Any], assistant: Assistant) -> Dec
         elif name == "take_message":
             decision.action = "message"
             decision.note = str(arguments.get("message", "")).strip()
-        elif name == "end_call":
-            decision.action = "hangup"
+        elif name in {"wrap_up", "end_call"}:
+            decision.action = "wrap_up"
 
     decision.say = " ".join(part for part in spoken if part).strip()
     if not decision.say and decision.action == "speak":

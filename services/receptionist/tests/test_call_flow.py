@@ -42,6 +42,9 @@ class FakeFreeswitch:
         #: Text of each turn the caller "says", consumed one per `record`.
         self.caller_turns: list[str] = []
         self.hungup = False
+        self.silent_records = 0
+        #: When set and true, the fake caller hangs up at the next empty recording.
+        self.should_hang_up = None
 
     def _channel_data(self) -> bytes:
         body = (
@@ -92,6 +95,15 @@ class FakeFreeswitch:
                 if app == "record":
                     self.recordings.append(arg)
                     self._write_turn(arg)
+                    if not self.caller_turns:
+                        self.silent_records += 1
+                        if self.should_hang_up is not None and self.should_hang_up():
+                            # The caller hangs up: the socket goes away.
+                            writer.write(self._complete(app))
+                            self.hungup = True
+                            await writer.drain()
+                            writer.close()
+                            return
                 if app == "hangup":
                     self.hungup = True
                 writer.write(self._complete(app))
@@ -177,7 +189,7 @@ class FakeBrain:
         self.seen.append(conversation)
         if self._delay:
             await asyncio.sleep(self._delay)
-        decision = self._decisions.pop(0) if self._decisions else Decision(action="hangup", say="Goodbye.")
+        decision = self._decisions.pop(0) if self._decisions else Decision(action="wrap_up", say="Goodbye.")
         if on_first_sentence is not None and decision.say:
             # The real Brain announces the opening sentence while streaming.
             on_first_sentence(decision.say.split(". ")[0].rstrip(".") + ".")
@@ -210,10 +222,10 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         freeswitch, voice, api = await self._run(
             assistant=RECEPTION,
             turns=["I am still here.", "Can you hear me?", "Goodbye."],
-            decisions=[Decision(action="hangup", say="Goodbye.")],
+            decisions=[Decision(action="wrap_up", say="Goodbye.")],
             transcription_failures=2,
         )
-        self.assertEqual(len(freeswitch.recordings), 3)
+        self.assertGreaterEqual(len(freeswitch.recordings), 3)
         self.assertFalse(any(app == "transfer" for app, _ in freeswitch.applications))
         self.assertEqual([app for app, _ in freeswitch.applications].count("hangup"), 1)
         self.assertEqual(api.filed[0]["outcome"], "completed")
@@ -227,15 +239,17 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
             decisions=[
                 Decision(action="message", say="I'll pass your message on. Anything else?", note="Call back about the invoice."),
                 Decision(action="message", say="I've added that.", note="Urgent."),
-                Decision(action="hangup", say="Goodbye."),
+                Decision(action="wrap_up", say="Goodbye."),
             ],
         )
-        self.assertEqual(len(freeswitch.recordings), 3)
+        # Three turns with speech; after the goodbye the line stays open and
+        # the recorder keeps listening until the caller hangs up.
+        self.assertGreaterEqual(len(freeswitch.recordings), 3)
         self.assertEqual([app for app, _ in freeswitch.applications].count("hangup"), 1)
         self.assertEqual(api.filed[0]["note"], "Call back about the invoice.\nUrgent.")
         self.assertEqual(api.filed[0]["outcome"], "message_taken")
 
-    async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision], answered: bool = False, model_delay: float = 0.0, transcription_failures: int = 0):
+    async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision], answered: bool = False, model_delay: float = 0.0, transcription_failures: int = 0, idle_hangup_seconds: int = 0, hang_up_when_said: str = ""):
         with TemporaryDirectory() as directory:
             settings = Settings(
                 audio_dir=directory,
@@ -244,10 +258,17 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
                 api_secret="x",
                 listen_seconds=2,
                 patience_seconds=1,
+                # The receptionist never hangs up on a caller; in tests the
+                # idle release fires on the first silent turn so a scripted
+                # conversation with no more caller turns ends.
+                idle_hangup_seconds=idle_hangup_seconds,
+                speech_bed="",
             )
             freeswitch = FakeFreeswitch(answered=answered)
             freeswitch.caller_turns = list(turns)
             voice = FakeVoice(directory)
+            if hang_up_when_said:
+                freeswitch.should_hang_up = lambda: hang_up_when_said in voice.said
             api = FakeApi(assistant)
             self.ears = FakeEars(freeswitch)
             self.ears.failures = transcription_failures
@@ -277,7 +298,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         freeswitch, voice, api = await self._run(
             assistant=RECEPTION,
             turns=["What time do you close?"],
-            decisions=[Decision(action="hangup", say="We close at five. Thanks for calling.")],
+            decisions=[Decision(action="wrap_up", say="We close at five. Thanks for calling.")],
         )
         applications = [app for app, _ in freeswitch.applications]
         self.assertEqual(applications[0], "answer")
@@ -288,7 +309,11 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIn("We close at five.", voice.said)
         self.assertIn("Thanks for calling.", voice.said)
         playbacks = [arg for app, arg in freeswitch.applications if app == "playback"]
-        self.assertGreaterEqual(len(playbacks), 3, "greeting, then each sentence of the answer")
+        # The greeting, then the answer: its two sentences were both rendered
+        # by the time the first was due, so they went to FreeSWITCH as one
+        # gapless file_string playback rather than two.
+        self.assertGreaterEqual(len(playbacks), 2, "greeting, then the answer")
+        self.assertTrue(any(arg.startswith("file_string://") and arg.count("!") == 1 for _, arg in freeswitch.applications if _ == "playback"), "consecutive ready sentences play as one stream")
 
         filed = api.filed[0]
         self.assertEqual(filed["outcome"], "completed")
@@ -315,7 +340,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         freeswitch, _, _ = await self._run(
             assistant=RECEPTION,
             turns=["Hello?"],
-            decisions=[Decision(action="hangup", say="Bye.")],
+            decisions=[Decision(action="wrap_up", say="Bye.")],
         )
         # path, time limit, silence threshold, silence seconds — without the
         # last two the app records until the limit on every single turn.
@@ -324,13 +349,22 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(parts[0].endswith(".wav"))
         self.assertEqual(parts[1:], ["2", "450", "2"], "two seconds of quiet is the end of a turn; the caller's thinking time before speaking is not counted (see _listen)")
 
-    async def test_a_silent_caller_is_asked_once_and_then_handed_to_a_person(self):
-        freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[])
+    async def test_a_silent_caller_is_asked_twice_and_then_left_in_peace(self):
+        # A long idle window: silence is met with two gentle prompts and then
+        # patience, never a transfer to a person and never a hangup.
+        freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[], idle_hangup_seconds=3600, hang_up_when_said="Take your time.")
         self.assertIn("Sorry, I didn't catch that.", voice.said)
         self.assertIn("Are you still there?", voice.said)
-        self.assertIn("Let me put you through to someone who can help.", voice.said)
-        self.assertEqual([arg for app, arg in freeswitch.applications if app == "transfer"], ["+18447161777 XML public"])
-        self.assertEqual(api.filed[0]["outcome"], "transferred")
+        self.assertIn("Take your time.", voice.said)
+        self.assertNotIn("transfer", [app for app, _ in freeswitch.applications])
+        self.assertNotIn("hangup", [app for app, _ in freeswitch.applications])
+        self.assertEqual(api.filed[0]["outcome"], "caller_hung_up")
+
+    async def test_a_line_nobody_speaks_on_is_released_with_a_goodbye(self):
+        freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[])
+        self.assertEqual(voice.said[-2:], ["I'll let you go now.", "Thanks for calling — goodbye."])
+        self.assertEqual([app for app, _ in freeswitch.applications].count("hangup"), 1)
+        self.assertEqual(api.filed[0]["outcome"], "caller_went_quiet")
 
     async def test_a_number_with_no_receptionist_is_released_not_answered(self):
         freeswitch, voice, api = await self._run(assistant=None, turns=[], decisions=[])
@@ -344,7 +378,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         freeswitch, _, _ = await self._run(
             assistant=RECEPTION,
             turns=["Hi."],
-            decisions=[Decision(action="hangup", say="Bye.")],
+            decisions=[Decision(action="wrap_up", say="Bye.")],
         )
         self.assertIn(("set", "playback_terminators=none"), freeswitch.applications)
         self.assertIn(("set", "record_sample_rate=8000"), freeswitch.applications)
@@ -358,7 +392,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         freeswitch, voice, _ = await self._run(
             assistant=RECEPTION,
             turns=["Hi."],
-            decisions=[Decision(action="hangup", say="Bye.")],
+            decisions=[Decision(action="wrap_up", say="Bye.")],
             answered=True,
         )
         applications = [app for app, _ in freeswitch.applications]
@@ -370,8 +404,8 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         _, slow, _ = await self._run(
             assistant=RECEPTION,
             turns=["What are your opening hours on Saturday?"],
-            decisions=[Decision(action="hangup", say="Nine to one on Saturdays.")],
-            model_delay=3.0,
+            decisions=[Decision(action="wrap_up", say="Nine to one on Saturdays.")],
+            model_delay=4.0,
         )
         answer = slow.said.index("Nine to one on Saturdays.")
         self.assertIn(slow.said[answer - 1], FILLERS, "a filler should be spoken while the model thinks")
@@ -379,7 +413,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         _, fast, _ = await self._run(
             assistant=RECEPTION,
             turns=["Goodbye."],
-            decisions=[Decision(action="hangup", say="Goodbye.")],
+            decisions=[Decision(action="wrap_up", say="Goodbye.")],
         )
         self.assertFalse(set(fast.said) & set(FILLERS), "a quick reply needs no filler")
 
@@ -387,7 +421,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         _, voice, _ = await self._run(
             assistant=Assistant(name="Reception", greeting="Hello.", voice="am_adam"),
             turns=["Hi."],
-            decisions=[Decision(action="hangup", say="Bye.")],
+            decisions=[Decision(action="wrap_up", say="Bye.")],
         )
         self.assertTrue(voice.prerendered)
         texts, spoken_by = voice.prerendered[0]
@@ -399,7 +433,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         await self._run(
             assistant=Assistant(name="Accueil", greeting="Bonjour.", language="fr", transfer_enabled=True, targets=(TransferTarget("1001", "Musa"),)),
             turns=["Bonjour."],
-            decisions=[Decision(action="hangup", say="Au revoir.")],
+            decisions=[Decision(action="wrap_up", say="Au revoir.")],
         )
         self.assertEqual(self.ears.languages, ["fr"])
         self.assertEqual(self.ears.hints, [["Accueil", "Musa"]])
@@ -410,7 +444,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         freeswitch, voice, _ = await self._run(
             assistant=RECEPTION,
             turns=["", "", "Hello, is this Vocivo?"],
-            decisions=[Decision(action="hangup", say="It is. Goodbye.")],
+            decisions=[Decision(action="wrap_up", say="It is. Goodbye.")],
         )
         records = [app for app, _ in freeswitch.applications if app == "record"]
         self.assertGreaterEqual(len(records), 3, "kept listening through the quiet")

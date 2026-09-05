@@ -32,6 +32,8 @@ CANNED = {
     "transfer_fallback": "Let me put you through to someone who can help.",
     "goodbye_no_speech": "I'll let the team know you called. Bye for now.",
     "transfer_unanswered": "Sorry about that — no one's picking up right now. I can take a message and have someone call you back, or is there anything else I can help with?",
+    "still_here": "Take your time. I'm here if you need anything else.",
+    "goodbye_idle": "I'll let you go now. Thanks for calling — goodbye.",
 }
 
 # Said while the language model and the voice engine work on the real answer:

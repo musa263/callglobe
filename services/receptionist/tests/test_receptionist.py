@@ -253,7 +253,7 @@ class Decisions(unittest.TestCase):
                 {"type": "tool_use", "name": "end_call", "input": {"say": "Goodbye."}},
             ]
         }, RECEPTION)
-        self.assertEqual(decision.action, "hangup")
+        self.assertEqual(decision.action, "wrap_up", "the receptionist says goodbye and stays on the line; it never hangs up")
         self.assertEqual(decision.say, "Of course. Goodbye.")
 
     def test_an_empty_response_still_says_something(self):

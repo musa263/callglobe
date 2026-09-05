@@ -85,6 +85,10 @@ class Settings:
     #: Kept for older deployments' environment files; the conversation no
     #: longer has a turn budget.
     max_turns: int = 0
+    #: The receptionist never hangs up on a caller. The only time it releases
+    #: the line itself is after this long with nobody speaking — a caller who
+    #: walked away from the phone — and it says goodbye first.
+    idle_hangup_seconds: int = 90
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -122,6 +126,7 @@ class Settings:
             silence_seconds=number("RECEPTIONIST_SILENCE_SECONDS", cls.silence_seconds),
             patience_seconds=number("RECEPTIONIST_PATIENCE_SECONDS", cls.patience_seconds),
             max_turns=number("RECEPTIONIST_MAX_TURNS", cls.max_turns),
+            idle_hangup_seconds=number("RECEPTIONIST_IDLE_HANGUP_SECONDS", cls.idle_hangup_seconds),
         )
 
     def missing(self) -> list[str]:
