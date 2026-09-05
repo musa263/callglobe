@@ -26,6 +26,7 @@ import sipDialplan from './_lib/routes/voice-sip-dialplan.js';
 import sipCdr from './_lib/routes/voice-sip-cdr.js';
 import sipPrompt from './_lib/routes/voice-sip-prompt.js';
 import sipVoicemail from './_lib/routes/voice-sip-voicemail.js';
+import sipHangup from './_lib/routes/voice-sip-hangup.js';
 import preferences from './_lib/routes/voice-preferences.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
@@ -58,6 +59,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   'sip-cdr': sipCdr,
   'sip-prompt': sipPrompt,
   'sip-voicemail': sipVoicemail,
+  'sip-hangup': sipHangup,
   preferences,
 });
 
@@ -65,7 +67,10 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   const resource = Array.isArray(req.query.resource)
     ? req.query.resource[0]
     : req.query.resource;
-  const voiceHandler = resource ? routes[resource] : undefined;
+  // Own keys only: `routes['toString']` resolves Object.prototype.toString,
+  // a function that writes no response, and the invocation ran to its
+  // 30-second ceiling for anyone who asked.
+  const voiceHandler = resource && Object.hasOwn(routes, resource) ? routes[resource as keyof typeof routes] : undefined;
 
   if (!voiceHandler) {
     return res.status(404).json({ error: 'Voice resource not found' });

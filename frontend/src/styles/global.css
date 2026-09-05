@@ -341,3 +341,22 @@ audio { display: none; }
   .call-modal { min-height:min(540px,calc(100dvh - 32px)); padding:33px 24px 24px; }
 }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
+
+.opening-screen { min-height:100vh; display:grid; grid-template-columns:auto minmax(0,440px); align-items:center; justify-content:center; gap:clamp(24px,5vw,72px); padding:32px; background:radial-gradient(circle at 30% 20%, #dfeefe 0, #eef4fb 55%); }
+.opening-art svg { display:block; max-width:100%; height:auto; overflow:visible; }
+.opening-ring { fill:none; stroke:rgba(23,107,186,.18); stroke-width:1.2; transform-origin:110px 118px; }
+.opening-ring-a { animation:opening-breathe 3.2s ease-in-out infinite; }
+.opening-ring-b { stroke-dasharray:6 10; animation:opening-turn 26s linear infinite; }
+.opening-person { animation:opening-bob 2.8s ease-in-out infinite; animation-delay:var(--delay,0s); }
+.opening-copy h1 { margin:0 0 12px; font-family:'Sora',sans-serif; font-size:clamp(28px,3.6vw,40px); line-height:1.1; text-wrap:balance; }
+.opening-copy .eyebrow { margin-bottom:12px; }
+.opening-line { margin:0; display:flex; align-items:center; gap:6px; color:var(--muted); font-weight:600; font-size:16px; animation:opening-fade .5s ease; }
+.opening-dots i { display:inline-block; width:5px; height:5px; margin-left:3px; border-radius:50%; background:var(--green); animation:opening-dot 1.2s ease-in-out infinite; }
+.opening-dots i:nth-child(2) { animation-delay:.2s; } .opening-dots i:nth-child(3) { animation-delay:.4s; }
+@keyframes opening-breathe { 0%,100% { transform:scale(1); opacity:.9; } 50% { transform:scale(1.05); opacity:.5; } }
+@keyframes opening-turn { to { transform:rotate(360deg); } }
+@keyframes opening-bob { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
+@keyframes opening-fade { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+@keyframes opening-dot { 0%,100% { opacity:.25; transform:translateY(0); } 50% { opacity:1; transform:translateY(-3px); } }
+@media (max-width: 700px) { .opening-screen { grid-template-columns:1fr; justify-items:center; text-align:center; } .opening-line { justify-content:center; } }
+@media (prefers-reduced-motion: reduce) { .opening-ring-a,.opening-ring-b,.opening-person,.opening-dots i { animation:none; } }

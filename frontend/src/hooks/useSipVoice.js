@@ -34,6 +34,23 @@ export function useSipVoice(token, enabled, identity = {}) {
   const [mediaReady, setMediaReady] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [endedCall, setEndedCall] = useState(null);
+  // What the Calls list needs when this call ends: direction, who, and when
+  // audio was established. Filled in as the call progresses so a call the
+  // *other* party ends is recorded too — until now only our own hangup wrote
+  // history, in a shape ({ identity }) the list did not read.
+  const callMetaRef = useRef(null);
+  const recordEndedCall = useCallback((session) => {
+    const meta = callMetaRef.current;
+    if (!meta || meta.recorded) return;
+    meta.recorded = true;
+    callMetaRef.current = null;
+    setEndedCall({
+      id: sipSessionId(session) || meta.id,
+      number: meta.number,
+      direction: meta.direction,
+      duration: meta.connectedAt ? Math.max(0, Math.round((Date.now() - meta.connectedAt) / 1000)) : 0,
+    });
+  }, []);
   const [notificationPermission, setNotificationPermission] = useState(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   // Bumped when the SIP password needs replacing, which tears the phone down
   // and brings it back with a new one. Without it the password expired under a
@@ -44,11 +61,22 @@ export function useSipVoice(token, enabled, identity = {}) {
 
   useEffect(() => {
     if (!incomingCall || incomingCall.state === SessionState.Established || incomingCall.state === SessionState.Terminated) return undefined;
-    const tone = new Audio('/audio/ringback.wav');
+    // A phone ringing sounds different from a phone being rung: this is the
+    // ringtone, not the ringback. Louder, plus a vibration and a browser
+    // notification so the call is noticed with the tab in the background.
+    const tone = new Audio('/audio/ringtone.wav');
     tone.loop = true;
-    tone.volume = 0.72;
+    tone.volume = 0.8;
     let stopped = false;
-    const stop = () => { stopped = true; tone.pause(); tone.currentTime = 0; };
+    navigator.vibrate?.([450, 250, 450, 650]);
+    let notification = null;
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const who = incomingCall.remoteIdentity?.displayName || 'Incoming Vocivo call';
+      const from = sipUserFromUri(String(incomingCall.remoteIdentity?.uri || ''));
+      notification = new Notification(who, { body: from ? `Extension ${from}` : 'Open Vocivo to answer', icon: '/vocivo-icon-192.png', tag: `vocivo-incoming-${sipSessionId(incomingCall) || 'call'}`, requireInteraction: true });
+      notification.onclick = () => { window.focus(); notification.close(); };
+    }
+    const stop = () => { stopped = true; tone.pause(); tone.currentTime = 0; notification?.close?.(); navigator.vibrate?.(0); };
     const onState = (next) => {
       if (next === SessionState.Established || next === SessionState.Terminated) stop();
     };
@@ -101,12 +129,14 @@ export function useSipVoice(token, enabled, identity = {}) {
       }
       if (next === SessionState.Established) {
         stopRingback();
+        if (callMetaRef.current && !callMetaRef.current.connectedAt) callMetaRef.current.connectedAt = Date.now();
         setState('active');
         setRoutePhase('connected');
         setMediaReady(true);
       }
       if (next === SessionState.Terminated) {
         stopRingback();
+        recordEndedCall(session);
         const routeId = routeIdRef.current;
         if (routeId) api('/api/voice/cancel', { method: 'POST', body: { routeId } }).catch((failure) => reportWebVoiceError('cancel terminated SIP route', failure));
         setCall(null);
@@ -127,7 +157,7 @@ export function useSipVoice(token, enabled, identity = {}) {
       dispose();
       sessionTeardownsRef.current.delete(session);
     }
-  }, [stopRingback]);
+  }, [recordEndedCall, stopRingback]);
 
   const disconnect = useCallback(async () => {
     dialEpochRef.current += 1;
@@ -212,10 +242,12 @@ export function useSipVoice(token, enabled, identity = {}) {
             return;
           }
           incomingRef.current = invitation;
+          const fromUser = sipUserFromUri(String(invitation.remoteIdentity?.uri || '')) || String(invitation.remoteIdentity?.uri || '');
+          callMetaRef.current = { id: sipSessionId(invitation), number: fromUser, direction: 'incoming', connectedAt: null, recorded: false };
           setIncomingCall(invitation);
           setRemoteIdentity({
             name: invitation.remoteIdentity?.displayName || 'Incoming call',
-            number: String(invitation.remoteIdentity?.uri || ''),
+            number: fromUser,
             internal: true,
             photoUrl: '',
           });
@@ -315,6 +347,7 @@ export function useSipVoice(token, enabled, identity = {}) {
       return;
     }
     sessionRef.current = session;
+    callMetaRef.current = { id: sipSessionId(session), number: options.dialedNumber || destination, direction: 'outgoing', connectedAt: null, recorded: false };
     setCall(session);
     setDialedNumber(options.dialedNumber || destination);
     setRemoteIdentity(options.identity);
@@ -418,7 +451,22 @@ export function useSipVoice(token, enabled, identity = {}) {
   const answer = useCallback(async () => {
     const incoming = incomingRef.current;
     if (!incoming) return;
-    await incoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
+    try {
+      await incoming.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } });
+    } catch (failure) {
+      // Most often the microphone: permission refused, or no device. The
+      // caller hears busy; the person here sees why nothing happened.
+      reportWebVoiceError('SIP answer', failure);
+      setError(failure instanceof Error && /permission|denied|NotAllowed|NotFound/i.test(`${failure.name} ${failure.message}`)
+        ? 'The call could not be answered because the microphone is not available. Allow microphone access for this site and try again.'
+        : (failure instanceof Error && failure.message) || 'The call could not be answered.');
+      if (incomingRef.current === incoming) {
+        incoming.reject({ statusCode: 486 }).catch(() => undefined);
+        incomingRef.current = null;
+        setIncomingCall(null);
+      }
+      return;
+    }
     if (incomingRef.current !== incoming || incoming.state !== SessionState.Established) return;
     sessionRef.current = incoming;
     incomingRef.current = null;
@@ -443,7 +491,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     cancelRoute(routeIdRef.current);
     hangupSession(sessionRef.current);
     hangupSession(incomingRef.current);
-    setEndedCall({ id: sipSessionId(sessionRef.current), identity: remoteIdentity });
+    recordEndedCall(sessionRef.current || incomingRef.current);
     sessionRef.current = null;
     incomingRef.current = null;
     routeIdRef.current = null;
@@ -455,7 +503,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     setCallStarting(false);
     setMuted(false);
     dialingRef.current = false;
-  }, [cancelRoute, hangupSession, remoteIdentity, stopRingback]);
+  }, [cancelRoute, hangupSession, recordEndedCall, stopRingback]);
 
   const toggleMute = useCallback(() => {
     const pc = sessionRef.current?.sessionDescriptionHandler?.peerConnection;

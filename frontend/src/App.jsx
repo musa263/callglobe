@@ -361,6 +361,65 @@ function SettingsView({ profile, ownedNumbers, verifiedNumbers, voice, preview, 
   );
 }
 
+// Original illustration: a small business's people, drawn in the brand's own
+// colours, gathering around the Vocivo mark while the phone comes up. Pure
+// SVG, so it is on screen in the first frame — no image request to wait on —
+// and it is what the person sees for the second or two the API takes.
+const OPENING_PEOPLE = [
+  { skin: '#f1c9a5', hair: '#3b2a20', shirt: '#176bba', x: 110, y: 8 },
+  { skin: '#8d5a3b', hair: '#1c1412', shirt: '#0e4f91', x: 208, y: 86 },
+  { skin: '#e8b48c', hair: '#6b3d22', shirt: '#4d8fd6', x: 172, y: 196 },
+  { skin: '#5c3a26', hair: '#101010', shirt: '#9cc4ee', x: 48, y: 196 },
+  { skin: '#f6d7bb', hair: '#a56b3b', shirt: '#2f7bc7', x: 12, y: 86 },
+];
+const OPENING_LINES = ['Opening your phone', 'Connecting to your company network', 'Checking who is available'];
+
+function OpeningPerson({ skin, hair, shirt, x, y, delay }) {
+  return (
+    <g transform={`translate(${x} ${y})`}>
+      <g className="opening-person" style={{ '--delay': `${delay}s` }}>
+      <ellipse cx="0" cy="34" rx="22" ry="14" fill={shirt} />
+      <rect x="-22" y="20" width="44" height="18" rx="9" fill={shirt} />
+      <circle cx="0" cy="0" r="15" fill={skin} />
+      <path d="M-15 -1 a15 15 0 0 1 30 0 v-3 a15 12 0 0 0 -30 0z" fill={hair} />
+      <circle cx="-5" cy="1" r="1.6" fill="#1e2b3d" />
+      <circle cx="5" cy="1" r="1.6" fill="#1e2b3d" />
+      <path d="M-4 7 q4 3 8 0" stroke="#1e2b3d" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+      </g>
+    </g>
+  );
+}
+
+function OpeningScreen({ name }) {
+  const [line, setLine] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setLine((current) => (current + 1) % OPENING_LINES.length), 1400);
+    return () => window.clearInterval(timer);
+  }, []);
+  const firstName = String(name || '').trim().split(/\s+/)[0];
+  return (
+    <div className="opening-screen" role="status" aria-live="polite">
+      <div className="opening-art" aria-hidden="true">
+        <svg viewBox="-20 -20 260 270" width="280" height="290">
+          <circle className="opening-ring opening-ring-a" cx="110" cy="118" r="78" />
+          <circle className="opening-ring opening-ring-b" cx="110" cy="118" r="104" />
+          {OPENING_PEOPLE.map((person, index) => <OpeningPerson key={index} {...person} delay={index * 0.35} />)}
+          <g transform="translate(110 118)">
+            <rect x="-26" y="-26" width="52" height="52" rx="14" fill="#176bba" />
+            <circle cx="0" cy="0" r="13" stroke="white" strokeWidth="2.4" fill="none" />
+            <path d="M-13 0h26M0 -13c-5 4-5 22 0 26M0 -13c5 4 5 22 0 26" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" />
+          </g>
+        </svg>
+      </div>
+      <div className="opening-copy">
+        <span className="eyebrow">Vocivo</span>
+        <h1>{firstName ? `Welcome back, ${firstName}.` : 'Your business line, wherever you are.'}</h1>
+        <p key={line} className="opening-line">{OPENING_LINES[line]}<span className="opening-dots"><i /><i /><i /></span></p>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const initialSession = getStoredSession();
   const [session, setSession] = useState(initialSession);
@@ -395,6 +454,9 @@ export default function App() {
     setLoading(true);
     (async () => {
       try {
+        // Both requests at once: on a cold start each is a separate function
+        // warming up, and the opening screen sat for the sum of the two.
+        const bootstrapRequest = api('/api/mobile/bootstrap').then((result) => ({ result }), (failure) => ({ failure }));
         const sessionData = await api('/api/auth/session');
         let resolvedProfile = sessionData.profile;
         if (!active) return;
@@ -405,14 +467,12 @@ export default function App() {
           setBalance(null); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
         }
-        let bootstrap;
-        try {
-          bootstrap = await api('/api/mobile/bootstrap');
-        } catch (loadError) {
-          if (active) setNotice(loadError.message || 'Some account details could not be refreshed.');
+        const { result: bootstrap, failure: loadError } = await bootstrapRequest;
+        if (!active) return;
+        if (!bootstrap) {
+          setNotice(loadError?.message || 'Some account details could not be refreshed.');
           return;
         }
-        if (!active) return;
         resolvedProfile = { ...resolvedProfile, ...bootstrap.profile };
         const owned = (bootstrap.numbers || []).filter((number) => number.source === 'owned');
         const verified = (bootstrap.numbers || []).filter((number) => number.source === 'verified');
@@ -423,8 +483,18 @@ export default function App() {
         setVerifiedNumbers(verified);
         setSelectedNumber(owned[0] || verified[0] || null);
       } catch (sessionError) {
-        if ([401, 403].includes(sessionError?.status)) clearSession();
-        if (active) setSession(null);
+        if (!active) return;
+        if ([401, 403].includes(sessionError?.status)) {
+          // The session really is over.
+          clearSession();
+          setSession(null);
+          return;
+        }
+        // A blip or a server error is not a sign-out: the stored session is
+        // still good, and dropping to the login screen mid-call unmounted the
+        // phone. Say so, stay, and try again shortly.
+        setNotice(sessionError?.message || 'Your account details could not be refreshed. Retrying shortly.');
+        setTimeout(() => { if (active) setSession((current) => (current ? { ...current } : current)); }, 8000);
       } finally {
         if (active) setLoading(false);
       }
@@ -517,7 +587,7 @@ export default function App() {
     } catch (error) { setVerificationError(error.message); } finally { setVerificationBusy(false); }
   }
   if (!session && !preview) return <Login onLogin={setSession} onPreview={() => { setPreview(true); setLoading(false); }} />;
-  if (loading) return <div className="loading-screen" role="status" aria-label="Loading Vocivo" aria-busy="true"><div className="loading-brand"><img src="/vocivo-icon-192.png" alt="" width="64" height="64" /><strong>Vocivo</strong></div><div className="loading-track" aria-hidden="true"><span /></div></div>;
+  if (loading) return <OpeningScreen name={profile?.full_name || initialSession?.profile?.full_name || ''} />;
   const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ...(shellData.profile?.account_type === 'business' ? [] : [['wallet', WalletCards, 'Top up']]), ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ...(canAdmin ? [['admin', ShieldCheck, shellData.profile?.role === 'superadmin' ? 'Superadmin' : 'Company admin']] : [])];
   return (
     <div className={`app-shell ${view === 'admin' ? 'admin-mode' : ''}`}>

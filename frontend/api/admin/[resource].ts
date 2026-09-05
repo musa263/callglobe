@@ -17,6 +17,7 @@ const routes = { background, extensions, overview, trunks, enrollments, pbx, ai,
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const resource = Array.isArray(req.query.resource) ? req.query.resource[0] : req.query.resource;
-  const route = resource && routes[resource as keyof typeof routes];
+  // Own keys only, or 'toString' resolves an inherited function that never answers.
+  const route = resource && Object.hasOwn(routes, resource) ? routes[resource as keyof typeof routes] : undefined;
   return route ? route(req, res) : res.status(404).json({ error: 'Not found' });
 }
