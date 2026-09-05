@@ -368,7 +368,7 @@ jobs:
                     -v "$STAGE/kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro" \
                     -v "$STAGE/kamailio/docker-entrypoint.sh:/entrypoint.sh:ro" \
                     -e "VOCIVO_TRUNK_SOURCES=${sources:-192.0.2.0/24,192.0.2.1}" -e KAMAILIO_CHECK_ONLY=1 \
-                    -e SIP_EDGE_SECRET=check -e VOCIVO_SIP_REALM=check -e VOCIVO_API_URL=http://127.0.0.1 -e PUBLIC_IP=127.0.0.1 \
+                    -e SIP_EDGE_SECRET=check -e VOCIVO_SIP_REALM=check -e VOCIVO_API_URL=http://127.0.0.1 -e PUBLIC_IP=198.51.100.1 \
                     --entrypoint /bin/sh "$image" /entrypoint.sh 2>&1); then
                   echo "$check" | { grep -E "trunk sources|config file ok" || true; }
                 else
@@ -389,6 +389,18 @@ jobs:
                 sed -i "/^TURN_SECRET=/d" "$STAGE/.env"
                 printf "TURN_SECRET=%s\n" "$(openssl rand -hex 32)" >> "$STAGE/.env"
                 echo "generated a TURN_SECRET; the relay no longer accepts the default one"
+              fi
+              # Kamailio advertises PUBLIC_IP on its public sockets; without it
+              # every Record-Route says 0.0.0.0 and the carrier cannot ACK.
+              if ! grep -qE "^PUBLIC_IP=[0-9.]+" "$STAGE/.env"; then
+                detected=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n "s/.*src \([0-9.]*\).*/\1/p" | head -1)
+                if [ -n "$detected" ]; then
+                  sed -i "/^PUBLIC_IP=/d" "$STAGE/.env"
+                  printf "PUBLIC_IP=%s\n" "$detected" >> "$STAGE/.env"
+                  echo "PUBLIC_IP was not set; using this host's address $detected"
+                else
+                  echo "::warning::PUBLIC_IP is not set in .env and could not be detected"
+                fi
               fi
               latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
               rm -rf "$TARGET" && mv "$STAGE" "$TARGET" && rmdir /opt/vocivo-stage
@@ -437,6 +449,28 @@ jobs:
                   systemctl reload nginx && echo "nginx edge proxy now routes /sip-cdr ($edge)"
                 else
                   cp "$backup" "$edge"; echo "::warning::nginx rejected the /sip-cdr location; edge proxy restored from $backup"
+                fi
+              fi
+              # The WebSocket the apps register over is terminated by nginx and
+              # proxied to Kamailio on 127.0.0.1:8080. nginx closes a proxied
+              # connection that has been quiet for proxy_read_timeout (60 s by
+              # default), and a registered phone is quiet for most of its life:
+              # every web phone dropped to "Reconnecting…" once a minute and
+              # missed whatever rang in between. Give that location an hour.
+              ws=$( { grep -RlE "proxy_pass[[:space:]]+http://127\.0\.0\.1:8080" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ /etc/nginx/snippets/ 2>/dev/null || true; } | head -1 || true )
+              if [ -z "$ws" ]; then
+                echo "::warning::no nginx location proxying to Kamailio 127.0.0.1:8080 found; check the WebSocket vhost by hand"
+              elif grep -qE "proxy_read_timeout[[:space:]]+(3600|[0-9]{5,})" "$ws"; then
+                echo "nginx WebSocket proxy already keeps idle phones connected ($ws)"
+              else
+                install -d /etc/vocivo/nginx-backups
+                backup="/etc/vocivo/nginx-backups/$(basename "$ws").$(date +%Y%m%d%H%M%S)"
+                cp "$ws" "$backup"
+                sed -i -E "s|^([[:space:]]*)(proxy_pass[[:space:]]+http://127\.0\.0\.1:8080[^;]*;)|\1\2\n\1proxy_read_timeout 3600s;\n\1proxy_send_timeout 3600s;|" "$ws"
+                if nginx -t >/dev/null 2>&1; then
+                  systemctl reload nginx && echo "nginx WebSocket proxy now allows an hour of silence ($ws)"
+                else
+                  cp "$backup" "$ws"; echo "::warning::nginx rejected the WebSocket timeout change; restored from $backup"
                 fi
               fi
               ';;
