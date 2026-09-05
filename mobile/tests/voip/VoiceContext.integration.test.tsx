@@ -55,7 +55,6 @@ jest.mock('../../src/context/AuthContext', () => {
   const auth = {
     loading: false,
     isAuthenticated: false,
-    isPreview: true,
     addHistory: jest.fn(),
     profile: null,
   };
@@ -235,7 +234,6 @@ test('killed-state native push bootstraps a fresh secure voice session before HT
   const authState = (require('../../src/context/AuthContext') as any).__authState;
   authState.loading = true;
   authState.isAuthenticated = false;
-  authState.isPreview = false;
   const freshSession = {
     token: 'cached-push-token',
     expiresAt: Date.now() + 10 * 60_000,
@@ -260,5 +258,4 @@ test('killed-state native push bootstraps a fresh secure voice session before HT
   await act(async () => tree!.unmount());
   authState.loading = false;
   authState.isAuthenticated = false;
-  authState.isPreview = true;
 });

@@ -270,6 +270,9 @@ extension VocivoSipCallManager: CXProviderDelegate {
   }
 
   public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+    // Same session as an answered call: voice chat, Bluetooth allowed, so a
+    // dialled call routes to the headset the way an incoming one does.
+    configureAudioSession()
     action.fulfill()
   }
 

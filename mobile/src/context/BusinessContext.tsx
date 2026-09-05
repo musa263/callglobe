@@ -43,7 +43,7 @@ const defaultProfile = (companyName = 'Your company'): BusinessProfile => ({
 const BusinessContext = createContext<BusinessContextValue | null>(null);
 
 export function BusinessProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isPreview, profile: authProfile } = useAuth();
+  const { isAuthenticated, profile: authProfile } = useAuth();
   const [profile, setProfile] = useState(() => defaultProfile());
   const [callModeState, setCallModeState] = useState<'personal' | 'business'>('personal');
   const [loading, setLoading] = useState(true);
@@ -64,7 +64,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
           setProfile({ ...defaults, ...parsed, departments: parsed.departments?.length ? parsed.departments : [parsed.departmentOne || 'Sales', parsed.departmentTwo || 'Operations'] });
         }
         if (active && (cachedCallMode === 'personal' || cachedCallMode === 'business')) setCallModeState(cachedCallMode);
-        if (isAuthenticated && !isPreview) {
+        if (isAuthenticated) {
           const result = await api.get<{ config: Omit<BusinessProfile, 'aiTone'> }>('/api/voice/settings');
           if (active) setProfile((current) => ({ ...current, ...result.config }));
         }
@@ -73,7 +73,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     };
     load();
     return () => { active = false; };
-  }, [authProfile?.id, isAuthenticated, isPreview]);
+  }, [authProfile?.id, isAuthenticated]);
 
   const saveProfile = useCallback(async (next: BusinessProfile) => {
     const normalized = {
@@ -85,13 +85,13 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       voicemailGreeting: next.voicemailGreeting.trim().slice(0, 500),
       departments: next.departments.map((department) => department.trim().slice(0, 40)).filter(Boolean).slice(0, 5),
     };
-    if (isAuthenticated && !isPreview) {
+    if (isAuthenticated) {
       const result = await api.put<{ config: Omit<BusinessProfile, 'aiTone'> }>('/api/voice/settings', normalized);
       Object.assign(normalized, result.config);
     }
     setProfile(normalized);
     if (authProfile?.id) await AsyncStorage.setItem(storageKey(authProfile.id), JSON.stringify(normalized));
-  }, [authProfile?.id, isAuthenticated, isPreview]);
+  }, [authProfile?.id, isAuthenticated]);
 
   const setCallMode = useCallback((mode: 'personal' | 'business') => {
     setCallModeState(mode);

@@ -23,9 +23,9 @@ import type { AppTab, NavigationTarget } from './src/types';
 import { colors } from './src/theme';
 
 function AppContent() {
-  const { loading, isAuthenticated, isPreview } = useAuth();
+  const { loading, isAuthenticated } = useAuth();
   if (loading) return <View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View>;
-  if (!isAuthenticated && !isPreview) return <AuthScreen />;
+  if (!isAuthenticated) return <AuthScreen />;
   return <BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider>;
 }
 

@@ -49,6 +49,13 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [waitingCall, setWaitingCall] = useState<ActiveCall | null>(null);
   const [heldCall, setHeldCall] = useState<ActiveCall | null>(null);
+  // Read by callbacks the subscription effect depends on. Listing `heldCall`
+  // itself in their dependencies re-ran that effect on every change; the
+  // calls subject replays on subscribe and the handler built a new object
+  // each time, so holding a second call looped the provider until React gave
+  // up and the boundary showed "Vocivo could not start" mid-call.
+  const heldCallRef = useRef<ActiveCall | null>(null);
+  heldCallRef.current = heldCall;
   const [conference, setConference] = useState<MergedConference | null>(null);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -401,9 +408,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     networkMigrationGraceUntilRef.current = 0;
     const calls = voice.currentCalls.filter((call) => !isTerminalCall(call.currentState));
     if (activeCallRef.current) finalizeCall('failed', activeCallRef.current.id);
-    if (heldCall) finalizeCall('failed', heldCall.id);
+    const held = heldCallRef.current;
+    if (held) finalizeCall('failed', held.id);
     calls.forEach((call) => {
-      if (call.callId !== activeCallRef.current?.id && call.callId !== heldCall?.id) finalizeCall('failed', call.callId);
+      if (call.callId !== activeCallRef.current?.id && call.callId !== held?.id) finalizeCall('failed', call.callId);
     });
     if (!calls.length && !activeCallRef.current) return;
     cancelRoutePolling();
@@ -423,7 +431,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     calls.forEach((call) => {
       voice.endNativeCall(call.callId).catch((failure) => reportVoiceError('close native call after transport loss', failure));
     });
-  }, [cancelRoutePolling, clearCallSubscriptions, finalizeCall, heldCall, reportVoiceError, stopRingback]);
+  }, [cancelRoutePolling, clearCallSubscriptions, finalizeCall, reportVoiceError, stopRingback]);
 
   useEffect(() => {
     const connectionSubscription = voice.connectionState$.subscribe((state) => {
@@ -482,7 +490,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           conferenceCallIdsRef.current.clear();
           setConference(null);
         }
-        setHeldCall(held ? describeCall(held) : null);
+        const next = held ? describeCall(held) : null;
+        setHeldCall((previous) => (previous && next && (['id', 'phase', 'number', 'onHold', 'muted', 'connectedAt', 'displayName'] as const).every((key) => previous[key] === next[key]) ? previous : next));
       }
     });
     const callSubscription = voice.activeCall$.subscribe(attachCall);

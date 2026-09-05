@@ -108,11 +108,14 @@ export type SipIncomingEvent = {
 export type SipCallStateEvent = { callId: string; state: VoiceCallState; cause?: string; statusCode?: number };
 export type SipMediaStateEvent = { callId: string; muted?: boolean; onHold?: boolean; speaker?: boolean };
 
-export type SipEventName = 'registration' | 'incoming' | 'callState' | 'mediaState';
+export type SipEventName = 'registration' | 'incoming' | 'outgoing' | 'callState' | 'mediaState';
+/** A call this phone placed: the system call screen has to be told about these too. */
+export type SipOutgoingEvent = { callId: string; target: string };
 
 export type SipEventMap = {
   registration: SipRegistrationEvent;
   incoming: SipIncomingEvent;
+  outgoing: SipOutgoingEvent;
   callState: SipCallStateEvent;
   mediaState: SipMediaStateEvent;
 };

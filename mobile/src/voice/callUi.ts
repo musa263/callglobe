@@ -74,6 +74,12 @@ export function bindCallUi(options: {
   const { events, bridge, native, ui, onPushWake } = options;
   const subscriptions: Array<{ remove: () => void }> = [];
   const reported = new Set<string>();
+  // Calls the person answered on the system screen before the INVITE reached
+  // the stack. After a VoIP push the socket is being brought back while
+  // CallKit is already ringing; an answer that arrives first used to throw
+  // "Unknown Vocivo SIP call" into a swallowed error, and the caller heard
+  // silence. It is applied the moment the call appears instead.
+  const answeredEarly = new Set<string>();
 
   const swallow = (what: string) => (error: unknown) => {
     // Never let a call-UI hiccup take the call down with it.
@@ -82,6 +88,9 @@ export function bindCallUi(options: {
 
   // Engine -> system call screen.
   subscriptions.push(events.addListener('incoming', (payload) => {
+    if (answeredEarly.delete(payload.callId)) {
+      bridge.answer(payload.callId).catch(swallow('answer a call accepted before its INVITE arrived'));
+    }
     if (reported.has(payload.callId)) return;
     reported.add(payload.callId);
     native.reportIncomingCall({
@@ -89,6 +98,17 @@ export function bindCallUi(options: {
       callerName: payload.callerName,
       callerNumber: payload.callerNumber,
     }).catch(swallow('report incoming'));
+  }));
+
+  // Outbound calls were never reported: no in-call status bar, nothing in
+  // Recents, Bluetooth and CarPlay buttons dead, and the voice-chat audio
+  // session — configured on the incoming path — never applied to a dialled
+  // call, so headset routing was whatever WebRTC happened to pick.
+  subscriptions.push(events.addListener('outgoing', (payload) => {
+    if (reported.has(payload.callId)) return;
+    reported.add(payload.callId);
+    const handle = payload.target.replace(/^sips?:/i, '').split('@')[0] || payload.target;
+    native.reportOutgoingCall({ callId: payload.callId, handle }).catch(swallow('report outgoing'));
   }));
 
   subscriptions.push(events.addListener('callState', (payload) => {
@@ -110,10 +130,17 @@ export function bindCallUi(options: {
 
   // System call screen -> engine.
   subscriptions.push(ui.addListener('callUiAnswer', (payload) => {
-    bridge.answer(payload.callId).catch(swallow('answer from call UI'));
+    bridge.answer(payload.callId).catch((error: unknown) => {
+      if (error instanceof Error && /unknown/i.test(error.message)) {
+        answeredEarly.add(payload.callId);
+        return;
+      }
+      swallow('answer from call UI')(error);
+    });
   }));
 
   subscriptions.push(ui.addListener('callUiEnd', (payload) => {
+    answeredEarly.delete(payload.callId);
     bridge.hangup(payload.callId).catch(swallow('hang up from call UI'));
   }));
 
@@ -141,6 +168,7 @@ export function bindCallUi(options: {
       subscriptions.forEach((subscription) => subscription.remove());
       subscriptions.length = 0;
       reported.clear();
+      answeredEarly.clear();
     },
   };
 }

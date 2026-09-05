@@ -80,6 +80,22 @@ export async function refreshVocivoSip() {
   await bridge.refresh();
 }
 
+/**
+ * After a VoIP push: get registered again, quickly, trying a few times —
+ * the radio may still be coming up when the first attempt is made.
+ */
+async function wakeRegistration() {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await refreshVocivoSip();
+      return;
+    } catch (error) {
+      console.warn('Vocivo SIP: re-registration after push failed', error instanceof Error ? error.message : error);
+      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+    }
+  }
+}
+
 export async function inviteVocivoSip(target: string, headers?: Array<{ name: string; value: string }>) {
   return ensureBridge().bridge.invite(target, headers);
 }
@@ -138,6 +154,13 @@ export function createSipVoiceClient(): SipVoiceClient {
       bridge: sipBridge,
       native,
       ui: new NativeEventEmitter(NativeModules.VocivoSip) as unknown as CallUiEventSource,
+      // The push woke a suspended app whose socket to the edge is dead. The
+      // edge is holding the INVITE for a few seconds; this is what brings the
+      // registration back so it can be delivered. Without it CallKit rang, the
+      // person answered, and nothing was behind the call.
+      onPushWake: () => {
+        void wakeRegistration();
+      },
     });
   }
   client = new SipVoiceClient({ bridge: sipBridge, events });

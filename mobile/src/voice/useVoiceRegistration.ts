@@ -5,7 +5,7 @@ import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { refreshVocivoSip, registerVocivoSip } from '../lib/sipNative';
+import { disposeSipVoiceClient, refreshVocivoSip, registerVocivoSip, unregisterVocivoSip } from '../lib/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
@@ -41,6 +41,10 @@ export function useVoiceRegistration({
     if (loading) return;
     if (!isAuthenticated || isPreview) {
       loginConfigRef.current = null;
+      // Both stacks. The carrier client alone was signed out, and the SIP
+      // user agent kept its registration alive: the signed-out phone went on
+      // ringing with the previous user's calls until the app was killed.
+      unregisterVocivoSip().catch((failure) => reportVoiceError('SIP unregister', failure)).finally(() => disposeSipVoiceClient());
       voice.logout().catch((failure) => reportVoiceError('logout', failure));
       setPushRegistration('unavailable');
       return;
