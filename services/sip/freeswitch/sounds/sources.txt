@@ -1,0 +1,12 @@
+# Music the edge downloads at sync-config time (Ops · Droplets → sync-config),
+# converted to 16 kHz mono WAV with ffmpeg on the droplet. One line per file:
+#   <name>  <gain in dB>  <url>
+# The API dialplan and the receptionist refer to <name>.wav in this directory.
+#
+# All tracks are from Pixabay under the Pixabay Content License, which allows
+# commercial use, including on a phone system, without attribution. Titles and
+# authors are kept here so the licence can be checked later:
+#   hold-music  "Phone Holding Music" by Music_For_Videos (pixabay.com/music/corporate-phone-holding-music-163387/)
+#   speech-bed  "Waiting Room Calm Hold Loop" by alex-morgan (pixabay.com/music/pop-waiting-room-calm-hold-loop-575878/)
+hold-music  -4   https://cdn.pixabay.com/download/audio/2023/08/23/audio_6a09e41146.mp3?filename=music_for_videos-phone-holding-music-163387.mp3
+speech-bed  -22  https://cdn.pixabay.com/download/audio/2026/07/28/audio_5ca0979250.mp3?filename=alex-morgan-waiting-room-calm-hold-loop-575878.mp3

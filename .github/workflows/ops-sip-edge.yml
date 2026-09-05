@@ -429,6 +429,31 @@ jobs:
                   echo "::warning::PUBLIC_IP is not set in .env and could not be detected"
                 fi
               fi
+              # Music is not in the repository: sources.txt names the tracks and
+              # the droplet, which has the internet the runner and the sandbox do
+              # not, downloads and converts them into the staged sounds folder.
+              sounds="$STAGE/freeswitch/sounds"
+              if [ -f "$sounds/sources.txt" ]; then
+                if ! command -v ffmpeg >/dev/null 2>&1; then
+                  echo "installing ffmpeg for the music conversion"
+                  apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq ffmpeg >/dev/null 2>&1 || echo "::warning::ffmpeg could not be installed; music will be missing"
+                fi
+                mkdir -p /opt/vocivo/sounds-cache
+                while read -r name gain url; do
+                  case "$name" in ""|\#*) continue;; esac
+                  [ -n "$url" ] || continue
+                  key=$(printf "%s" "$url" | sha256sum | cut -c1-16)
+                  src="/opt/vocivo/sounds-cache/$key.src"
+                  if [ ! -s "$src" ]; then
+                    curl -fsSL -m 180 -A "Vocivo edge" -o "$src" "$url" || { echo "::warning::could not download $name from $url"; rm -f "$src"; continue; }
+                  fi
+                  if ffmpeg -y -loglevel error -i "$src" -vn -ac 1 -ar 16000 -filter:a "volume=${gain}dB" "$sounds/$name.wav"; then
+                    echo "sound $name: $(du -h "$sounds/$name.wav" | cut -f1) at ${gain} dB"
+                  else
+                    echo "::warning::could not convert $name"
+                  fi
+                done < "$sounds/sources.txt"
+              fi
               latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
               rm -rf "$TARGET" && mv "$STAGE" "$TARGET" && rmdir /opt/vocivo-stage
               cd "$TARGET"

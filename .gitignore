@@ -44,3 +44,6 @@ __pycache__/
 
 # Files the Claude desktop app drops beside the checkout when it delivers a download
 Claude outputs/
+
+# Rendered on the droplet from sources.txt by sync-config
+services/sip/freeswitch/sounds/*.wav
