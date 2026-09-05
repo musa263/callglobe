@@ -51,6 +51,37 @@ loop.
 **Speech recognition runs in a worker thread.** It is CPU-bound and shares a
 process with live calls; on the event loop it would stall them.
 
+**The model streams, and the first sentence is spoken as soon as it is
+written.** `Brain.respond` reads the reply as server-sent events and calls
+`on_first_sentence` the moment the first sentence is complete;
+`CallHandler._think` hands that sentence to the voice engine while the rest of
+the answer is still arriving, so playback starts at once. A filler ("mm-hm, one
+moment") is said only when nothing has begun to arrive after three seconds.
+
+**Only the caller's side is recorded.** `RECORD_READ_ONLY=true` keeps our own
+prompts (and their echo) out of the turn recording — the recogniser used to
+hear the greeting back and answer it. `RECORD_MIN_SEC=0` keeps one-word answers
+FreeSWITCH would otherwise delete. Turns cap at `listen_seconds` (12 s) and end
+`silence_seconds` (2 s) after the caller stops; the silence threshold (450)
+sits above a mobile caller's background noise.
+
+**Hallucinated transcripts are dropped.** `drop_hallucinated_transcript`
+discards a transcript that is only the greeting, the business name, a transfer
+target's name or one of Whisper's silence fillers ("Thank you.").
+
+**A transfer nobody answers comes back here.** `_transfer` sets
+`vocivo_from_receptionist=1`; the API's dialplan returns the call with
+`vocivo_transfer_failed=1`, and `handle` opens with `CANNED["transfer_unanswered"]`
+— an offer to take a message — instead of the greeting.
+
+**There is no turn budget.** A conversation lasts as long as the caller needs;
+two silent turns in a row still release the line.
+
+**Every stage logs its time.** Per turn: how long the recorder ran (and whether
+it hit its limit), loudness, recognition time, model time, when the first
+sentence was ready, and synthesis time per sentence; per call: the outcome.
+`Ops · Droplets → call-trace` prints these beside FreeSWITCH's hangup causes.
+
 ## Configuration
 
 | Variable | Required | What it is |

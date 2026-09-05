@@ -36,6 +36,36 @@ Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INB
 - Web: SIP.js over `VOCIVO_SIP_WSS_URI` when `VOCIVO_VOICE_EDGE=sip`.
 - iOS: Telnyx SDK remains the default. Vocivo SIP + CallKit is used only when the native module is linked.
 
+## Addresses, and the two mistakes that made every call end at 32 seconds
+
+Kamailio binds `0.0.0.0` and **advertises `PUBLIC_IP:5060`** on its public
+sockets (`kamailio/docker-entrypoint.sh` renders `/etc/kamailio/listen.cfg`).
+Without the advertised address every Record-Route it added said `0.0.0.0`, and
+the carrier had nowhere to send its ACK.
+
+FreeSWITCH's `external` profile (`sip_profiles/external.xml`) is loopback-only
+and **must not set `ext-sip-ip`**: 127.0.0.1 is not in sofia's `localnet.auto`,
+so with it set every Contact and Via carried the public address, where no
+profile listens. Kamailio additionally forces any in-dialog request for port
+5080 to `127.0.0.1:5080`. Either fault alone leaves FreeSWITCH waiting for an
+ACK that never arrives and hanging up when its timer expires — 32 seconds into
+every answered inbound call.
+
+Other things `kamailio.cfg` gets right that are easy to break:
+
+- In-dialog requests (`has_totag()`) are handled *before* the INVITE block,
+  so a re-INVITE (hold, ICE restart) is never treated as a new call.
+- The answer's media profile is chosen for the side it travels *to*: `FLT_WS`
+  marks requests from the WebSocket port, and `MANAGE_REPLY` rewrites the
+  answer as DTLS-SRTP/ICE for them and plain RTP/AVP for the switch and the
+  carrier. A web phone's Contact is aliased on replies too.
+- `sounds/hold-music.wav` is what callers hear while waiting; the API's
+  dialplan names it as `ringback` and `hold_music`.
+
+`Ops · Droplets → call-trace` prints the receptionist's turn timings, FreeSWITCH
+hangups and Kamailio's INVITE/ACK/BYE path for the last calls; `logs` is the
+general log. GitHub keeps ten annotations per step, so both are kept compact.
+
 ## Inbound over the trunk
 
 Kamailio tags a call it accepted from the carrier with `X-Vocivo-Flow: inbound` and forwards it to FreeSWITCH
