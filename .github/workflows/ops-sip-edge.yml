@@ -37,6 +37,7 @@ on:
           - dump-config
           - status
           - logs
+          - call-trace
           - deploy
           - sync-config
           - rollback-config
@@ -305,6 +306,28 @@ jobs:
               docker compose exec -T freeswitch sh -c "tail -n 600 /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null \
                 | { grep -E "EXECUTE|Dialplan|xml_curl|XML_CURL|socket|http_cache|json_cdr|Hangup|hangup|NORMAL_|ERR\]|CRIT\]|New Channel|Transfer|transfer|playback|play_and_get" || echo "(no call-flow lines in the last 600 lines)"; } \
                 | grep -vE "sofia_glue|switch_rtp|send_dtmf|switch_core_media" | cut -c1-260 | tail -120
+              ';;
+            call-trace)
+              # Why did the last calls end? Compact on purpose: GitHub keeps ten
+              # annotations per step, so anything past ~25 KB of output is lost,
+              # and the general logs action spends that on registrations.
+              since="${SINCE:-2h}"
+              [[ "$since" =~ ^[0-9]{1,4}[smh]$ ]] || { echo "::error::since must look like 30m or 2h"; exit 1; }
+              remote="$remote"'
+              cd "$SIP_DIR"
+              echo "--- receptionist: calls in the last '"$since"' ---"
+              docker logs --since "'"$since"'" vocivo-receptionist 2>&1 | { grep -E "vocivo\.(call|brain|speech|receptionist)|Traceback|Error|error" || echo "(no receptionist lines)"; } | grep -vE "warming|loading speech|listening for" | cut -c1-300 | tail -60
+              echo "--- freeswitch.log: signalling and hangups ---"
+              docker compose exec -T freeswitch sh -c "tail -n 4000 /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null \
+                | { grep -E "Hangup|hangup_cause|HANGUP|BYE|ACK|Timer|timeout|TIMEOUT|MEDIA_TIMEOUT|RECOVERY|received 4|received 5|Cannot locate|Fail|fail|ERR\]|CRIT\]|New Channel|socket|Transfer|EXECUTE.*(answer|socket|record|playback|transfer|hangup|bridge)" || echo "(nothing)"; } \
+                | grep -vE "sofia_glue|switch_rtp|switch_core_media|send_dtmf|SCHED_FIFO|nice level|rtp-timeout-sec|rtp-hold-timeout-sec|sofia_presence|Cannot locate domain" | cut -c1-240 | tail -90
+              echo "--- kamailio: call signalling ---"
+              docker compose logs -t --since "'"$since"'" --no-color kamailio 2>&1 \
+                | { grep -E "INVITE|BYE|CANCEL|inbound DID|RELAY FS|refusing|reject|sip-cdr|Not here|481|advertis" || echo "(nothing)"; } \
+                | grep -vE "reject (untrusted internal|unauthenticated E.164) INVITE from (?!192\.76\.120\.|64\.16\.250\.|127\.0\.0\.1)|malformed|tcpconn|msg_send" \
+                | sed -E "s/^([^ ]+) +\| ([0-9T:.-]+)Z? (.*)$/\2 \3/" | cut -c1-240 | tail -60
+              echo "--- rtpengine: last errors ---"
+              docker compose logs -t --since "'"$since"'" --no-color rtpengine 2>&1 | { grep -iE "error|timeout|closing|deleting" || echo "(nothing)"; } | cut -c1-200 | tail -20
               ';;
             deploy)
               remote="$remote"'
