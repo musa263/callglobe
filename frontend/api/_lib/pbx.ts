@@ -80,7 +80,7 @@ function clean(value: unknown, max: number) {
   return typeof value === 'string' ? value.replace(/[|\r\n]/g, ' ').trim().slice(0, max) : '';
 }
 
-function normalizeRole(value: unknown): ExtensionUser['role'] {
+export function normalizeRole(value: unknown): ExtensionUser['role'] {
   if (value === 'owner' || value === 'company_owner') return 'company_owner';
   if (value === 'admin' || value === 'company_admin') return 'company_admin';
   if (value === 'manager' || value === 'individual') return value;
