@@ -20,6 +20,10 @@ import { useTelnyxVoice } from './useTelnyxVoice';
  * belonged to a phone nobody was going to use.
  */
 export function useVoice(token, enabled, identity = {}) {
+  // `token` is a stable identity for the signed-in person (the profile id),
+  // not a bearer token: requests authenticate with the session cookie. When
+  // this really was the token, it was absent after every reload (the token is
+  // deliberately kept out of storage) and the phone stayed on "Connecting…".
   const [edge, setEdge] = useState(null);
   const [configurationError, setConfigurationError] = useState('');
   useEffect(() => {

@@ -30,7 +30,7 @@
       </condition>
     </extension>
     <extension name="vocivo-telnyx-registered-client">
-      <condition field="destination_number" expression="^(?!conf-)([A-Za-z][A-Za-z0-9_.-]{2,80})$">
+      <condition field="destination_number" expression="^(?!conf-|vocivo-)([A-Za-z][A-Za-z0-9_.-]{2,80})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="inherit_codec=true"/>
         <action application="set" data="origination_caller_id_name=${caller_id_name}"/>
@@ -88,6 +88,9 @@
       <condition field="${vocivo_ai_unavailable}" expression="^true$"/>
       <condition field="${curl_response_data}" expression="&quot;bridge&quot;\s*:\s*&quot;sofia/">
         <action application="set" data="hangup_after_bridge=true"/>
+        <!-- Without this a failed bridge ends the channel and the caller
+             hears dead air instead of the message below. -->
+        <action application="set" data="continue_on_fail=true"/>
         <action application="set" data="call_timeout=30"/>
         <action application="bridge" data="${regex(${curl_response_data}|&quot;bridge&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
         <action application="answer"/>

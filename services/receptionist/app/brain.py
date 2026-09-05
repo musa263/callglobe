@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 import httpx
 
@@ -227,6 +227,39 @@ def decision_from_response(payload: dict[str, Any], assistant: Assistant) -> Dec
     return decision
 
 
+_SENTENCE_END = (".", "!", "?")
+_ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "st", "no", "vs", "etc", "jr", "sr", "mt", "e.g", "i.e"}
+
+
+def first_complete_sentence(text: str) -> str:
+    """
+    The opening sentence of `text`, or "" until one has been finished. A
+    sentence ends at . ! or ? followed by a space — the space is what tells a
+    full stop from a number or an abbreviation while the text is still
+    arriving — and not after a title like "Dr." or "Mr.".
+    """
+    stripped = text.lstrip()
+    for index, character in enumerate(stripped):
+        if character not in _SENTENCE_END or index < 8 or index + 1 >= len(stripped) or stripped[index + 1] != " ":
+            continue
+        word = stripped[:index].rsplit(" ", 1)[-1].lower()
+        if character == "." and (word in _ABBREVIATIONS or (word.isdigit())):
+            continue
+        return stripped[: index + 1].strip()
+    return ""
+
+
+async def _maybe_await(callback: Callable[[str], Awaitable[None] | None] | None, value: str) -> None:
+    if callback is None:
+        return
+    try:
+        result = callback(value)
+        if result is not None:
+            await result
+    except Exception as error:  # noqa: BLE001 - an early render is an optimisation, never a failure
+        log.debug("early render failed: %s", error)
+
+
 class Brain:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -235,7 +268,21 @@ class Brain:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def respond(self, conversation: Conversation) -> Decision:
+    async def respond(
+        self,
+        conversation: Conversation,
+        on_first_sentence: Callable[[str], Awaitable[None] | None] | None = None,
+    ) -> Decision:
+        """
+        One turn of the conversation.
+
+        The reply is streamed. `on_first_sentence` is called with the model's
+        opening sentence as soon as it is complete — long before the rest of
+        the answer or any tool call has arrived — so the voice engine can start
+        on it while the model is still writing. That gap, model finishing and
+        then synthesis starting, was most of the pause callers heard before
+        every answer.
+        """
         assistant = conversation.assistant
         messages = [
             {"role": "user" if turn.role == "caller" else "assistant", "content": turn.text}
@@ -253,18 +300,19 @@ class Brain:
             }
             if self._settings.llm_workspace_id:
                 headers["anthropic-workspace-id"] = self._settings.llm_workspace_id
-            response = await self._client.post(
-                f"{self._settings.llm_base_url}/v1/messages",
-                headers=headers,
-                content=json.dumps({
-                    "model": self._settings.llm_model,
-                    "max_tokens": self._settings.llm_max_tokens,
-                    "system": system_prompt(assistant),
-                    "tools": tool_definitions(assistant),
-                    "messages": messages,
-                }),
-            )
-            response.raise_for_status()
+            body = json.dumps({
+                "model": self._settings.llm_model,
+                "max_tokens": self._settings.llm_max_tokens,
+                "system": system_prompt(assistant),
+                "tools": tool_definitions(assistant),
+                "messages": messages,
+                "stream": True,
+            })
+            async with self._client.stream("POST", f"{self._settings.llm_base_url}/v1/messages", headers=headers, content=body) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    response.raise_for_status()
+                payload = await self._collect_stream(response, on_first_sentence)
         except httpx.HTTPError as error:
             # The caller is on the line: fall back to a person rather than to an
             # apology loop. The response body says *why* — a rejected request
@@ -282,4 +330,78 @@ class Brain:
             if assistant.office_open and assistant.transfer_enabled and assistant.fallback_extension in allowed:
                 return Decision(action="transfer", extension=assistant.fallback_extension, say="One moment, I'll put you through.")
             return Decision(say="Sorry, I'm having trouble responding right now. Please tell me your name and the message for the team.")
-        return decision_from_response(response.json(), assistant)
+        return decision_from_response(payload, assistant)
+
+    async def _collect_stream(
+        self,
+        response: httpx.Response,
+        on_first_sentence: Callable[[str], Awaitable[None] | None] | None,
+    ) -> dict[str, Any]:
+        """
+        Rebuilds the message from its server-sent events, firing
+        `on_first_sentence` once, the moment the first text block holds a
+        complete sentence. Returns the same shape as a non-streamed response
+        so decision_from_response needs no second version.
+        """
+        blocks: dict[int, dict[str, Any]] = {}
+        partial_json: dict[int, str] = {}
+        announced = False
+        first_text = ""
+        event = ""
+        async for line in response.aiter_lines():
+            if line.startswith("event:"):
+                event = line[6:].strip()
+                continue
+            if not line.startswith("data:"):
+                continue
+            try:
+                data = json.loads(line[5:].strip() or "{}")
+            except json.JSONDecodeError:
+                continue
+            kind = data.get("type") or event
+            if kind == "content_block_start":
+                index = int(data.get("index", 0))
+                block = dict(data.get("content_block") or {})
+                if block.get("type") == "text":
+                    block["text"] = block.get("text", "")
+                if block.get("type") == "tool_use":
+                    partial_json[index] = ""
+                blocks[index] = block
+            elif kind == "content_block_delta":
+                index = int(data.get("index", 0))
+                delta = data.get("delta") or {}
+                block = blocks.setdefault(index, {"type": "text", "text": ""})
+                if delta.get("type") == "text_delta":
+                    block["text"] = block.get("text", "") + str(delta.get("text", ""))
+                    if not announced and block is blocks.get(min(blocks)):
+                        first_text = block["text"]
+                        sentence = first_complete_sentence(first_text)
+                        if sentence:
+                            announced = True
+                            await _maybe_await(on_first_sentence, sentence)
+                elif delta.get("type") == "input_json_delta":
+                    partial_json[index] = partial_json.get(index, "") + str(delta.get("partial_json", ""))
+            elif kind == "content_block_stop":
+                index = int(data.get("index", 0))
+                block = blocks.get(index)
+                if block is not None and block.get("type") == "text" and not announced and block.get("text", "").strip():
+                    # A one-sentence answer never grows a trailing space.
+                    announced = True
+                    text = block["text"].strip()
+                    await _maybe_await(on_first_sentence, first_complete_sentence(text + " ") or text)
+                if block is not None and block.get("type") == "tool_use":
+                    raw = partial_json.get(index, "").strip()
+                    try:
+                        block["input"] = json.loads(raw) if raw else {}
+                    except json.JSONDecodeError:
+                        log.warning("the model sent a tool call whose arguments did not parse: %r", raw[:200])
+                        block["input"] = {}
+                    if not announced:
+                        said = str((block.get("input") or {}).get("say", "")).strip()
+                        sentence = first_complete_sentence(said) or said
+                        if sentence:
+                            announced = True
+                            await _maybe_await(on_first_sentence, sentence)
+            elif kind == "message_stop":
+                break
+        return {"content": [blocks[index] for index in sorted(blocks)]}

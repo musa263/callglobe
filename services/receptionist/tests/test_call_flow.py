@@ -173,11 +173,15 @@ class FakeBrain:
         self._delay = delay
         self.seen: list[Conversation] = []
 
-    async def respond(self, conversation: Conversation) -> Decision:
+    async def respond(self, conversation: Conversation, on_first_sentence=None) -> Decision:
         self.seen.append(conversation)
         if self._delay:
             await asyncio.sleep(self._delay)
-        return self._decisions.pop(0) if self._decisions else Decision(action="hangup", say="Goodbye.")
+        decision = self._decisions.pop(0) if self._decisions else Decision(action="hangup", say="Goodbye.")
+        if on_first_sentence is not None and decision.say:
+            # The real Brain announces the opening sentence while streaming.
+            on_first_sentence(decision.say.split(". ")[0].rstrip(".") + ".")
+        return decision
 
 
 class FakeApi:
@@ -318,7 +322,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         parts = freeswitch.recordings[0].split(" ")
         self.assertEqual(len(parts), 4)
         self.assertTrue(parts[0].endswith(".wav"))
-        self.assertEqual(parts[1:], ["2", "300", "3"], "three seconds of quiet is the end of a turn; two cut callers off mid-thought")
+        self.assertEqual(parts[1:], ["2", "300", "2"], "two seconds of quiet is the end of a turn; the caller's thinking time before speaking is not counted (see _listen)")
 
     async def test_a_silent_caller_is_asked_once_and_then_handed_to_a_person(self):
         freeswitch, voice, api = await self._run(assistant=RECEPTION, turns=[], decisions=[])

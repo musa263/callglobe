@@ -35,7 +35,7 @@ const fallbackVoices: VoiceOption[] = [
 
 export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWallet }: { openBusinessNonce?: number; onBusinessConsumed?: () => void; onWallet: () => void }) {
   const insets = useSafeAreaInsets();
-  const { profile, signOut, isPreview, updateProfile } = useAuth();
+  const { profile, signOut, updateProfile } = useAuth();
   const { profile: business, callMode, setCallMode, saveProfile } = useBusiness();
   const { pushRegistration, refreshIncomingCalls } = useVoice();
   const [showBusiness, setShowBusiness] = useState(false);
@@ -72,7 +72,6 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   }, [onBusinessConsumed, openBusinessNonce]);
   useEffect(() => { loadIncomingRingtone().then(setRingtone).catch(() => undefined); }, []);
   const loadMyCalls = async () => {
-    if (isPreview) { setMyCallsLoaded(true); return; }
     try {
       const result = await api.get<{ preferences: CallPreferences }>('/api/voice/preferences');
       setMyCalls({ ...defaultCallPreferences, ...result.preferences });
@@ -85,10 +84,8 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
     setSaving(true);
     setError('');
     try {
-      if (!isPreview) {
-        const result = await api.put<{ preferences: CallPreferences }>('/api/voice/preferences', myCalls);
-        setMyCalls({ ...defaultCallPreferences, ...result.preferences });
-      }
+      const result = await api.put<{ preferences: CallPreferences }>('/api/voice/preferences', myCalls);
+      setMyCalls({ ...defaultCallPreferences, ...result.preferences });
       setShowMyCalls(false);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Could not save your call handling.');
@@ -98,14 +95,14 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   };
   useEffect(() => { const unsubscribe = NetInfo.addEventListener(setNetwork); return unsubscribe; }, []);
   const initials = (profile?.full_name || profile?.email || 'VO').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-  const canManagePhoneSystem = isPreview || adminRoles.includes(profile?.role || '');
-  const businessAccount = isPreview || profile?.account_type === 'business';
+  const canManagePhoneSystem = adminRoles.includes(profile?.role || '');
+  const businessAccount = profile?.account_type === 'business';
   useEffect(() => {
-    if (!canManagePhoneSystem || isPreview) return;
+    if (!canManagePhoneSystem) return;
     api.get<{ voices: VoiceOption[]; carrierFallbacks: VoiceOption[] }>('/api/admin/voices')
       .then((result) => setVoices([...(result.voices || []), ...(result.carrierFallbacks || [])]))
       .catch(() => setVoices(fallbackVoices));
-  }, [canManagePhoneSystem, isPreview]);
+  }, [canManagePhoneSystem]);
   useEffect(() => { if (voicePlayerStatus.didJustFinish) setPreviewingVoice(''); }, [voicePlayerStatus.didJustFinish]);
   useEffect(() => { if (ringtonePlayerStatus.didJustFinish) setPreviewingRingtone(''); }, [ringtonePlayerStatus.didJustFinish]);
 
@@ -193,7 +190,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
   return <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
       <View style={styles.header}><Text style={styles.eyebrow}>YOUR ACCOUNT</Text><Text style={styles.title}>Settings</Text></View>
-      <Pressable onPress={openProfile} style={styles.profile}>{profile?.photo_url ? <Image source={{ uri: profile.photo_url }} style={styles.avatarImage} /> : <View style={styles.avatar}><Text style={styles.initials}>{initials}</Text></View>}<View style={styles.profileCopy}><Text style={styles.profileName}>{profile?.full_name || 'Vocivo member'}</Text><Text style={styles.profileEmail}>{profile?.job_title || profile?.email}</Text></View>{isPreview ? <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>PREVIEW</Text></View> : <ChevronRight size={18} color={colors.textFaint} />}</Pressable>
+      <Pressable onPress={openProfile} style={styles.profile}>{profile?.photo_url ? <Image source={{ uri: profile.photo_url }} style={styles.avatarImage} /> : <View style={styles.avatar}><Text style={styles.initials}>{initials}</Text></View>}<View style={styles.profileCopy}><Text style={styles.profileName}>{profile?.full_name || 'Vocivo member'}</Text><Text style={styles.profileEmail}>{profile?.job_title || profile?.email}</Text></View><ChevronRight size={18} color={colors.textFaint} /></Pressable>
       <Text style={styles.sectionLabel}>ACCOUNT</Text>
       <View style={styles.group}><Row icon={UserRoundPen} title="Personal profile" subtitle="Photo, name, role and contact details" onPress={openProfile} /></View>
       {businessAccount && <><Text style={styles.sectionLabel}>CALL HANDLING</Text>
@@ -211,7 +208,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
       </View>
       {adminRoles.includes(profile?.role || '') && <><Text style={styles.sectionLabel}>SECURITY</Text>
       <View style={styles.group}><Row icon={KeyRound} title="Reset password" subtitle="Change your Vocivo sign-in password" onPress={() => { setError(''); setShowPassword(true); }} /></View></>}
-      <View style={styles.group}><Row icon={LogOut} title={isPreview ? 'Exit preview' : 'Sign out'} danger onPress={signOut} /></View>
+      <View style={styles.group}><Row icon={LogOut} title="Sign out" danger onPress={signOut} /></View>
       <Text style={styles.version}>Vocivo 1.0.0 · Build {Constants.nativeBuildVersion || 'development'}</Text>
     </ScrollView>
 
@@ -316,7 +313,7 @@ export function SettingsScreen({ openBusinessNonce = 0, onBusinessConsumed, onWa
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: colors.ink }, content: { paddingHorizontal: 20, paddingBottom: 40 }, header: { minHeight: 74, justifyContent: 'center' }, eyebrow: { color: colors.mint, fontSize: 10, fontWeight: '800' }, title: { color: colors.text, fontSize: 28, fontWeight: '800', marginTop: 3 },
-  profile: { minHeight: 86, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center', marginRight: 13 }, avatarImage: { width: 52, height: 52, borderRadius: 26, marginRight: 13, backgroundColor: colors.panel }, initials: { color: colors.ink, fontSize: 18, fontWeight: '900' }, profileCopy: { flex: 1 }, profileName: { color: colors.text, fontSize: 16, fontWeight: '800' }, profileEmail: { color: colors.textMuted, fontSize: 11, marginTop: 4 }, previewBadge: { height: 22, paddingHorizontal: 7, borderRadius: 5, backgroundColor: '#2A2414', justifyContent: 'center' }, previewBadgeText: { color: colors.amber, fontSize: 8, fontWeight: '900' },
+  profile: { minHeight: 86, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center', marginRight: 13 }, avatarImage: { width: 52, height: 52, borderRadius: 26, marginRight: 13, backgroundColor: colors.panel }, initials: { color: colors.ink, fontSize: 18, fontWeight: '900' }, profileCopy: { flex: 1 }, profileName: { color: colors.text, fontSize: 16, fontWeight: '800' }, profileEmail: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
   sectionLabel: { color: colors.textFaint, fontSize: 10, fontWeight: '800', marginTop: 25, marginBottom: 8 }, callMode: { height: 68, padding: 3, position: 'relative', flexDirection: 'row', borderRadius: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line }, callModeButton: { flex: 1, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 6 }, callModeActive: { backgroundColor: colors.mint }, callModeTitle: { color: colors.text, fontSize: 12, fontWeight: '900' }, callModeTitleActive: { color: colors.ink }, callModeHelp: { color: colors.textFaint, fontSize: 8, marginTop: 3 }, callModeHelpActive: { color: '#17354A' }, callModeBusy: { position: 'absolute', right: 7, top: 7 }, group: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, marginBottom: 18 }, row: { minHeight: 66, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, pressed: { opacity: 0.65 }, rowIcon: { width: 38, height: 38, borderRadius: 8, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, rowIconDanger: { backgroundColor: '#281616' }, rowCopy: { flex: 1 }, rowTitle: { color: colors.text, fontSize: 14, fontWeight: '700' }, rowSubtitle: { color: colors.textFaint, fontSize: 10, marginTop: 4 }, danger: { color: colors.coral }, version: { color: colors.textFaint, textAlign: 'center', fontSize: 10, marginTop: 10 },
   modalPage: { flex: 1, backgroundColor: colors.canvas }, modalContent: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 40 }, passwordPage: { paddingHorizontal: 20, paddingTop: 22 }, ringtonePage: { paddingHorizontal: 20, paddingTop: 22 }, modalHeader: { minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, modalTitle: { color: colors.text, fontSize: 23, fontWeight: '800', marginTop: 4 }, close: { width: 42, height: 42, borderRadius: 8, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center' }, photoEditor: { width: 106, height: 106, alignSelf: 'center', marginTop: 16 }, photoPreview: { width: 106, height: 106, borderRadius: 53, backgroundColor: colors.panel }, photoFallback: { width: 106, height: 106, borderRadius: 53, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.blue }, photoInitials: { color: colors.ink, fontSize: 30, fontWeight: '900' }, cameraBadge: { position: 'absolute', right: 0, bottom: 0, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.mint, borderWidth: 3, borderColor: colors.canvas }, photoHelp: { color: colors.textMuted, fontSize: 10, textAlign: 'center', marginTop: 10 }, enableRow: { minHeight: 84, marginTop: 10, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, enableCopy: { flex: 1, paddingRight: 14 }, fieldTitle: { color: colors.text, fontSize: 14, fontWeight: '800' }, fieldHelp: { color: colors.textMuted, fontSize: 10, lineHeight: 15, marginTop: 6 }, fieldLabel: { color: colors.textFaint, fontSize: 10, fontWeight: '900', marginTop: 20, marginBottom: 8 }, field: { minHeight: 48, paddingHorizontal: 12, borderRadius: 8, color: colors.text, fontSize: 14, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line }, readOnlyField: { justifyContent: 'center', opacity: 0.72 }, readOnlyText: { color: colors.textMuted, fontSize: 14 }, message: { height: 94, paddingTop: 12, textAlignVertical: 'top' }, divisions: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, divisionRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, divisionKey: { width: 32, height: 32, borderRadius: 7, backgroundColor: '#12334A', alignItems: 'center', justifyContent: 'center' }, divisionKeyText: { color: colors.mint, fontSize: 12, fontWeight: '900' }, divisionInput: { flex: 1, minHeight: 52, paddingHorizontal: 12, color: colors.text, fontSize: 14, fontWeight: '700' }, deleteDivision: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' }, addDivision: { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8 }, addDivisionText: { flex: 1, color: colors.mint, fontSize: 12, fontWeight: '800' }, divisionCount: { color: colors.textFaint, fontSize: 10, fontWeight: '800' }, choice: { height: 46, padding: 3, flexDirection: 'row', borderRadius: 8, backgroundColor: colors.panel }, choiceButton: { flex: 1, borderRadius: 6, alignItems: 'center', justifyContent: 'center' }, choiceActive: { backgroundColor: colors.panelRaised }, choiceText: { color: colors.textMuted, fontSize: 12, fontWeight: '800' }, choiceTextActive: { color: colors.mint }, error: { color: colors.coral, fontSize: 11, lineHeight: 16, marginTop: 14, textAlign: 'center' }, save: { height: 52, marginTop: 24, borderRadius: 8, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }, disabled: { opacity: 0.35 }, saveText: { color: colors.ink, fontSize: 14, fontWeight: '900' }, note: { color: colors.textFaint, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 10, paddingHorizontal: 12 }, ringtoneIntro: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 12, marginBottom: 18 }, ringtoneList: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, ringtoneRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, ringtoneIcon: { width: 40, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.panel }, ringtoneIconActive: { backgroundColor: colors.mint }, ringtoneCopy: { flex: 1, minWidth: 0, paddingHorizontal: 12 }, ringtoneTitle: { color: colors.text, fontSize: 14, fontWeight: '800' }, ringtoneDetail: { color: colors.textMuted, fontSize: 10, marginTop: 4 },
   voiceList: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line }, voiceRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }, voiceRowActive: { backgroundColor: '#0E2638' }, voiceSelect: { flex: 1, minWidth: 0, minHeight: 62, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center' }, radio: { width: 22, height: 22, borderRadius: 11, marginRight: 11, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.line }, radioActive: { backgroundColor: colors.mint, borderColor: colors.mint }, voiceCopy: { flex: 1, minWidth: 0 }, voiceName: { color: colors.text, fontSize: 13, fontWeight: '800' }, voiceMeta: { color: colors.textMuted, fontSize: 9, marginTop: 4, textTransform: 'capitalize' }, previewButton: { width: 46, height: 46, marginRight: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: colors.panel },

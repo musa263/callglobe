@@ -131,6 +131,25 @@ export async function refreshVocivoSip() {
   await bridge.refresh();
 }
 
+/**
+ * After a VoIP push: get registered again, quickly, trying a few times —
+ * the radio may still be coming up when the first attempt is made.
+ */
+async function wakeRegistration() {
+  const epoch = registrationEpoch;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (epoch !== registrationEpoch) throw new Error('Calling session changed.');
+    try {
+      await ensureSipRegistration();
+      return;
+    } catch (error) {
+      console.warn('Vocivo SIP: re-registration after push failed', error instanceof Error ? error.message : error);
+      if (attempt === 3 || epoch !== registrationEpoch) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+    }
+  }
+}
+
 export async function inviteVocivoSip(target: string, headers?: Array<{ name: string; value: string }>) {
   return ensureBridge().bridge.invite(target, headers);
 }
@@ -197,7 +216,7 @@ export function createSipVoiceClient(): SipVoiceClient {
         const { sipEngine } = await import('../voice/engines');
         const engine = sipEngine();
         voice.use(engine.name, engine.client, engine.platform);
-        await ensureSipRegistration();
+        await wakeRegistration();
       },
     });
   }

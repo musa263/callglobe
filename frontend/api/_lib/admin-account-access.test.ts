@@ -40,3 +40,14 @@ test('an administrator still manages ordinary users, and their own account', () 
 test('a session with no extension of its own matches nobody by identity', () => {
   assert.equal(mayAdministerAccount({ superadmin: false, role: 'company_admin' }, { id: '', role: 'company_admin' }), false);
 });
+
+test('the role aliases the store accepts are administrator roles once normalised', async () => {
+  // admin-extensions must normalise before asking mayGrantAdminAccess: the
+  // raw alias "owner" is not an admin role to the guard, but is saved as one.
+  const { normalizeRole } = await import('./pbx.js');
+  const { isAdminRole, mayGrantAdminAccess } = await import('./admin-account-access.js');
+  assert.equal(isAdminRole('owner'), false);
+  assert.equal(isAdminRole(normalizeRole('owner')), true);
+  assert.equal(isAdminRole(normalizeRole('admin')), true);
+  assert.equal(mayGrantAdminAccess({ superadmin: false, role: 'company_admin' }, normalizeRole('owner')), false);
+});

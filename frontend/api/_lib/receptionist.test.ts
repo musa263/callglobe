@@ -53,10 +53,10 @@ function inputFor(base: PbxConfig, extensions: ExtensionUser[] = [extension()]) 
 
 test('a carrier voice name maps onto the self-hosted voice nearest it', () => {
   assert.equal(receptionistVoice('Telnyx.Bayan.Amanda'), 'af_heart');
-  assert.equal(receptionistVoice('Telnyx.Bayan.Adam'), 'am_adam');
+  assert.equal(receptionistVoice('Telnyx.Bayan.Adam'), 'af_heart', 'Adam is graded F+: the best English voice answers instead');
   // Already self-hosted, or unrecognised: never left as a carrier name the
   // speech engine would refuse, which would leave the receptionist silent.
-  assert.equal(receptionistVoice('am_michael'), 'am_michael');
+  assert.equal(receptionistVoice('am_michael'), 'af_heart', 'C+ is below the bar for a phone line');
   assert.equal(receptionistVoice('something.else'), 'af_heart');
   assert.equal(receptionistVoice(''), 'af_heart');
 });
@@ -64,11 +64,13 @@ test('a carrier voice name maps onto the self-hosted voice nearest it', () => {
 test('the voice a tenant picks in the admin is the voice the receptionist speaks with', () => {
   // The admin offers the catalog ids; the receptionist knew four engine ids
   // and quietly spoke with the default for every other choice.
-  assert.equal(receptionistVoice('Vocivo.Kokoro.AmAdam'), 'am_adam');
+  assert.equal(receptionistVoice('Vocivo.Kokoro.AmAdam'), 'af_heart');
   assert.equal(receptionistVoice('Vocivo.Kokoro.BfEmma'), 'bf_emma');
   assert.equal(receptionistVoice('Vocivo.Kokoro.EfDora'), 'ef_dora');
-  assert.equal(receptionistVoice('Telnyx.KokoroTTS.bm_george'), 'bm_george');
-  assert.equal(receptionistVoice('bf_lily'), 'bf_lily');
+  assert.equal(receptionistVoice('Telnyx.KokoroTTS.bm_george'), 'af_heart');
+  assert.equal(receptionistVoice('bf_lily'), 'af_heart');
+  assert.equal(receptionistVoice('Vocivo.Kokoro.AfBella'), 'af_bella', 'a recommended voice is kept as chosen');
+  assert.equal(receptionistVoice('Vocivo.Kokoro.FfSiwis'), 'ff_siwis', 'the substitute stays in the same language');
 });
 
 test('only extensions somebody can actually answer are offered as transfers', () => {

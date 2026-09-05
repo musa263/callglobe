@@ -200,6 +200,7 @@ export class SipStackBridge implements NativeSipBridge {
     const stack = this.requireStack();
     const handle = await stack.invite(target, headers ?? []);
     this.track(handle);
+    this.events.emit('outgoing', { callId: handle.id, target });
     return handle.id;
   }
 

@@ -32,9 +32,13 @@ export async function api(path, options = {}) {
   const { auth = true, body, headers, ...fetchOptions } = options;
   const session = getStoredSession();
   const method = String(fetchOptions.method || 'GET').toUpperCase();
-  const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
-  const attempts = path.startsWith('/api/voice/status') ? 1 : ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
-  const timeoutMs = path.startsWith('/api/voice/status') ? 5000 : 10000;
+  // Bringing the phone up is the one POST that is safe to repeat: a credential
+  // request that timed out on a cold function was surfaced as "signal is
+  // aborted without reason" and the phone never registered.
+  const phoneSetup = path === '/api/voice/sip-credentials' || path === '/api/voice/config';
+  const retryable = method === 'GET' || phoneSetup || ['/api/auth/login', '/api/auth/enroll'].includes(path);
+  const attempts = path.startsWith('/api/voice/status') ? 1 : phoneSetup || ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
+  const timeoutMs = path.startsWith('/api/voice/status') ? 5000 : phoneSetup ? 20000 : 10000;
   let lastError;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -65,6 +69,12 @@ export async function api(path, options = {}) {
       }
       return payload;
     } catch (error) {
+      // The browser's own wording for a timed-out fetch is "signal is aborted
+      // without reason"; nobody should have to read that.
+      if (error instanceof Error && error.name === 'AbortError') {
+        error = new Error('The server took too long to answer. Check your connection and try again.');
+        error.name = 'AbortError';
+      }
       lastError = error;
       if (!retryable || attempt === attempts - 1 || (error instanceof Error && !['AbortError', 'TypeError'].includes(error.name))) throw error;
       await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));

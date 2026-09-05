@@ -28,6 +28,25 @@ fi
 # and CIDR ranges.
 # Empty means no source is trusted, which is the safe default: inbound over the
 # trunk stays refused until somebody names the addresses it may arrive from.
+# The sockets, with the droplet's public address advertised on the public
+# ones. Bound to 0.0.0.0 with nothing advertised, Kamailio wrote 0.0.0.0 into
+# the Record-Route of every call it proxied, and the carrier had nowhere to
+# send its ACK: FreeSWITCH kept re-sending the 200 OK and, when SIP's Timer H
+# expired, hung up — every answered inbound call ended at exactly 32 seconds.
+listen_file=/etc/kamailio/listen.cfg
+public_ip="${PUBLIC_IP:-}"
+case "$public_ip" in
+  ''|127.0.0.1|*[!0-9.]*) advertise="" ;;
+  *) advertise=" advertise ${public_ip}:5060" ;;
+esac
+{
+  echo '# generated at container start from PUBLIC_IP'
+  echo "listen=udp:0.0.0.0:5060${advertise}"
+  echo "listen=tcp:0.0.0.0:5060${advertise}"
+  echo 'listen=tcp:127.0.0.1:8080'
+} > "$listen_file"
+[ -n "$advertise" ] && echo "kamailio: advertising ${public_ip}:5060 on the public sockets" || echo "kamailio: PUBLIC_IP not set, no advertised address (Record-Route will carry 0.0.0.0)" >&2
+
 sources_file=/etc/kamailio/trunk-sources.cfg
 {
   echo '# generated at container start from VOCIVO_TRUNK_SOURCES'

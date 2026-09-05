@@ -1,5 +1,5 @@
 import type { ExtensionUser } from './pbx.js';
-import { vocivoVoices, voiceDefinition } from './voice-catalog.js';
+import { isRecommendedVoice, vocivoVoices, voiceDefinition, voiceGradeRank } from './voice-catalog.js';
 import type { PbxConfig } from './pbx-config-store.js';
 import { normalizeE164 } from './tenancy.js';
 import { officeHoursDecision } from './office-hours.js';
@@ -101,12 +101,33 @@ export const receptionistPhrases = [
  */
 export function receptionistVoice(stored: string): string {
   const trimmed = (stored || '').trim();
-  if (kokoroVoiceIds.has(trimmed)) return trimmed;
-  const catalog = voiceDefinition(trimmed);
-  if (catalog) return catalog.sourceVoice;
-  const carrierCopy = /^Telnyx\.KokoroTTS\.([a-z]{2}_[a-z]+)$/.exec(trimmed);
-  if (carrierCopy && kokoroVoiceIds.has(carrierCopy[1])) return carrierCopy[1];
-  return voiceAliases[trimmed] || 'af_heart';
+  let source = '';
+  if (kokoroVoiceIds.has(trimmed)) source = trimmed;
+  else {
+    const catalog = voiceDefinition(trimmed);
+    if (catalog) source = catalog.sourceVoice;
+    else {
+      const carrierCopy = /^Telnyx\.KokoroTTS\.([a-z]{2}_[a-z]+)$/.exec(trimmed);
+      source = carrierCopy && kokoroVoiceIds.has(carrierCopy[1]) ? carrierCopy[1] : voiceAliases[trimmed] || 'af_heart';
+    }
+  }
+  return spokenVoice(source);
+}
+
+/**
+ * The voice that actually answers. A voice the engine's own authors grade
+ * below B- is recognisably a machine on a phone line — the first receptionist
+ * went live on Adam, graded F+, and callers said so. Those are answered by
+ * the best-graded voice in the same language instead; the admin's choice is
+ * kept in the config and honoured again the day the engine improves it.
+ */
+export function spokenVoice(sourceVoice: string): string {
+  const chosen = vocivoVoices.find((voice) => voice.sourceVoice === sourceVoice);
+  if (!chosen || isRecommendedVoice(chosen.quality)) return sourceVoice;
+  const better = vocivoVoices
+    .filter((voice) => voice.language === chosen.language && isRecommendedVoice(voice.quality))
+    .sort((a, b) => voiceGradeRank(a.quality) - voiceGradeRank(b.quality))[0];
+  return better ? better.sourceVoice : sourceVoice;
 }
 
 /**

@@ -147,6 +147,17 @@ export function bindCallUi(options: {
     }).catch(swallow('report incoming'));
   }));
 
+  // Outbound calls were never reported: no in-call status bar, nothing in
+  // Recents, Bluetooth and CarPlay buttons dead, and the voice-chat audio
+  // session — configured on the incoming path — never applied to a dialled
+  // call, so headset routing was whatever WebRTC happened to pick.
+  subscriptions.push(events.addListener('outgoing', (payload) => {
+    if (ended.has(payload.callId) || reported.has(payload.callId)) return;
+    reported.add(payload.callId);
+    const handle = payload.target.replace(/^sips?:/i, '').split('@')[0] || payload.target;
+    native.reportOutgoingCall({ callId: payload.callId, handle }).catch(swallow('report outgoing'));
+  }));
+
   subscriptions.push(events.addListener('callState', (payload) => {
     if (payload.state === 'ACTIVE') {
       if (ended.has(payload.callId)) return;

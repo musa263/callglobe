@@ -50,10 +50,10 @@ test('an engine that is down or unconfigured costs the save nothing', async () =
 });
 
 test('a receptionist renders its greeting and every fixed phrase in its own voice, in spoken pieces', () => {
-  const ai = { ...defaultPbxConfig().ai, enabled: true, greeting: 'Thanks for calling Acme. How can I help?', voice: 'Vocivo.Kokoro.AmAdam' };
+  const ai = { ...defaultPbxConfig().ai, enabled: true, greeting: 'Thanks for calling Acme. How can I help?', voice: 'Vocivo.Kokoro.AfBella' };
   const items = receptionistPrerenderItems(ai);
   assert.deepEqual(items.slice(0, 2).map((item) => item.input), ['Thanks for calling Acme.', 'How can I help?']);
-  assert.ok(items.every((item) => item.voice === 'am_adam'), 'the catalog id is translated to the engine voice');
+  assert.ok(items.every((item) => item.voice === 'af_bella'), 'the catalog id is translated to the engine voice');
   for (const phrase of receptionistPhrases) {
     for (const piece of splitSpokenSentences(phrase)) assert.ok(items.some((item) => item.input === piece), piece);
   }

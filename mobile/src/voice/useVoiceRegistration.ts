@@ -5,7 +5,7 @@ import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons
 import { api } from '../lib/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../lib/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../lib/voipClient';
-import { ensureSipRegistration, refreshVocivoSip } from '../lib/sipNative';
+import { ensureSipRegistration, refreshVocivoSip, unregisterVocivoSip } from '../lib/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../lib/voiceRecovery';
@@ -18,7 +18,6 @@ type VoiceRegistrationInput = {
   activeCallRef: MutableRefObject<ActiveCall | null>;
   bootstrapSession?: VoiceLoginConfig | null;
   isAuthenticated: boolean;
-  isPreview: boolean;
   loading: boolean;
   loginConfigRef: MutableRefObject<VoiceLoginConfig | null>;
   reportVoiceError: (operation: string, failure: unknown) => void;
@@ -30,7 +29,6 @@ export function useVoiceRegistration({
   activeCallRef,
   bootstrapSession,
   isAuthenticated,
-  isPreview,
   loading,
   loginConfigRef,
   reportVoiceError,
@@ -39,8 +37,12 @@ export function useVoiceRegistration({
 }: VoiceRegistrationInput) {
   useEffect(() => {
     if (loading) return;
-    if (!isAuthenticated || isPreview) {
+    if (!isAuthenticated) {
       loginConfigRef.current = null;
+      // Both stacks. The carrier client alone was signed out, and the SIP
+      // user agent kept its registration alive: the signed-out phone went on
+      // ringing with the previous user's calls until the app was killed.
+      unregisterVocivoSip().catch((failure) => reportVoiceError('SIP unregister', failure));
       voice.logout().catch((failure) => reportVoiceError('logout', failure));
       setPushRegistration('unavailable');
       return;
@@ -316,5 +318,5 @@ export function useVoiceRegistration({
       appStateSubscription?.remove();
       networkSubscription?.();
     };
-  }, [activeCallRef, bootstrapSession, isAuthenticated, isPreview, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration]);
+  }, [activeCallRef, bootstrapSession, isAuthenticated, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration]);
 }

@@ -422,3 +422,13 @@ class SentenceSplitting(unittest.TestCase):
         parts = split_sentences(many)
         self.assertEqual(len(parts), 8)
         self.assertTrue(parts[-1].endswith("Sentence number 19 is here."))
+
+
+class FirstSentence(unittest.TestCase):
+    def test_waits_for_a_finished_sentence(self):
+        from app.brain import first_complete_sentence
+        self.assertEqual(first_complete_sentence("We close at"), "")
+        self.assertEqual(first_complete_sentence("We close at five."), "", "no space yet: the sentence may still be growing")
+        self.assertEqual(first_complete_sentence("We close at five. Would"), "We close at five.")
+        self.assertEqual(first_complete_sentence("Ask for Dr. Ahmed at"), "", "a title is not the end of a sentence")
+        self.assertEqual(first_complete_sentence("Certainly, one moment please! I'll"), "Certainly, one moment please!")

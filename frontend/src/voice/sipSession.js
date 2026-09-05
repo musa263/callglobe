@@ -24,7 +24,7 @@ export async function connectSipUserAgent(input) {
     displayName: input.displayName || input.username,
     transportOptions: {
       server: input.wsUri,
-      keepAliveInterval: 30,
+      keepAliveInterval: 20,
     },
     sessionDescriptionHandlerFactoryOptions: {
       iceCheckingTimeout: 5000,

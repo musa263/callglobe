@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { mayAdministerAccount, mayGrantAdminAccess } from '../admin-account-access.js';
 import { requireAdmin } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../http.js';
-import { createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
+import { normalizeRole, createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
 import {
@@ -32,9 +32,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
     if (req.method === 'POST') {
-      const requestedRole = req.body?.role;
+      // Normalised first: the store accepts the aliases "owner" and "admin"
+      // and saves them as company_owner / company_admin, but the guard below
+      // only recognised the canonical names — so a company_admin sending
+      // role: "owner" walked past it and minted an owner login.
+      const requestedRole = req.body?.role === undefined || req.body?.role === null ? undefined : normalizeRole(req.body.role);
       if (!mayGrantAdminAccess(actor, requestedRole)) return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
-      if (['company_owner', 'company_admin'].includes(requestedRole)) {
+      if (requestedRole && ['company_owner', 'company_admin'].includes(requestedRole)) {
         const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
         const password = typeof req.body?.loginPassword === 'string' ? req.body.loginPassword : '';
         if (!email) return res.status(400).json({ error: 'Company administrators require an email address.' });
@@ -63,7 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const existing = (await listExtensions(organizationId)).find((item) => item.id === id);
     if (!existing) return res.status(404).json({ error: 'Extension not found in this organization.' });
     if (req.method === 'PATCH') {
-      const requestedRole = req.body?.role;
+      // Normalised first: the store accepts the aliases "owner" and "admin"
+      // and saves them as company_owner / company_admin, but the guard below
+      // only recognised the canonical names — so a company_admin sending
+      // role: "owner" walked past it and minted an owner login.
+      const requestedRole = req.body?.role === undefined || req.body?.role === null ? undefined : normalizeRole(req.body.role);
       const state = await readTenantSaasState(organizationId, config);
       const linkedAdmin = state.tenantAdmins.find((account) => account.extensionId === id);
       if (!mayGrantAdminAccess(actor, requestedRole)) return res.status(403).json({ error: 'Only the company owner can grant administrator access.' });
@@ -74,7 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // that password as the owner's login — the owner's account, taken by one
       // of their own administrators.
       if (!mayAdministerAccount(actor, existing)) return res.status(403).json({ error: 'Only the company owner can change another administrator\u2019s account.' });
-      if (['company_owner', 'company_admin'].includes(requestedRole)) {
+      if (requestedRole && ['company_owner', 'company_admin'].includes(requestedRole)) {
         const email = typeof req.body?.email === 'string' ? req.body.email.trim() : existing.email;
         const password = typeof req.body?.loginPassword === 'string' ? req.body.loginPassword : '';
         if (!email) return res.status(400).json({ error: 'Company administrators require an email address.' });

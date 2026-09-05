@@ -13,11 +13,9 @@ type AuthContextValue = {
   rates: CallRate[];
   callerNumbers: CallerNumber[];
   history: CallLog[];
-  isPreview: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   enrollWithQr: (token: string) => Promise<void>;
   signOut: () => Promise<void>;
-  enterPreview: () => void;
   refresh: () => Promise<void>;
   addHistory: (call: CallLog) => Promise<void>;
   updateProfile: (input: { fullName: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photo?: { base64: string; mimeType: string } }) => Promise<void>;
@@ -64,14 +62,6 @@ function normalizeRates(values: CallRate[]) {
 const legacyHistoryKey = 'vocivo.secure-history';
 const historyKey = (userId: string) => `vocivo.history.v3.${userId}`;
 const AuthContext = createContext<AuthContextValue | null>(null);
-
-const previewProfile: Profile = { id: 'preview-user', email: 'preview@vocivo.app', full_name: 'Musa', job_title: 'Account owner', department: 'Operations', location: 'Riyadh', balance: 24.8, currency: 'USD' };
-const previewNumbers: CallerNumber[] = [{ id: 'preview-number', phone_number: '+1 844 716 1777', label: 'Vocivo', country_code: 'US', status: 'active', receives_calls: true, source: 'owned' }];
-const previewHistory: CallLog[] = [
-  { id: '1', destination_number: '+966 50 421 8930', destination_country: 'Saudi Arabia', duration_seconds: 742, total_cost: 0.52, status: 'completed', started_at: new Date(Date.now() - 46 * 60 * 1000).toISOString() },
-  { id: '2', destination_number: '+92 300 845 1192', destination_country: 'Pakistan', duration_seconds: 319, total_cost: 0.24, status: 'completed', started_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() },
-  { id: '3', destination_number: '+44 7700 900112', destination_country: 'United Kingdom', duration_seconds: 0, total_cost: 0, status: 'no_answer', started_at: new Date(Date.now() - 3 * 86400000).toISOString() },
-];
 
 function initialProfile(baseProfile: Omit<Profile, 'balance'>): Profile {
   if (!baseProfile.id) throw new Error('Account identity was not returned.');
@@ -134,18 +124,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const historyRef = useRef<CallLog[]>([]);
   const directoryRef = useRef<DirectoryResponse['users']>([]);
   const activeUserIdRef = useRef<string | null>(null);
-  const [isPreview, setIsPreview] = useState(false);
   const [nativeBridgeError, setNativeBridgeError] = useState<Error | null>(null);
 
   useEffect(() => {
-    setVoiceSignedIn(isAuthenticated && !isPreview)
+    setVoiceSignedIn(isAuthenticated)
       .then(() => setNativeBridgeError(null))
       .catch((failure) => {
         const error = failure instanceof Error ? failure : new Error(String(failure));
         console.error('[Vocivo Auth] native voice state synchronization failed', { message: error.message, stack: error.stack });
         setNativeBridgeError(error);
       });
-  }, [isAuthenticated, isPreview]);
+  }, [isAuthenticated]);
 
   const refreshServerHistory = useCallback(async (userId: string, directory: DirectoryResponse['users']) => {
     const server = await api.get<HistoryResponse>('/api/voice/history');
@@ -253,7 +242,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await signOutVoiceDevice();
-    setIsPreview(false);
     setAuthenticated(false);
     setProfile(null);
     activeUserIdRef.current = null;
@@ -263,41 +251,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await api.clearSessionToken();
   }, []);
 
-  const enterPreview = useCallback(() => {
-    if (!__DEV__) return;
-    setProfile(previewProfile);
-    setRates(fallbackRates);
-    setCallerNumbers(previewNumbers);
-    historyRef.current = previewHistory;
-    setHistory(previewHistory);
-    setIsPreview(true);
-  }, []);
-
   const refresh = useCallback(async () => {
-    if (isPreview || !isAuthenticated) return;
+    if (!isAuthenticated) return;
     const session = await api.get<SessionResponse>('/api/auth/session');
     await loadAccount(session.profile);
     await refreshServerHistory(session.profile.id, directoryRef.current).catch(() => undefined);
-  }, [isAuthenticated, isPreview, loadAccount, refreshServerHistory]);
+  }, [isAuthenticated, loadAccount, refreshServerHistory]);
 
   const addHistory = useCallback(async (call: CallLog) => {
-    if (isPreview) return;
     const next = [call, ...historyRef.current.filter((item) => item.id !== call.id)].slice(0, 100);
     historyRef.current = next;
     setHistory(next);
     if (profile?.id) await AsyncStorage.setItem(historyKey(profile.id), JSON.stringify(next));
-  }, [isPreview, profile?.id]);
+  }, [profile?.id]);
 
   const updateProfile = useCallback(async (input: { fullName: string; jobTitle: string; department: string; mobile: string; location: string; bio: string; photo?: { base64: string; mimeType: string } }) => {
-    if (isPreview) {
-      setProfile((current) => current ? { ...current, full_name: input.fullName, job_title: input.jobTitle, department: input.department, mobile: input.mobile, location: input.location, bio: input.bio } : current);
-      return;
-    }
     const result = await api.put<UserProfileResponse>('/api/auth/profile', input);
     setProfile((current) => current ? { ...current, ...mobileProfile(result.profile) } : current);
-  }, [isPreview]);
+  }, []);
 
-  const value = useMemo(() => ({ loading, isAuthenticated, profile, rates, callerNumbers, history, isPreview, signIn, enrollWithQr, signOut, enterPreview, refresh, addHistory, updateProfile }), [addHistory, callerNumbers, enrollWithQr, enterPreview, history, isAuthenticated, isPreview, loading, profile, rates, refresh, signIn, signOut, updateProfile]);
+  const value = useMemo(() => ({ loading, isAuthenticated, profile, rates, callerNumbers, history, signIn, enrollWithQr, signOut, refresh, addHistory, updateProfile }), [addHistory, callerNumbers, enrollWithQr, history, isAuthenticated, loading, profile, rates, refresh, signIn, signOut, updateProfile]);
   if (nativeBridgeError) throw nativeBridgeError;
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

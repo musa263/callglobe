@@ -52,7 +52,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   inputs = {
     activeCallRef: { current: null }, loginConfigRef: { current: null },
-    isAuthenticated: true, isPreview: false, loading: false,
+    isAuthenticated: true, loading: false,
     reportVoiceError: jest.fn(), setError: jest.fn(), setPushRegistration: jest.fn(),
   };
   (api.get as jest.Mock).mockResolvedValue({ voice_edge: 'sip' });
