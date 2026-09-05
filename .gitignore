@@ -41,3 +41,6 @@ backend/supabase/.temp/
 # Python bytecode from the self-hosted services
 __pycache__/
 *.py[co]
+
+# Files the Claude desktop app drops beside the checkout when it delivers a download
+Claude outputs/
