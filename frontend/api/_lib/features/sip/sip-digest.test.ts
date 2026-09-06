@@ -34,3 +34,21 @@ test('parses comma-separated Digest Authorization headers from SIP.js', () => {
   assert.equal(parsed?.nc, '00000001');
   assert.equal(parsed?.cnonce, 'xyz');
 });
+
+test('rejects unsupported algorithms, auth-int and malformed qop fields', () => {
+  const ha1 = digestHa1('alice', 'sip.example', 'secret');
+  const challenge = { username: 'alice', realm: 'sip.example', nonce: 'nonce', uri: 'sip:sip.example', method: 'REGISTER', qop: 'auth', nc: '00000001', cnonce: 'random', response: '' };
+  challenge.response = digestExpectedResponse(ha1, challenge);
+  for (const algorithm of ['SHA-256', 'MD5-sess', 'unknown']) assert.equal(digestMatches(ha1, { ...challenge, algorithm }), false);
+  for (const override of [{ qop: 'auth-int' }, { nc: '0' }, { nc: '00000000' }, { cnonce: '' }]) assert.equal(digestMatches(ha1, { ...challenge, ...override }), false);
+  assert.equal(digestMatches(ha1, { ...challenge, response: challenge.response.toUpperCase() }), true);
+});
+
+test('rejects a different authentication scheme and duplicate digest fields', () => {
+  const fields = 'username="alice", realm="sip.example", nonce="nonce", uri="sip:sip.example", response="1234"';
+  assert.equal(parseDigestAuthorization(`Basic ${fields}`), null);
+  assert.equal(parseDigestAuthorization(`Digest ${fields}, username="bob"`), null);
+  assert.equal(parseDigestAuthorization(`Digest ${fields}, garbage`), null);
+  assert.equal(parseDigestAuthorization(`Digest ${fields},`), null);
+  assert.equal(parseDigestAuthorization(`Digest prefix ${fields}`), null);
+});

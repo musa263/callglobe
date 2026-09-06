@@ -58,8 +58,8 @@ class FakeFreeswitch:
         return b"Content-Type: command/reply\nReply-Text: +OK\nContent-Length: %d\n\n%s" % (len(body), body)
 
     @staticmethod
-    def _complete(app: str) -> bytes:
-        body = f"Event-Name: CHANNEL_EXECUTE_COMPLETE\nApplication: {app}\n\n".encode()
+    def _complete(app: str, execution_id: str = "") -> bytes:
+        body = f"Event-Name: CHANNEL_EXECUTE_COMPLETE\nApplication: {app}\nApplication-UUID: {execution_id}\n\n".encode()
         return b"Content-Type: text/event-plain\nContent-Length: %d\n\n%s" % (len(body), body)
 
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -99,14 +99,14 @@ class FakeFreeswitch:
                         self.silent_records += 1
                         if self.should_hang_up is not None and self.should_hang_up():
                             # The caller hangs up: the socket goes away.
-                            writer.write(self._complete(app))
+                            writer.write(self._complete(app, headers.get("event-uuid", "")))
                             self.hungup = True
                             await writer.drain()
                             writer.close()
                             return
                 if app == "hangup":
                     self.hungup = True
-                writer.write(self._complete(app))
+                writer.write(self._complete(app, headers.get("event-uuid", "")))
                 if app in {"hangup", "transfer"}:
                     await writer.drain()
                     writer.close()
@@ -263,6 +263,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
                 # conversation with no more caller turns ends.
                 idle_hangup_seconds=idle_hangup_seconds,
                 speech_bed="",
+                barge_in=False,
             )
             freeswitch = FakeFreeswitch(answered=answered)
             freeswitch.caller_turns = list(turns)
@@ -347,7 +348,7 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         parts = freeswitch.recordings[0].split(" ")
         self.assertEqual(len(parts), 4)
         self.assertTrue(parts[0].endswith(".wav"))
-        self.assertEqual(parts[1:], ["2", "450", "2"], "two seconds of quiet is the end of a turn; the caller's thinking time before speaking is not counted (see _listen)")
+        self.assertEqual(parts[1:], ["2", "450", "1"], "one second of quiet is the end of a turn; the caller's thinking time before speaking is not counted (see _listen)")
 
     async def test_a_silent_caller_is_asked_twice_and_then_left_in_peace(self):
         # A long idle window: silence is met with two gentle prompts and then

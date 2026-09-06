@@ -63,7 +63,7 @@ moment") is said only when nothing has begun to arrive after three seconds.
 prompts (and their echo) out of the turn recording — the recogniser used to
 hear the greeting back and answer it. `RECORD_MIN_SEC=0` keeps one-word answers
 FreeSWITCH would otherwise delete. Turns cap at `listen_seconds` (12 s) and end
-`silence_seconds` (2 s) after the caller stops; the silence threshold (450)
+`silence_seconds` (1 s) after the caller stops; the silence threshold (450)
 sits above a mobile caller's background noise.
 
 **Hallucinated transcripts are dropped.** `drop_hallucinated_transcript`
@@ -94,6 +94,26 @@ it hit its limit), loudness, recognition time, model time, when the first
 sentence was ready, and synthesis time per sentence; per call: the outcome.
 `Ops · Droplets → call-trace` prints these beside FreeSWITCH's hangup causes.
 
+## Speech interruptions
+
+During greetings and normal responses, `record_session` captures only inbound
+8 kHz mono PCM into a temporary `.r8` file on the existing shared audio volume.
+File write buffering is disabled. The service inspects 20 ms frames, requires
+120 ms of sustained energy, and keeps 200 ms of pre-roll. When the caller
+interrupts, pending model/TTS tasks are cancelled and `uuid_break ... all`
+stops playback. The captured utterance becomes the next caller turn; an
+interrupted transfer or message decision is not executed. Temporary audio is
+deleted on completion, cancellation, and errors.
+
+The detector is an energy gate, not a speech classifier or echo canceller.
+Tune it with quiet and noisy handset calls. A higher threshold or longer onset
+window reduces false interruptions at the cost of slower response. FreeSWITCH
+must have `mod_sndfile` with `.r8` support and share the audio directory with
+the receptionist. Missing inbound frames are logged and the response continues
+in sequential mode. Silence/error prompts outside normal responses still use
+sequential playback. Live interruption timing depends on the media and file
+writer; 20 ms is the processing frame size, not a measured end-to-end guarantee.
+
 ## Configuration
 
 | Variable | Required | What it is |
@@ -105,9 +125,13 @@ sentence was ready, and synthesis time per sentence; per call: the outcome.
 | `STT_MODEL` | | `base` fits beside a live SIP process; `small` is better and wants its own box |
 | `LLM_MODEL` | | Default `claude-haiku-4-5` |
 | `RECEPTIONIST_PORT` | | Default 8084 |
-| `RECEPTIONIST_LISTEN_SECONDS` | | Longest single caller turn, default 20 |
-| `RECEPTIONIST_SILENCE_SECONDS` | | Silence that ends a turn, default 2 |
-| `RECEPTIONIST_MAX_TURNS` | | Default 12, so a stuck conversation cannot hold a line open |
+| `RECEPTIONIST_LISTEN_SECONDS` | | Longest single caller turn, default 12 seconds |
+| `RECEPTIONIST_SILENCE_SECONDS` | | Silence that ends an ordinary recorded turn, default 1 second |
+| `RECEPTIONIST_BARGE_IN` | | Enable speech interruption during greetings and model responses, default 1; set 0 for the sequential fallback |
+| `RECEPTIONIST_BARGE_IN_THRESHOLD` | | PCM RMS threshold for speech onset, default 650 |
+| `RECEPTIONIST_BARGE_IN_ONSET_MS` | | Sustained speech required to interrupt, default 120 ms |
+| `RECEPTIONIST_BARGE_IN_SILENCE_MS` | | Quiet period ending an interruption recording, default 600 ms |
+| `RECEPTIONIST_MAX_TURNS` | | Legacy setting; no longer limits conversation turns |
 
 The service refuses to start without the three required values, rather than
 failing halfway through a stranger's call.

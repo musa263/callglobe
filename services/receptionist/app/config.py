@@ -75,7 +75,12 @@ class Settings:
     #: kept at the natural gap between speakers; the recorder no longer
     #: counts the caller's *thinking* time against it (see _listen), which is
     #: what used to cut people off.
-    silence_seconds: int = 2
+    silence_seconds: int = 1
+    #: Incoming audio is observed while the model and playback are running.
+    barge_in: bool = True
+    barge_in_threshold: int = 650
+    barge_in_onset_ms: int = 120
+    barge_in_silence_ms: int = 600
     #: How long to wait for the caller to *start* talking before treating the
     #: turn as silent. FreeSWITCH's recorder stops after `silence_seconds` of
     #: quiet whether or not anyone has spoken yet, and two seconds is less than
@@ -122,7 +127,11 @@ class Settings:
             greeting_timeout=float(number("RECEPTIONIST_GREETING_TIMEOUT", int(cls.greeting_timeout))),
             listen_seconds=number("RECEPTIONIST_LISTEN_SECONDS", cls.listen_seconds),
             silence_threshold=number("RECEPTIONIST_SILENCE_THRESHOLD", cls.silence_threshold),
-            silence_seconds=number("RECEPTIONIST_SILENCE_SECONDS", cls.silence_seconds),
+            silence_seconds=max(1, number("RECEPTIONIST_SILENCE_SECONDS", cls.silence_seconds)),
+            barge_in=text("RECEPTIONIST_BARGE_IN", "1").lower() in {"1", "true", "yes"},
+            barge_in_threshold=max(1, number("RECEPTIONIST_BARGE_IN_THRESHOLD", cls.barge_in_threshold)),
+            barge_in_onset_ms=max(20, min(1000, number("RECEPTIONIST_BARGE_IN_ONSET_MS", cls.barge_in_onset_ms))),
+            barge_in_silence_ms=max(100, number("RECEPTIONIST_BARGE_IN_SILENCE_MS", cls.barge_in_silence_ms)),
             patience_seconds=number("RECEPTIONIST_PATIENCE_SECONDS", cls.patience_seconds),
             max_turns=number("RECEPTIONIST_MAX_TURNS", cls.max_turns),
             idle_hangup_seconds=number("RECEPTIONIST_IDLE_HANGUP_SECONDS", cls.idle_hangup_seconds),

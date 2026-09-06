@@ -45,6 +45,7 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       }
 
       const fromHeader = parseDigestAuthorization(suppliedAuthorization, text(req.body?.method, 16) || 'REGISTER');
+      if (suppliedAuthorization && !fromHeader) return res.status(400).json({ ok: false, reason: 'invalid_digest_header' });
       const challenge: DigestChallenge = fromHeader || {
         username: text(req.body?.username, 80),
         realm: text(req.body?.realm, 120),
@@ -55,10 +56,12 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
         cnonce: text(req.body?.cnonce, 80) || undefined,
         nc: text(req.body?.nc, 16) || undefined,
         qop: text(req.body?.qop, 16) || undefined,
+        algorithm: text(req.body?.algorithm, 32) || 'MD5',
       };
       if (!challenge.username || !challenge.realm || !challenge.nonce || !challenge.uri || !challenge.response) {
         return res.status(400).json({ error: 'A complete Digest challenge is required.', ok: false });
       }
+      if ((challenge.algorithm || 'MD5').toUpperCase() !== 'MD5') return res.status(403).json({ ok: false, reason: 'unsupported_digest_algorithm' });
       if (challenge.method === 'REGISTER' && !ownsSipRegistration(challenge, {
         fromUser: text(req.body?.fromUser, 120), toUser: text(req.body?.toUser, 120),
         fromDomain: text(req.body?.fromDomain, 120), toDomain: text(req.body?.toDomain, 120),

@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import wave
+from uuid import uuid4
 from pathlib import Path
 
 from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, EslProtocolError, channel_variable
+from .interruption import IncomingSpeech
 from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, Voice, drop_hallucinated_transcript, recording_stats, split_sentences
 
 log = logging.getLogger("vocivo.call")
@@ -76,6 +79,7 @@ class CallHandler:
         transferred_to = ""
         notes: list[str] = []
 
+        pending_audio = b""
         try:
             if channel_variable(channel, "variable_vocivo_transfer_failed", "vocivo_transfer_failed") == "1":
                 # Back from a transfer nobody answered. The caller already has
@@ -83,9 +87,9 @@ class CallHandler:
                 conversation.add("assistant", assistant.greeting)
                 conversation.add("caller", "(the caller asked to be put through, and the receptionist transferred the call)")
                 conversation.add("assistant", CANNED["transfer_unanswered"])
-                await self._speak(connection, CANNED["transfer_unanswered"], assistant.voice)
+                _, pending_audio = await self._with_interruption(connection, lambda: self._speak(connection, CANNED["transfer_unanswered"], assistant.voice))
             else:
-                await self._speak(connection, assistant.greeting, assistant.voice)
+                _, pending_audio = await self._with_interruption(connection, lambda: self._speak(connection, assistant.greeting, assistant.voice))
                 conversation.add("assistant", assistant.greeting)
 
             silent_turns = 0
@@ -102,7 +106,11 @@ class CallHandler:
                     break
 
                 try:
-                    heard = await self._listen(connection, call_id, assistant)
+                    if pending_audio:
+                        audio, pending_audio = pending_audio, b""
+                        heard = await self._transcribe_pcm(audio, assistant)
+                    else:
+                        heard = await self._listen(connection, call_id, assistant)
                 except SpeechRecognitionError:
                     if connection.hungup.is_set():
                         outcome = "caller_hung_up"
@@ -136,9 +144,19 @@ class CallHandler:
                 last_heard = time.monotonic()
                 wrapped_up = False
                 conversation.add("caller", heard)
-                decision = await self._think(connection, conversation, assistant.voice)
+                async def reply():
+                    decision = await self._think(connection, conversation, assistant.voice)
+                    await self._speak(connection, decision.say, assistant.voice)
+                    return decision
+
+                decision, pending_audio = await self._with_interruption(connection, reply)
+                if decision is None:
+                    if pending_audio:
+                        conversation.add("assistant", "(response interrupted by the caller)")
+                    continue
                 conversation.add("assistant", decision.say)
-                await self._act(connection, assistant, decision, dialled)
+                if decision.action == "transfer":
+                    await self._transfer(connection, decision.extension, dialled)
 
                 if decision.action == "transfer":
                     transferred_to = decision.extension
@@ -235,6 +253,7 @@ class CallHandler:
         finally:
             for task in renders:
                 task.cancel()
+            await asyncio.gather(*renders, return_exceptions=True)
 
     async def _think(self, connection: EslConnection, conversation: Conversation, voice: str) -> Decision:
         """
@@ -266,24 +285,97 @@ class CallHandler:
         # reply is what made the receptionist sound scripted, so it is kept
         # for the turns that would otherwise be dead air, and only those.
         waiter = asyncio.create_task(first_ready.wait())
-        done, _ = await asyncio.wait({thinking, waiter}, timeout=3.5, return_when=asyncio.FIRST_COMPLETED)
-        if not done:
-            filler = FILLERS[self._filler_index % len(FILLERS)]
-            self._filler_index += 1
-            await self._speak(connection, filler, voice)
-        decision = await thinking
-        waiter.cancel()
-        model_seconds = time.monotonic() - thinking_started
-        if early:
+        try:
+            done, _ = await asyncio.wait({thinking, waiter}, timeout=3.5, return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                filler = FILLERS[self._filler_index % len(FILLERS)]
+                self._filler_index += 1
+                await self._speak(connection, filler, voice)
+            decision = await thinking
+            model_seconds = time.monotonic() - thinking_started
+            if early:
+                try:
+                    await early[0]
+                except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
+                    log.debug("early render failed: %s", error)
+            log.info(
+                "model answered in %.1fs (%s), first sentence ready %.1fs after the caller finished%s",
+                model_seconds, decision.action, time.monotonic() - thinking_started, "" if early else " (no early render)",
+            )
+            return decision
+
+        finally:
+            for task in [thinking, waiter, *early]:
+                task.cancel()
+            await asyncio.gather(thinking, waiter, *early, return_exceptions=True)
+
+    async def _with_interruption(self, connection: EslConnection, respond):
+        if not self._settings.barge_in:
+            return await respond(), b""
+        path = Path(self._settings.audio_dir) / "turns" / f"incoming-{uuid4().hex}.r8"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Disable FreeSWITCH's file pre-buffer so the reader sees short frames.
+        await connection.set("enable_file_write_buffering", "false")
+        await connection.set("RECORD_STEREO", "false")
+        await connection.execute("record_session", f"{path} 120", timeout=5)
+        incoming = IncomingSpeech(path, self._settings, connection.hungup)
+        capture = asyncio.create_task(incoming.capture())
+        onset = asyncio.create_task(incoming.started.wait())
+        ended = asyncio.create_task(connection.hungup.wait())
+        response = asyncio.create_task(respond())
+        try:
+            done, _ = await asyncio.wait({response, onset, capture, ended}, return_when=asyncio.FIRST_COMPLETED)
+            if response in done and incoming.frames.loud and not incoming.started.is_set():
+                # Speech may have begun in the last frame of playback. Give
+                # the onset gate time to confirm it before removing pre-roll.
+                await asyncio.wait({onset, capture, ended}, timeout=self._settings.barge_in_onset_ms / 1000, return_when=asyncio.FIRST_COMPLETED)
+            if connection.hungup.is_set():
+                return None, b""
+            if incoming.started.is_set():
+                response.cancel()
+                await asyncio.gather(response, return_exceptions=True)
+                # API commands bypass the application's event-lock. All queued
+                # playback is discarded before the next caller turn is handled.
+                result = await asyncio.wait_for(connection.api(f"uuid_break {connection.uuid} all"), 5)
+                if not result.startswith("+OK"):
+                    raise EslProtocolError("FreeSWITCH refused playback interruption")
+                log.info("call %s response interrupted by inbound speech", connection.uuid[:8])
+                audio = await asyncio.wait_for(capture, self._settings.listen_seconds + 2)
+                return None, audio
+            if capture in done:
+                # Surface a missing media feed in logs, then retain the ordinary
+                # call flow. Do not leave the caller listening to dead air.
+                try:
+                    capture.result()
+                except Exception:
+                    log.exception("call %s inbound interruption capture unavailable", connection.uuid[:8])
+            await asyncio.wait({response, ended}, return_when=asyncio.FIRST_COMPLETED)
+            if connection.hungup.is_set():
+                return None, b""
+            return await response, b""
+        finally:
+            for task in (response, capture, onset, ended):
+                task.cancel()
+            await asyncio.gather(response, capture, onset, ended, return_exceptions=True)
             try:
-                await early[0]
-            except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
-                log.debug("early render failed: %s", error)
-        log.info(
-            "model answered in %.1fs (%s), first sentence ready %.1fs after the caller finished%s",
-            model_seconds, decision.action, time.monotonic() - thinking_started, "" if early else " (no early render)",
-        )
-        return decision
+                if not connection.hungup.is_set():
+                    await asyncio.wait_for(connection.api(f"uuid_record {connection.uuid} stop {path}"), 5)
+            finally:
+                self._discard(path)
+
+    async def _transcribe_pcm(self, audio: bytes, assistant: Assistant) -> str:
+        path = Path(self._settings.audio_dir) / "turns" / f"interruption-{uuid4().hex}.wav"
+        try:
+            with wave.open(str(path), "wb") as recording:
+                recording.setnchannels(1)
+                recording.setsampwidth(2)
+                recording.setframerate(8000)
+                recording.writeframes(audio)
+            hints = [assistant.name, *(target.label for target in assistant.targets)]
+            heard = await self._ears.transcribe(path, assistant.language, hints)
+            return drop_hallucinated_transcript(heard, [assistant.greeting, assistant.name, *hints])
+        finally:
+            self._discard(path)
 
     async def _listen(self, connection: EslConnection, call_id: str, assistant: Assistant) -> str:
         """

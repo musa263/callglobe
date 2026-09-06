@@ -93,3 +93,15 @@ test('delegates to Telnyx SDK defaults and rejects unauthenticated TURN servers'
     assert.throws(() => voiceIceServers(), /require a username and credential/i);
   });
 });
+
+test('SIP never silently falls back to empty or unrelated carrier ICE settings', () => {
+  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', TELNYX_ICE_SERVERS_JSON: '[{"urls":"stun:unrelated.example"}]' }, () => {
+    assert.throws(() => voiceIceServers(), /VOCIVO_TURN_URLS/);
+  });
+});
+
+test('rejects malformed entries in a mixed ICE URL list', () => {
+  withEnvironment({ TELNYX_ICE_SERVERS_JSON: '[{"urls":["stun:valid.example","https://invalid.example"]}]' }, () => {
+    assert.throws(() => voiceIceServers(), /Every Telnyx ICE URL/);
+  });
+});

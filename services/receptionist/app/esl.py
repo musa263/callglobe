@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Iterable
 from urllib.parse import unquote
+from uuid import uuid4
 
 log = logging.getLogger("vocivo.esl")
 
@@ -72,8 +73,13 @@ class EslConnection:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self._reader = reader
         self._writer = writer
-        self._events: asyncio.Queue[Message] = asyncio.Queue()
+        self._events: asyncio.Queue[Message | Exception] = asyncio.Queue()
         self._lock = asyncio.Lock()
+        self._execute_lock = asyncio.Lock()
+        self._replies: asyncio.Queue = asyncio.Queue()
+        self._reader_task: asyncio.Task | None = None
+        self._failure: Exception | None = None
+        self._exchanges: set[asyncio.Task] = set()
         self.channel: dict[str, str] = {}
         self.hungup = asyncio.Event()
 
@@ -109,15 +115,46 @@ class EslConnection:
 
     # -- commands --------------------------------------------------------
 
-    async def _send(self, text: str) -> Message:
-        async with self._lock:
-            self._writer.write(text.encode("utf-8"))
-            await self._writer.drain()
+    async def _pump(self) -> None:
+        # Exactly one reader owns the stream, even while a playback is being
+        # interrupted through the API or the model is still generating text.
+        try:
             while True:
                 message = await self._next()
                 if message.content_type.startswith(("command/reply", "api/response")):
-                    return message
-                await self._events.put(message)
+                    await self._replies.put(message)
+                elif message.event_name in {"CHANNEL_EXECUTE_COMPLETE", "CHANNEL_HANGUP", "CHANNEL_HANGUP_COMPLETE", "CHANNEL_DESTROY"}:
+                    await self._events.put(message)
+        except (EslProtocolError, ConnectionError, asyncio.IncompleteReadError, ValueError) as error:
+            self._failure = EslProtocolError(str(error))
+            self.hungup.set()
+            await self._replies.put(self._failure)
+            await self._events.put(self._failure)
+
+    async def _send(self, text: str) -> Message:
+        async def exchange() -> Message:
+            async with self._lock:
+                if self._failure:
+                    raise self._failure
+                self._writer.write(text.encode("utf-8"))
+                await self._writer.drain()
+                if self._reader_task is None:
+                    self._reader_task = asyncio.create_task(self._pump())
+                message = await self._replies.get()
+                if isinstance(message, Exception):
+                    raise message
+                return message
+
+        # A cancelled playback must still consume its acknowledgement before
+        # uuid_break is sent, or the two commands can take each other's reply.
+        task = asyncio.create_task(exchange())
+        self._exchanges.add(task)
+        def finished(done):
+            self._exchanges.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
 
     async def connect(self) -> dict[str, str]:
         """Completes the outbound handshake and returns the channel variables."""
@@ -137,6 +174,10 @@ class EslConnection:
         return self.channel.get("Unique-ID", "") or self.channel.get("Channel-Unique-ID", "")
 
     async def execute(self, app: str, arg: str = "", *, timeout: float = 120.0) -> Message | None:
+        async with self._execute_lock:
+            return await self._execute(app, arg, timeout=timeout)
+
+    async def _execute(self, app: str, arg: str = "", *, timeout: float = 120.0) -> Message | None:
         """
         Runs a dialplan application and waits for it to finish.
 
@@ -144,11 +185,13 @@ class EslConnection:
         concurrently, which is what keeps a greeting from being talked over by
         the recording that follows it.
         """
+        execution_id = str(uuid4())
         command = (
             "sendmsg\n"
             "call-command: execute\n"
             f"execute-app-name: {app}\n"
             "event-lock: true\n"
+            f"event-uuid: {execution_id}\n"
         )
         if "\n" in arg:
             # Only a multi-line argument needs the body form, and it must be
@@ -163,9 +206,9 @@ class EslConnection:
         reply = await self._send(command)
         if not reply.reply_ok():
             raise EslProtocolError(f"{app} was refused: {reply.headers.get('Reply-Text', '')!r}")
-        return await self._await_completion(app, timeout=timeout)
+        return await self._await_completion(app, timeout=timeout, execution_id=execution_id)
 
-    async def _await_completion(self, app: str, *, timeout: float) -> Message | None:
+    async def _await_completion(self, app: str, *, timeout: float, execution_id: str) -> Message | None:
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -178,13 +221,16 @@ class EslConnection:
                 return None
             if self.hungup.is_set():
                 return None
-            if message.event_name == "CHANNEL_EXECUTE_COMPLETE" and message.event.get("Application") == app:
+            if message.event_name == "CHANNEL_EXECUTE_COMPLETE" and message.event.get("Application") == app and message.event.get("Application-UUID") == execution_id:
                 return message
 
     async def _drain_or_read(self) -> Message:
-        if not self._events.empty():
-            return self._events.get_nowait()
-        return await self._next()
+        if self._events.empty() and self._failure:
+            raise self._failure
+        message = await self._events.get()
+        if isinstance(message, Exception):
+            raise message
+        return message
 
     async def api(self, command: str) -> str:
         reply = await self._send(f"api {command}\n\n")
@@ -200,6 +246,10 @@ class EslConnection:
             pass
 
     async def close(self) -> None:
+        tasks = [*self._exchanges, *([self._reader_task] if self._reader_task else [])]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         try:
             self._writer.close()
             await self._writer.wait_closed()

@@ -48,7 +48,8 @@ function validIceUrl(value: unknown): value is string {
 }
 
 export function voiceIceServers(subject = 'voice-session'): VoiceIceServer[] {
-  if (voiceEdge() === 'sip' && trimmedEnv('VOCIVO_TURN_URLS')) {
+  if (voiceEdge() === 'sip') {
+    if (!trimmedEnv('VOCIVO_TURN_URLS')) throw new Error('VOCIVO_TURN_URLS is required for SIP media relay.');
     const urls = trimmedEnv('VOCIVO_TURN_URLS').split(',').map((url) => url.trim());
     if (urls.some((url) => !/^turns?:[^\s,]+$/i.test(url))) throw new Error('VOCIVO_TURN_URLS requires comma-separated TURN or TURNS URLs.');
     const secret = trimmedEnv('VOCIVO_TURN_SECRET');
@@ -70,7 +71,8 @@ export function voiceIceServers(subject = 'voice-session'): VoiceIceServer[] {
   return parsed.map((candidate) => {
     if (!candidate || typeof candidate !== 'object') throw new Error('TELNYX_ICE_SERVERS_JSON contains an invalid ICE server.');
     const value = candidate as VoiceIceServer;
-    const urls = Array.isArray(value.urls) ? value.urls.filter(validIceUrl) : validIceUrl(value.urls) ? value.urls : [];
+    if (Array.isArray(value.urls) && value.urls.some((url) => !validIceUrl(url))) throw new Error('Every Telnyx ICE URL must use STUN, TURN, or TURNS.');
+    const urls = Array.isArray(value.urls) ? value.urls : validIceUrl(value.urls) ? value.urls : [];
     if (!urls.length) throw new Error('Every Telnyx ICE server requires a STUN, TURN, or TURNS URL.');
     const requiresCredential = (Array.isArray(urls) ? urls : [urls]).some((url) => /^turns?:/i.test(url));
     if (requiresCredential && (!value.username || !value.credential)) throw new Error('Telnyx TURN servers require a username and credential.');

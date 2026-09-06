@@ -21,7 +21,7 @@ test('real REGISTER handler rejects cross-extension/realm requests and consumed 
     const challenge = { username: 'alice', realm: 'sip.example', nonce: issueSipNonce('alice'), uri: 'sip:sip.example', method: 'REGISTER', qop: 'auth', cnonce: 'device-random', nc: '00000001', response: '' };
     challenge.response = digestExpectedResponse(ha1, challenge);
     const body = { ...challenge, fromUser: 'alice', toUser: 'alice', fromDomain: 'sip.example', toDomain: 'sip.example', requestUri: challenge.uri };
-    const send = async (input: typeof body) => {
+    const send = async (input: typeof body & { authorization?: string; algorithm?: string }) => {
       let code = 0;
       let payload: any;
       const res = { setHeader() {}, status(value: number) { code = value; return this; }, json(value: unknown) { payload = value; return this; } } as unknown as VercelResponse;
@@ -31,7 +31,9 @@ test('real REGISTER handler rejects cross-extension/realm requests and consumed 
     for (const mismatch of [{ toUser: 'bob' }, { fromUser: 'bob' }, { toDomain: 'tenant-b.example' }, { requestUri: 'sip:other.example' }]) {
       assert.equal((await send({ ...body, ...mismatch })).code, 403);
     }
-    assert.equal(reads, 0, 'Identity failures never read credential rows');
+    assert.equal((await send({ ...body, algorithm: 'SHA-256' })).payload.reason, 'unsupported_digest_algorithm');
+    assert.equal((await send({ ...body, authorization: 'Basic invalid' })).payload.reason, 'invalid_digest_header');
+    assert.equal(reads, 0, 'Identity and malformed digest failures never read credential rows');
     assert.deepEqual(await send(body), { code: 200, payload: { ok: true, extensionId: 'alice-id', organizationId: 'tenant-a' } });
     assert.equal((await send(body)).payload.reason, 'replayed_digest');
     const next = { ...body, nc: '00000002' };
