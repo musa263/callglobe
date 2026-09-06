@@ -63,3 +63,22 @@ test('shows the colleague name and extension to each participant in an internal 
   assert.equal(recipient.direction, 'incoming');
   assert.equal(recipient.internal, true);
 });
+
+test('legacy bare SIP usernames and polluted extension fields resolve only against the viewer directory', () => {
+  const username = 'gencred-test-123456';
+  const events = [event({ flow: 'internal', from: username, to: 'sip:bob@sip.example', sourceExtension: username, sourceName: 'Mousa', destinationExtension: '2001' })];
+  const directory = [{ id: 'mousa', extension: '2000', name: 'Mousa', sipUsername: username }, { id: 'bob', extension: '2001', name: 'Bob', sipUsername: 'bob' }];
+  const [call] = callHistoryFromEvents(events, 'primary', 100, { extensionId: 'bob', directory });
+  assert.equal(call.destination_number, '2000');
+  assert.equal(call.destination_name, 'Mousa');
+  assert.ok(!JSON.stringify(call).includes(username));
+  const [withoutDirectory] = callHistoryFromEvents(events, 'primary');
+  assert.ok(!JSON.stringify(withoutDirectory).includes(username));
+  assert.deepEqual(callHistoryFromEvents(events, 'other-tenant', 100, { directory }), []);
+});
+
+test('unclassified SIP identities never appear as phone numbers in server history', () => {
+  const [call] = callHistoryFromEvents([event({ direction: 'incoming', flow: 'inbound_root', from: 'gencred-opaque-1234' })], 'primary');
+  assert.equal(call.destination_number, '');
+  assert.equal(call.destination_name, 'Unknown caller');
+});

@@ -7,6 +7,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { api } from '../../../shared/api';
 import type { CallLog, VoicemailMessage } from '../../../shared/types';
 import { colors } from '../../../shared/theme';
+import { canRedialHistory, normalizeHistoryIdentity } from '../engine/historyIdentity';
 
 type Filter = 'all' | 'missed' | 'voicemail';
 
@@ -40,7 +41,8 @@ export function RecentsScreen({ onRedial }: { onRedial: (call: CallLog) => void 
   useEffect(() => { loadVoicemails().catch(() => undefined); }, [loadVoicemails]);
 
   const calls = useMemo(() => {
-    const filtered = filter === 'all' ? history : history.filter((call) => call.status !== 'completed');
+    const normalized = history.map((call) => normalizeHistoryIdentity(call));
+    const filtered = filter === 'all' ? normalized : normalized.filter((call) => call.status !== 'completed');
     const needle = query.trim().toLowerCase();
     return needle ? filtered.filter((call) => `${call.destination_name || ''} ${call.destination_country || ''} ${call.destination_number}`.toLowerCase().includes(needle)) : filtered;
   }, [filter, history, query]);
@@ -97,7 +99,13 @@ export function RecentsScreen({ onRedial }: { onRedial: (call: CallLog) => void 
       {filter === 'voicemail' ? (
         <FlatList data={visibleVoicemails} keyExtractor={(item) => item.id} showsVerticalScrollIndicator={false} contentContainerStyle={visibleVoicemails.length ? styles.list : styles.emptyList} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={doRefresh} tintColor={colors.blue} />} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}><Voicemail size={30} color={colors.textFaint} /></View><Text style={styles.emptyTitle}>{empty.title}</Text><Text style={styles.emptyBody}>{empty.body}</Text></View>} renderItem={({ item }) => <View style={styles.row}><Pressable accessibilityLabel={playingId === item.id && playerStatus.playing ? 'Pause voicemail' : 'Play voicemail'} onPress={() => playVoicemail(item).catch((error) => Alert.alert('Playback unavailable', error instanceof Error ? error.message : 'The voicemail could not be played.'))} style={styles.play}>{playingId === item.id && playerStatus.playing ? <Pause size={18} color={colors.ink} fill={colors.ink} /> : <Play size={18} color={colors.ink} fill={colors.ink} />}</Pressable><View style={styles.details}><Text style={styles.destination}>{item.callerName || item.callerNumber}</Text><Text style={styles.meta}>{item.callerNumber} · {duration(item.durationSeconds)}</Text></View><View style={styles.right}><Text style={styles.time}>{relativeDate(item.createdAt)}</Text><Pressable accessibilityLabel="Delete voicemail" onPress={() => removeVoicemail(item)} style={styles.delete}><Trash2 size={16} color={colors.textFaint} /></Pressable></View></View>} />
       ) : (
-        <FlatList data={calls} keyExtractor={(item) => item.id} showsVerticalScrollIndicator={false} contentContainerStyle={calls.length ? styles.list : styles.emptyList} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={doRefresh} tintColor={colors.blue} />} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}><Clock3 size={30} color={colors.textFaint} /></View><Text style={styles.emptyTitle}>{empty.title}</Text><Text style={styles.emptyBody}>{empty.body}</Text></View>} renderItem={({ item }) => { const missed = item.status !== 'completed'; const internal = item.internal || item.destination_country === 'Internal' || /^sip:/i.test(item.destination_number); const visibleNumber = /^sip:/i.test(item.destination_number) ? 'Internal extension' : item.destination_number; const meta = internal ? `${/^\d+$/.test(visibleNumber) ? `Extension ${visibleNumber}` : 'Company extension'} · ${duration(item.duration_seconds)}` : `${item.destination_country ? `${item.destination_country} · ` : ''}${visibleNumber} · ${duration(item.duration_seconds)}`; return <Pressable onPress={() => onRedial({ ...item, destination_number: visibleNumber, internal })} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}><View style={[styles.icon, missed && styles.iconMissed]}>{missed ? <PhoneMissed size={19} color={colors.coral} /> : <Phone size={19} color={colors.mint} />}</View><View style={styles.details}><Text style={styles.destination}>{item.destination_name || (internal ? 'Internal call' : visibleNumber)}</Text><Text style={styles.meta}>{meta}</Text></View><View style={styles.right}><Text style={styles.time}>{relativeDate(item.started_at)}</Text><Text style={styles.cost}>{item.total_cost ? `-$${item.total_cost.toFixed(2)}` : '—'}</Text></View></Pressable>; }} />
+        <FlatList data={calls} keyExtractor={(item) => item.id} showsVerticalScrollIndicator={false} contentContainerStyle={calls.length ? styles.list : styles.emptyList} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={doRefresh} tintColor={colors.blue} />} ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}><Clock3 size={30} color={colors.textFaint} /></View><Text style={styles.emptyTitle}>{empty.title}</Text><Text style={styles.emptyBody}>{empty.body}</Text></View>} renderItem={({ item }) => {
+          const missed = item.status !== 'completed';
+          const meta = item.internal
+            ? `${item.destination_number ? `Extension ${item.destination_number}` : 'Company extension'} · ${duration(item.duration_seconds)}`
+            : `${item.destination_country ? `${item.destination_country} · ` : ''}${item.destination_number} · ${duration(item.duration_seconds)}`;
+          return <Pressable accessibilityLabel={`Call ${item.destination_name || item.destination_number}`} disabled={!canRedialHistory(item)} onPress={() => onRedial(item)} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}><View style={[styles.icon, missed && styles.iconMissed]}>{missed ? <PhoneMissed size={19} color={colors.coral} /> : <Phone size={19} color={colors.mint} />}</View><View style={styles.details}><Text style={styles.destination}>{item.destination_name || item.destination_number}</Text><Text style={styles.meta}>{meta}</Text></View><View style={styles.right}><Text style={styles.time}>{relativeDate(item.started_at)}</Text><Text style={styles.cost}>{item.total_cost ? `-$${item.total_cost.toFixed(2)}` : '—'}</Text></View></Pressable>;
+        }} />
       )}
     </View>
   );

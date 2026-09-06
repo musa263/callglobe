@@ -43,6 +43,7 @@ export type SipSessionHandle = {
   readonly headers: VoiceInviteHeader[];
 
   onStateChange(listener: (state: SipSessionState) => void): void;
+  onProgress?(listener: (statusCode: number) => void): void;
   /** Resolves with how the session ended once it reaches `Terminated`. */
   disposition(): SipDisposition;
 

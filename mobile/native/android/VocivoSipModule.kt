@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Context
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Bundle
 import android.telecom.DisconnectCause
@@ -28,6 +29,35 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
 
   private val telecom by lazy { reactContext.getSystemService(Context.TELECOM_SERVICE) as TelecomManager }
   private val audio by lazy { reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+  private var ringback: ToneGenerator? = null
+  private var ringbackCallId: String? = null
+
+  private fun stopRingback() {
+    ringback?.stopTone()
+    ringback?.release()
+    ringback = null
+    ringbackCallId = null
+  }
+
+  @ReactMethod
+  fun setRingback(input: ReadableMap, promise: Promise) {
+    val id = input.getString("callId") ?: return promise.reject("vocivo_sip_bad_call", "Missing callId")
+    try {
+      if (!input.getBoolean("enabled")) {
+        if (ringbackCallId == id) stopRingback()
+      } else if (ringbackCallId != id) {
+        stopRingback()
+        val tone = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 35)
+        if (!tone.startTone(ToneGenerator.TONE_SUP_RINGTONE)) {
+          tone.release()
+          throw IllegalStateException("Could not start ringback")
+        }
+        ringback = tone
+        ringbackCallId = id
+      }
+      promise.resolve(null)
+    } catch (error: Exception) { promise.reject("vocivo_ringback", "Ringback playback failed", error) }
+  }
 
   override fun getName() = "VocivoSip"
 
@@ -50,6 +80,7 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
   }
 
   override fun invalidate() {
+    stopRingback()
     VocivoSipCallRegistry.detach()
     super.invalidate()
   }
@@ -121,6 +152,7 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
 
   @ReactMethod
   fun reportCallConnected(callId: String, promise: Promise) {
+    if (ringbackCallId == callId) stopRingback()
     VocivoSipCallRegistry.connection(callId)?.markActive()
     promise.resolve(null)
   }
@@ -138,6 +170,7 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
       "unanswered" -> DisconnectCause.MISSED
       else -> DisconnectCause.REMOTE
     }
+    if (ringbackCallId == callId) stopRingback()
     VocivoSipCallRegistry.end(callId, cause)
     promise.resolve(null)
   }

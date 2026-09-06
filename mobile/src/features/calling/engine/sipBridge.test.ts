@@ -18,6 +18,41 @@ const credentials: SipStackConfig = {
   wsUri: 'wss://sip.vocivo.app:7443',
 };
 
+for (const ending of ['answer', 'hangup', 'disconnect', 'unmount'] as const) {
+  test(`native ringback follows provisional SIP responses and stops on ${ending}`, async () => {
+    const { bridge, fake, events } = harness();
+    const tones: boolean[] = [];
+    const native: NativeCallUi = {
+      reportIncomingCall: async () => {}, reportOutgoingCall: async () => {},
+      reportCallConnected: async () => {}, reportCallEnded: async () => {},
+      reportMuted: async () => {}, reportHeld: async () => {},
+      setSpeaker: async () => {}, isCallUiAvailable: async () => true,
+      setRingback: async ({ enabled }) => { tones.push(enabled); },
+    };
+    const binding = bindCallUi({ events, bridge, native, ui: { addListener: () => ({ remove() {} }) } });
+    await bridge.register(credentials);
+    const id = await bridge.invite('1002');
+    const session = must(fake.outgoing[0], 'outgoing session');
+    assert.deepEqual(tones, [], 'reserving/dialing a call must not simulate recipient ringing');
+    session.progress(180);
+    session.progress(180);
+    session.progress(183);
+    session.progress(180);
+    assert.deepEqual(tones, [true, false, true], 'early media silences local ringback and duplicates do not restart it');
+    if (ending === 'answer') session.move('Established');
+    if (ending === 'hangup') await bridge.hangup(id);
+    if (ending === 'disconnect') await bridge.unregister();
+    if (ending === 'unmount') binding.remove();
+    assert.equal(tones.at(-1), false);
+    const stopped = tones.length;
+    session.progress(180);
+    events.emit('callProgress', { callId: id, statusCode: 180 });
+    assert.equal(tones.length, stopped, 'late ringing cannot resurrect native playback');
+    binding.remove();
+    await bridge.unregister();
+  });
+}
+
 test('CallKit mute and hold echoes cause exactly one native transaction per app action', async () => {
   const events = new SipEventBus();
   const fake = fakeStack();
@@ -92,6 +127,7 @@ test('racing hold commands serialize, deduplicate and allow retry after failure'
 
 class FakeSession implements SipSessionHandle {
   private listener: ((state: SipSessionState) => void) | null = null;
+  private progressListener: ((statusCode: number) => void) | null = null;
   private ended: SipDisposition = {};
   readonly actions: string[] = [];
 
@@ -107,6 +143,8 @@ class FakeSession implements SipSessionHandle {
   onStateChange(listener: (state: SipSessionState) => void) {
     this.listener = listener;
   }
+  onProgress(listener: (statusCode: number) => void) { this.progressListener = listener; }
+  progress(statusCode: number) { this.progressListener?.(statusCode); }
 
   disposition() {
     return this.ended;
@@ -121,7 +159,7 @@ class FakeSession implements SipSessionHandle {
   peerConnection() { return null; }
   async accept() { this.actions.push('accept'); }
   async terminate() { this.actions.push('terminate'); }
-  async dispose() { this.actions.push('dispose'); this.listener = null; }
+  async dispose() { this.actions.push('dispose'); this.listener = null; this.progressListener = null; }
   async setHold(on: boolean) { this.actions.push(`hold:${on}`); }
   async setMuted(on: boolean) { this.actions.push(`mute:${on}`); }
   async sendDtmf(digit: string) { this.actions.push(`dtmf:${digit}`); }

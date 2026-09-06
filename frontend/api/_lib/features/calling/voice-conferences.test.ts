@@ -1,6 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestedConferenceParticipants } from './routes/voice-conferences.js';
+import { createConferenceHandler, requestedConferenceParticipants } from './routes/voice-conferences.js';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { defaultPbxConfig } from '../organizations/pbx-config-store.js';
+
+test('conference endpoint blocks SIP hosts before directory provisioning, billing or carrier dial', async () => {
+  const previous = process.env.VOCIVO_VOICE_EDGE;
+  process.env.VOCIVO_VOICE_EDGE = 'sip';
+  try {
+    const handler = createConferenceHandler({
+      requireSession: async () => ({ sub: 'vocivo-extension', extensionId: 'employee', organizationId: 'tenant-a', iat: 1234, exp: 9999999999 }),
+      readPbxConfig: async () => defaultPbxConfig(),
+    });
+    let status = 0;
+    let response: any;
+    const res = { setHeader() {}, status(value: number) { status = value; return this; }, json(value: unknown) { response = value; return this; } } as unknown as VercelResponse;
+    await handler({ method: 'POST', headers: {}, body: { participants: ['+12025550101', '+12025550102'] } } as VercelRequest, res);
+    assert.equal(status, 409);
+    assert.equal(response.code, 'conference_provider_unavailable');
+  } finally {
+    if (previous === undefined) delete process.env.VOCIVO_VOICE_EDGE; else process.env.VOCIVO_VOICE_EDGE = previous;
+  }
+});
 
 test('accepts mixed international and internal conference participants', () => {
   assert.deepEqual(requestedConferenceParticipants([

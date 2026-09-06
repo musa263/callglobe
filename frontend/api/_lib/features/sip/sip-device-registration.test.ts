@@ -19,7 +19,7 @@ test('the actual REGISTER authorizer accepts four devices after renewal and reje
   for (const deviceId of ['browser-one', 'browser-two', 'iphone-one', 'android-one']) {
     stored = mergeSipCredentials(stored, { username, realm, extensionId: 'one', organizationId: 'tenant-one', client: deviceId.startsWith('browser') ? 'web' : 'mobile', deviceId, sessionId, credentialId: `${deviceId}-v1`, ha1: digestHa1(username, realm, deviceId), expiresAt: new Date(Date.now() + 3600_000).toISOString() });
   }
-  const handler = createSipAuthHandler({ readSipCredentials: async () => stored, claimReplayKey: async () => true });
+  const handler = createSipAuthHandler({ readSipCredentials: async () => stored, claimReplayKey: async () => true, sipRegistrationAllowed: async () => true });
   async function register(password: string) {
     const challenge = { username, realm, method: 'REGISTER', uri: `sip:${realm}`, nonce: issueSipNonce(username), cnonce: password, nc: '00000001', qop: 'auth', response: '' };
     challenge.response = digestExpectedResponse(digestHa1(username, realm, password), challenge);

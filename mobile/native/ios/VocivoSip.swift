@@ -144,6 +144,16 @@ final class VocivoSip: RCTEventEmitter {
     }
   }
 
+  @objc(setRingback:resolver:rejecter:)
+  func setRingback(_ input: NSDictionary, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    guard let callId = input["callId"] as? String else {
+      reject("vocivo_sip_bad_call", "Ringback needs a callId", nil)
+      return
+    }
+    VocivoSipCallManager.shared.setRingback(callId: callId, enabled: input["enabled"] as? Bool ?? false)
+    resolve(nil)
+  }
+
   @objc(isCallUiAvailable:rejecter:)
   func isCallUiAvailable(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
     resolve(true)

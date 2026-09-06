@@ -18,7 +18,9 @@ export type HistoryViewer = { extensionId?: string; extension?: string; director
 
 const internalAgentFlows = new Set(['agent', 'queue_agent', 'queue_wait', 'conference_host', 'conference_guest']);
 
-function sipUsername(value?: string) { return value?.match(/^sip:([^@]+)@/i)?.[1] || ''; }
+function sipUsername(value?: string) { return value?.match(/sips?:([^@;>\s]+)(?:@|;|>|$)/i)?.[1] || value?.trim() || ''; }
+function extensionNumber(value: string) { return /^\d{2,8}$/.test(value) ? value : ''; }
+function visibleName(value: string) { return /sips?:|@|^gencred/i.test(value) ? '' : value; }
 function first(values: StoredCallEvent[], key: keyof StoredCallEvent) {
   const value = values.find((event) => typeof event[key] === 'string' && event[key])?.[key];
   return typeof value === 'string' ? value : '';
@@ -59,10 +61,10 @@ function internalHistory(id: string, values: StoredCallEvent[], viewer: HistoryV
   const destination = destinationById || destinationBySip;
   const sourceId = first(values, 'sourceExtensionId') || source?.id || '';
   const destinationId = first(values, 'destinationExtensionId') || destination?.id || '';
-  const sourceExtension = first(values, 'sourceExtension') || source?.extension || '';
-  const destinationExtension = first(values, 'destinationExtension') || destination?.extension || '';
-  const sourceName = first(values, 'sourceName') || source?.name || (sourceExtension ? `Extension ${sourceExtension}` : 'Colleague');
-  const destinationName = first(values, 'destinationName') || destination?.name || (destinationExtension ? `Extension ${destinationExtension}` : 'Colleague');
+  const sourceExtension = extensionNumber(first(values, 'sourceExtension')) || source?.extension || '';
+  const destinationExtension = extensionNumber(first(values, 'destinationExtension')) || destination?.extension || '';
+  const sourceName = visibleName(first(values, 'sourceName')) || source?.name || (sourceExtension ? `Extension ${sourceExtension}` : 'Colleague');
+  const destinationName = visibleName(first(values, 'destinationName')) || destination?.name || (destinationExtension ? `Extension ${destinationExtension}` : 'Colleague');
   const viewerIsSource = Boolean((viewer.extensionId && sourceId === viewer.extensionId) || (viewer.extension && sourceExtension === viewer.extension));
   const viewerIsDestination = Boolean((viewer.extensionId && destinationId === viewer.extensionId) || (viewer.extension && destinationExtension === viewer.extension));
   if ((viewer.extensionId || viewer.extension) && !viewerIsSource && !viewerIsDestination) return null;
@@ -128,12 +130,16 @@ export function callHistoryFromEvents(events: StoredCallEvent[], organizationId:
     }
     const direction = outbound ? 'outgoing' as const : 'incoming' as const;
     const number = direction === 'outgoing' ? anchor.to : anchor.from;
-    if (!number || /^sip:/i.test(number)) continue;
+    if (!number) continue;
+    const peer = viewer.directory?.find((entry) => entry.sipUsername === sipUsername(number));
+    const visibleNumber = peer?.extension || (/^\+?[\d ().-]+$/.test(number) ? number : '');
     const time = timing(ordered);
     calls.push({
       id,
-      destination_number: number,
-      destination_country: null,
+      destination_number: visibleNumber,
+      destination_name: peer?.name || (visibleNumber ? undefined : 'Unknown caller'),
+      destination_country: peer ? 'Internal' : null,
+      ...(peer ? { internal: true } : {}),
       duration_seconds: time.durationSeconds,
       total_cost: 0,
       status: callStatus(time.answered, time.cause, direction),

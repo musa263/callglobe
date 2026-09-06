@@ -11,8 +11,10 @@ test('real REGISTER handler rejects cross-extension/realm requests and consumed 
   try {
     const ha1 = digestHa1('alice', 'sip.example', 'test-password');
     let reads = 0;
+    let allowed = true;
     const ledger = new Set<string>();
     const handler = createSipAuthHandler({
+      sipRegistrationAllowed: async () => allowed,
       readSipCredentials: async () => { reads++; return [{ username: 'alice', extensionId: 'alice-id', organizationId: 'tenant-a', realm: 'sip.example', ha1, expiresAt: new Date(Date.now() + 60_000).toISOString() }]; },
       claimReplayKey: async (key) => { if (ledger.has(key)) return false; ledger.add(key); return true; },
     });
@@ -34,6 +36,9 @@ test('real REGISTER handler rejects cross-extension/realm requests and consumed 
     assert.equal((await send(body)).payload.reason, 'replayed_digest');
     const next = { ...body, nc: '00000002' };
     next.response = digestExpectedResponse(ha1, next);
+    allowed = false;
+    assert.deepEqual(await send(next), { code: 403, payload: { ok: false, reason: 'calling_access_revoked' } });
+    allowed = true;
     assert.equal((await send(next)).code, 200);
   } finally {
     for (const [key, value] of Object.entries(previous)) {

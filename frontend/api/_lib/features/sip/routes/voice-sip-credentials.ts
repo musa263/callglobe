@@ -29,6 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await revokeSipCredential(extension.sipUsername, { deviceId: requestedDeviceId, sessionId, credentialId: req.query.credentialId });
       return res.status(200).json({ revoked: true });
     }
+    if (extension.status !== 'active') return res.status(403).json({ error: 'This calling account is inactive.' });
     const access = await accessForSession(session, config);
     if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) {
       return res.status(403).json({ error: 'Calling is not enabled for this account.' });
@@ -55,6 +56,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       client: sipCredentialClient(req),
       deviceId, sessionId, credentialId,
       issuedAt: new Date().toISOString(),
+      sessionIssuedAt: session.iat,
+      accountId: session.accountId,
     });
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({

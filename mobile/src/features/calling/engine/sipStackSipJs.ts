@@ -107,6 +107,8 @@ class SipJsSession implements SipSessionHandle {
 
   private listener: ((state: SipSessionState) => void) | null = null;
   private ended: SipDisposition = {};
+  private progressListener: ((statusCode: number) => void) | null = null;
+  private progressCode?: number;
   private held = false;
   private disposal?: Promise<void>;
   private readonly stateListener = (state: SessionState) => {
@@ -116,6 +118,7 @@ class SipJsSession implements SipSessionHandle {
       if (state === SessionState.Terminated) {
         this.session.stateChange.removeListener(this.stateListener);
         this.listener = null;
+        this.progressListener = null;
       }
     }
   };
@@ -142,6 +145,19 @@ class SipJsSession implements SipSessionHandle {
 
   onStateChange(listener: (state: SipSessionState) => void) {
     this.listener = listener;
+  }
+
+  onProgress(listener: (statusCode: number) => void) {
+    this.progressListener = listener;
+    if (this.progressCode) listener(this.progressCode);
+  }
+
+  noteProgress(response: IncomingResponse) {
+    if (this.session.state !== SessionState.Establishing) return;
+    const code = response.message.statusCode;
+    if (typeof code !== 'number') return;
+    this.progressCode = code;
+    this.progressListener?.(code);
   }
 
   disposition() {
@@ -202,6 +218,7 @@ class SipJsSession implements SipSessionHandle {
   dispose() {
     if (this.disposal) return this.disposal;
     this.listener = null;
+    this.progressListener = null;
     this.session.stateChange.removeListener(this.stateListener);
     // SIP.js closes media as part of disposal, but an early-dialog CANCEL can
     // fail before it reaches that step. Close media first, independently.
@@ -373,6 +390,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
       const handle = new SipJsSession(inviter, nextId(), false);
       await inviter.invite({
         requestDelegate: {
+          onProgress: (response) => handle.noteProgress(response),
           onReject: (response) => handle.noteRejection(response),
         },
       });

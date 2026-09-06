@@ -5,6 +5,7 @@ import { api } from '../../shared/api';
 import type { CallerNumber, CallLog, CallRate, Profile } from '../../shared/types';
 import { fallbackRates } from '../billing/data/fallbackRates';
 import { setVoiceSignedIn, signOutVoiceDevice } from '../calling/runtime/voipClient';
+import { normalizeHistoryIdentity } from '../calling/engine/historyIdentity';
 
 type AuthContextValue = {
   loading: boolean;
@@ -84,9 +85,9 @@ async function readHistory(userId: string) {
 function mergeHistory(local: CallLog[], server: CallLog[]) {
   const result: CallLog[] = [];
   for (const item of [...local, ...server].sort((a, b) => b.started_at.localeCompare(a.started_at))) {
-    const digits = item.destination_number.replace(/\D/g, '');
+    const digits = /^\+?[\d ().-]+$/.test(item.destination_number) ? item.destination_number.replace(/\D/g, '') : '';
     const started = new Date(item.started_at).getTime();
-    const duplicateIndex = result.findIndex((candidate) => candidate.destination_number.replace(/\D/g, '') === digits && Math.abs(new Date(candidate.started_at).getTime() - started) < 30_000);
+    const duplicateIndex = result.findIndex((candidate) => candidate.id === item.id || Boolean(digits && /^\+?[\d ().-]+$/.test(candidate.destination_number) && candidate.direction === item.direction && candidate.destination_number.replace(/\D/g, '') === digits && Math.abs(new Date(candidate.started_at).getTime() - started) < 30_000));
     if (duplicateIndex < 0) {
       result.push(item);
     } else {
@@ -95,24 +96,6 @@ function mergeHistory(local: CallLog[], server: CallLog[]) {
     }
   }
   return result.slice(0, 100);
-}
-
-function normalizeHistoryIdentity(call: CallLog, directory: DirectoryResponse['users']) {
-  const raw = String(call.destination_number || '').trim();
-  const sipUser = raw.match(/^sip:([^@]+)@/i)?.[1];
-  const colleague = sipUser
-    ? directory.find((user) => user.sipUsername === sipUser)
-    : call.destination_country === 'Internal'
-      ? directory.find((user) => user.extension === raw.replace(/\D/g, ''))
-      : undefined;
-  if (!sipUser && !call.internal && call.destination_country !== 'Internal') return call;
-  return {
-    ...call,
-    destination_number: colleague?.extension || (sipUser ? 'Internal extension' : raw),
-    destination_name: call.destination_name && !/^sip:/i.test(call.destination_name) ? call.destination_name : colleague?.name || 'Internal call',
-    destination_country: 'Internal',
-    internal: true,
-  };
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -270,7 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [isAuthenticated, loadAccount, refreshServerHistory]);
 
   const addHistory = useCallback(async (call: CallLog) => {
-    const next = [call, ...historyRef.current.filter((item) => item.id !== call.id)].slice(0, 100);
+    const next = [normalizeHistoryIdentity(call, directoryRef.current), ...historyRef.current.filter((item) => item.id !== call.id)].slice(0, 100);
     historyRef.current = next;
     setHistory(next);
     if (profile?.id) await AsyncStorage.setItem(historyKey(profile.id), JSON.stringify(next));

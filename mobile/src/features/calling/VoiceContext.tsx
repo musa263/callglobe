@@ -95,8 +95,8 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     },
   ));
 
-  // Local ringback stays off on iPhone so CallKit/WebRTC owns the audio session.
-  // Telnyx no longer answers the parked caller until the far end picks up.
+  // SIP ringback is driven by actual 180/183 progress in callUi and native audio.
+  // Route reservation alone must never synthesize a ringing recipient.
   const startRingback = useCallback(() => undefined, []);
   const stopRingback = useCallback(() => undefined, []);
 

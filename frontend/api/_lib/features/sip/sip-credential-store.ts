@@ -21,6 +21,8 @@ export type StoredSipCredential = {
   sessionId?: string;
   credentialId?: string;
   issuedAt?: string;
+  sessionIssuedAt?: number;
+  accountId?: string;
 };
 
 /** How many of a person's devices may hold a live password at once. */

@@ -11,6 +11,7 @@ import { organizationExtensionSipUri } from '../internal-sip.js';
 import { requireFeature } from '../../organizations/saas-access.js';
 import { assertTelnyxVoiceReady, TelnyxCarrierUnavailableError } from '../../../shared/telnyx.js';
 import { outboundWalletBlockReason, readTenantWallet } from '../../billing/wallet-store.js';
+import { voiceEdge } from '../voice-provider.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 type ConferenceParticipant = { type: 'external'; number: string } | { type: 'extension'; extensionId: string };
@@ -38,11 +39,12 @@ export function requestedConferenceParticipants(value: unknown): ConferenceParti
   });
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export function createConferenceHandler(deps = { requireSession, readPbxConfig }) {
+return async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
   try {
-    const session = await requireSession(req);
+    const session = await deps.requireSession(req);
     let participants: ConferenceParticipant[];
     try {
       participants = requestedConferenceParticipants(req.body?.participants);
@@ -50,7 +52,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: validationError instanceof Error ? validationError.message : 'Choose valid conference participants.' });
     }
     if (participants.length < 2) return res.status(400).json({ error: 'Add at least two valid participants.' });
-    const config = await readPbxConfig();
+    const config = await deps.readPbxConfig();
+    // This route creates managed Telnyx rooms. Vocivo SIP credentials cannot
+    // join them; never originate carrier legs for an incompatible host.
+    if (voiceEdge(config) !== 'telnyx') return res.status(409).json({
+      error: 'Conference calling is not yet available on this calling service.',
+      code: 'conference_provider_unavailable',
+    });
     const organizationId = sessionOrganizationId(session, config);
     const organization = config.organizations.find((organization) => organization.id === organizationId && organization.status === 'active');
     if (!organization) return res.status(403).json({ error: 'An active calling account is required to host a conference.' });
@@ -109,4 +117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error instanceof Error && /Caller ID|organization|owned|verified|outbound rule|International calling|active colleague|active company extension/i.test(error.message)) return res.status(403).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }
+};
 }
+
+export default createConferenceHandler();

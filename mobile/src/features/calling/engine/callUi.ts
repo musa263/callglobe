@@ -24,6 +24,7 @@ export type NativeCallUi = {
   reportMuted(input: { callId: string; muted: boolean }): Promise<void>;
   reportHeld(input: { callId: string; held: boolean }): Promise<void>;
   setSpeaker(on: boolean): Promise<void>;
+  setRingback?(input: { callId: string; enabled: boolean }): Promise<void>;
   /** Whether this build has PushKit/ConnectionService wired at all. */
   isCallUiAvailable(): Promise<boolean>;
   completeAnswer?(input: { callId: string; success: boolean }): Promise<void>;
@@ -80,6 +81,9 @@ export function bindCallUi(options: {
   const reported = new Set<string>();
   const invitations = new Set<string>();
   const accepted = new Set<string>();
+  const outgoing = new Set<string>();
+  const ringback = new Map<string, boolean>();
+  const cancelledRingback = new Set<string>();
   const answers = new Map<string, { started: boolean; cancelTimer: () => void }>();
   const wakeTimers = new Map<string, () => void>();
   const nativeMedia = new Map<string, { muted?: { value: boolean }; onHold?: { value: boolean } }>();
@@ -96,7 +100,16 @@ export function bindCallUi(options: {
     console.warn(`Vocivo call UI: ${what} failed`, error instanceof Error ? error.message : error);
   };
   const completeAnswer = (callId: string, success: boolean) => native.completeAnswer?.({ callId, success }).catch(swallow('complete answer'));
+  const setRingback = (callId: string, enabled: boolean) => {
+    if (ringback.get(callId) === enabled) return;
+    ringback.set(callId, enabled);
+    native.setRingback?.({ callId, enabled }).catch(swallow('ringback'));
+  };
   const finish = (callId: string) => {
+    if (outgoing.has(callId)) setRingback(callId, false);
+    outgoing.delete(callId);
+    ringback.delete(callId);
+    cancelledRingback.delete(callId);
     answers.get(callId)?.cancelTimer();
     answers.delete(callId);
     wakeTimers.get(callId)?.();
@@ -156,14 +169,23 @@ export function bindCallUi(options: {
   subscriptions.push(events.addListener('outgoing', (payload) => {
     if (ended.has(payload.callId) || reported.has(payload.callId)) return;
     reported.add(payload.callId);
+    outgoing.add(payload.callId);
     const handle = payload.target.replace(/^sips?:/i, '').split('@')[0] || payload.target;
     native.reportOutgoingCall({ callId: payload.callId, handle }).catch(swallow('report outgoing'));
+  }));
+
+  subscriptions.push(events.addListener('callProgress', ({ callId, statusCode }) => {
+    if (disposed || ended.has(callId) || accepted.has(callId) || !outgoing.has(callId)) return;
+    if (statusCode === 0) cancelledRingback.add(callId);
+    // Only 180 means the recipient is ringing. 183 may carry early media.
+    setRingback(callId, statusCode === 180 && !cancelledRingback.has(callId));
   }));
 
   subscriptions.push(events.addListener('callState', (payload) => {
     if (payload.state === 'ACTIVE') {
       if (ended.has(payload.callId)) return;
       accepted.add(payload.callId);
+      if (outgoing.has(payload.callId)) setRingback(payload.callId, false);
       native.reportCallConnected(payload.callId).catch(swallow('report connected'));
       return;
     }
@@ -266,6 +288,10 @@ export function bindCallUi(options: {
   return {
     remove: () => {
       disposed = true;
+      outgoing.forEach((callId) => setRingback(callId, false));
+      outgoing.clear();
+      ringback.clear();
+      cancelledRingback.clear();
       answers.forEach((pending, callId) => { pending.cancelTimer(); completeAnswer(callId, false); });
       wakeTimers.forEach((cancel) => cancel());
       answers.clear();

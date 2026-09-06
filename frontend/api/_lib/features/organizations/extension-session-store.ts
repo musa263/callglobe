@@ -12,16 +12,16 @@ export async function revokeExtensionSessions(extensionId: string) {
   cache.set(extensionId, { revokedAt, checkedAt: Date.now() });
 }
 
-export async function isExtensionSessionRevoked(extensionId: string, issuedAtSeconds: number) {
+export async function isExtensionSessionRevoked(extensionId: string, issuedAtSeconds: number, options: { fresh?: boolean } = {}) {
   const cached = cache.get(extensionId);
-  if (cached && Date.now() - cached.checkedAt < 5_000) return cached.revokedAt > issuedAtSeconds * 1000;
+  if (!options.fresh && cached && Date.now() - cached.checkedAt < 5_000) return cached.revokedAt > issuedAtSeconds * 1000;
   try {
     const value = await readStoredObject(pathname(extensionId));
     const revokedAt = value ? Number(value.toString('utf8')) || 0 : 0;
     cache.set(extensionId, { revokedAt, checkedAt: Date.now() });
     return revokedAt > issuedAtSeconds * 1000;
   } catch (error) {
-    if (cached) return cached.revokedAt > issuedAtSeconds * 1000;
+    if (!options.fresh && cached) return cached.revokedAt > issuedAtSeconds * 1000;
     console.error('Vocivo could not read extension session revocation state', error);
     return true;
   }

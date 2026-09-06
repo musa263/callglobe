@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHmac } from 'node:crypto';
 import { defaultPbxConfig } from '../organizations/pbx-config-store.js';
 import { sipInboundEnabled, sipRealm, voiceEdge, voiceIceServers, voiceProvider, voiceRouteNeedsTelnyxCredit } from './voice-provider.js';
 
-const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND'] as const;
+const keys = ['TELNYX_ICE_SERVERS_JSON', 'VOCIVO_VOICE_EDGE', 'VOCIVO_SIP_REALM', 'VOCIVO_SIP_INBOUND', 'VOCIVO_TURN_URLS', 'VOCIVO_TURN_SECRET'] as const;
 
 function withEnvironment(values: Partial<Record<(typeof keys)[number], string>>, run: () => void) {
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -19,6 +20,29 @@ function withEnvironment(values: Partial<Record<(typeof keys)[number], string>>,
     });
   }
 }
+
+test('Vocivo relay credentials are short-lived, scoped and compatible with coturn REST authentication', () => {
+  const secret = 'a'.repeat(64);
+  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', VOCIVO_TURN_URLS: 'turn:relay.example:3478?transport=udp,turns:relay.example:5349?transport=tcp', VOCIVO_TURN_SECRET: secret }, () => {
+    const before = Math.floor(Date.now() / 1000);
+    const [server] = voiceIceServers('company:employee');
+    const expiresAt = Number(server.username!.split(':')[0]);
+    assert.ok(expiresAt >= before + 3600 && expiresAt <= Math.floor(Date.now() / 1000) + 3600);
+    assert.equal(server.credential, createHmac('sha1', secret).update(server.username!).digest('base64'));
+    assert.ok(!server.username!.includes('company'));
+    assert.notEqual(voiceIceServers('another-company:employee')[0].username, server.username);
+    assert.ok(!JSON.stringify(server).includes(secret));
+  });
+});
+
+test('explicit Vocivo relay settings fail closed when malformed or missing their secret', () => {
+  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', VOCIVO_TURN_URLS: 'turn:relay.example:3478' }, () => {
+    assert.throws(() => voiceIceServers(), /VOCIVO_TURN_SECRET/);
+  });
+  withEnvironment({ VOCIVO_VOICE_EDGE: 'sip', VOCIVO_TURN_URLS: 'https://relay.example', VOCIVO_TURN_SECRET: 'a'.repeat(64) }, () => {
+    assert.throws(() => voiceIceServers(), /VOCIVO_TURN_URLS/);
+  });
+});
 
 test('publishes authenticated Telnyx ICE servers to calling clients', () => {
   withEnvironment({

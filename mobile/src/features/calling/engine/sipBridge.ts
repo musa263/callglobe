@@ -195,6 +195,10 @@ export class SipStackBridge implements NativeSipBridge {
     const handle = await stack.invite(target, headers ?? []);
     this.track(handle);
     this.events.emit('outgoing', { callId: handle.id, target });
+    handle.onProgress?.((statusCode) => {
+      const session = this.sessions.get(handle.id);
+      if (session && !session.terminal && !session.established) this.events.emit('callProgress', { callId: handle.id, statusCode });
+    });
     return handle.id;
   }
 
@@ -217,11 +221,13 @@ export class SipStackBridge implements NativeSipBridge {
     if (callId) {
       const session = this.sessions.get(callId);
       if (!session || session.terminal) return;
+      this.events.emit('callProgress', { callId, statusCode: 0 });
       await session.handle.terminate();
       return;
     }
     for (const session of [...this.sessions.values()]) {
       if (session.terminal) continue;
+      this.events.emit('callProgress', { callId: session.handle.id, statusCode: 0 });
       try {
         await session.handle.terminate();
       } catch (error) {

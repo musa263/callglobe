@@ -3,6 +3,7 @@ import CallKit
 import Foundation
 import PushKit
 import UIKit
+import WebRTC
 
 /// CallKit and PushKit for Vocivo.
 ///
@@ -31,6 +32,11 @@ public final class VocivoSipCallManager: NSObject {
   private var pendingAnswers: [String: CXAnswerCallAction] = [:]
   private var mirroredActions: [UUID: String] = [:]
   private var outgoingCalls = Set<String>()
+  private var connectedCalls = Set<String>()
+  private var answeredCalls = Set<String>()
+  private var ringback: AVAudioPlayer?
+  private var ringbackCallId: String?
+  private var audioActive = false
   private var ringingDeadlines: [String: DispatchWorkItem] = [:]
 
   /// Events raised before JavaScript attached. A push wake is the reason this
@@ -46,6 +52,7 @@ public final class VocivoSipCallManager: NSObject {
     configuration.maximumCallGroups = 1
     configuration.supportedHandleTypes = [.phoneNumber, .generic]
     configuration.includesCallsInRecents = true
+    configuration.ringtoneSound = "vocivo_classic.wav"
     if let icon = UIImage(named: "vocivo-icon") {
       configuration.iconTemplateImageData = icon.pngData()
     }
@@ -100,6 +107,9 @@ public final class VocivoSipCallManager: NSObject {
     ringingDeadlines.removeValue(forKey: callId)?.cancel()
     pendingAnswers.removeValue(forKey: callId)?.fail()
     outgoingCalls.remove(callId)
+    connectedCalls.remove(callId)
+    answeredCalls.remove(callId)
+    if ringbackCallId == callId { stopRingback() }
     guard let uuid = uuidsByCallId.removeValue(forKey: callId) else { return }
     callIdsByUuid.removeValue(forKey: uuid)
   }
@@ -122,7 +132,8 @@ public final class VocivoSipCallManager: NSObject {
     provider.reportNewIncomingCall(with: uuid(for: callId), update: update) { error in
       DispatchQueue.main.async {
         if error != nil && !alreadyReported { self.forget(callId) }
-        if error == nil && self.uuidsByCallId[callId] != nil {
+        if error == nil && self.uuidsByCallId[callId] != nil && !self.connectedCalls.contains(callId)
+            && !self.answeredCalls.contains(callId) && self.pendingAnswers[callId] == nil {
           let deadline = DispatchWorkItem { [weak self] in
             self?.emit("callUiEnd", ["callId": callId])
             self?.reportCallEnded(callId: callId, reason: "unanswered")
@@ -140,19 +151,35 @@ public final class VocivoSipCallManager: NSObject {
     outgoingCalls.insert(callId)
     let uuid = uuid(for: callId)
     let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .phoneNumber, value: handle))
-    controller.request(CXTransaction(action: action)) { _ in }
+    controller.request(CXTransaction(action: action)) { error in
+      if let error = error { NSLog("Vocivo: outgoing CallKit transaction failed: \(error.localizedDescription)") }
+    }
     provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
   }
 
   @objc public func reportCallConnected(callId: String) {
     ringingDeadlines.removeValue(forKey: callId)?.cancel()
     guard let uuid = uuidsByCallId[callId] else { return }
-    if outgoingCalls.contains(callId) { provider.reportOutgoingCall(with: uuid, connectedAt: nil) }
+    if ringbackCallId == callId { stopRingback() }
+    guard connectedCalls.insert(callId).inserted else { return }
+    if outgoingCalls.contains(callId) {
+      provider.reportOutgoingCall(with: uuid, connectedAt: nil)
+    } else if pendingAnswers[callId] == nil && !answeredCalls.contains(callId) {
+      // An in-app Answer also needs a CallKit transaction to activate audio.
+      // JS has already accepted SIP and will acknowledge this mirrored action.
+      controller.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { error in
+        if let error = error { NSLog("Vocivo: in-app Answer transaction failed: \(error.localizedDescription)") }
+      }
+    }
   }
 
   @objc public func completeAnswer(callId: String, success: Bool) {
     guard let action = pendingAnswers.removeValue(forKey: callId) else { return }
-    if success { action.fulfill() } else { action.fail() }
+    if success {
+      answeredCalls.insert(callId)
+      ringingDeadlines.removeValue(forKey: callId)?.cancel()
+      action.fulfill()
+    } else { action.fail() }
   }
 
   @objc public func reportCallEnded(callId: String, reason: String) {
@@ -190,6 +217,37 @@ public final class VocivoSipCallManager: NSObject {
 
   // MARK: - Audio route
 
+  @objc public func setRingback(callId: String, enabled: Bool) {
+    if !enabled {
+      if ringbackCallId == callId { stopRingback() }
+      return
+    }
+    guard outgoingCalls.contains(callId), !connectedCalls.contains(callId) else { return }
+    if ringbackCallId != callId { stopRingback(); ringbackCallId = callId }
+    playRingbackIfReady()
+  }
+
+  private func playRingbackIfReady() {
+    guard audioActive, ringbackCallId != nil, ringback == nil else { return }
+    guard let url = Bundle.main.url(forResource: "vocivo_classic", withExtension: "wav") else {
+      NSLog("Vocivo: bundled ringback audio is missing")
+      return
+    }
+    do {
+      let player = try AVAudioPlayer(contentsOf: url)
+      player.numberOfLoops = -1
+      player.volume = 0.35
+      guard player.play() else { NSLog("Vocivo: ringback playback failed"); return }
+      ringback = player
+    } catch { NSLog("Vocivo: ringback failed: \(error.localizedDescription)") }
+  }
+
+  private func stopRingback() {
+    ringback?.stop()
+    ringback = nil
+    ringbackCallId = nil
+  }
+
   @objc public func setSpeaker(_ on: Bool) throws {
     let session = AVAudioSession.sharedInstance()
     try session.overrideOutputAudioPort(on ? .speaker : .none)
@@ -198,9 +256,12 @@ public final class VocivoSipCallManager: NSObject {
   /// Voice-chat mode with Bluetooth allowed: the phone in a pocket, a headset
   /// in the ear and a van's hands-free kit are the normal cases for this app.
   private func configureAudioSession() {
-    let session = AVAudioSession.sharedInstance()
+    let session = RTCAudioSession.sharedInstance()
+    session.lockForConfiguration()
+    defer { session.unlockForConfiguration() }
     do {
-      try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP, .duckOthers])
+      try session.setCategory(.playAndRecord, with: [.allowBluetooth])
+      try session.setMode(.voiceChat)
       try session.setPreferredIOBufferDuration(0.02)
     } catch {
       NSLog("Vocivo: could not configure the audio session: \(error.localizedDescription)")
@@ -276,6 +337,11 @@ extension VocivoSipCallManager: CXProviderDelegate {
     ringingDeadlines.values.forEach { $0.cancel() }
     ringingDeadlines.removeAll()
     outgoingCalls.removeAll()
+    connectedCalls.removeAll()
+    answeredCalls.removeAll()
+    stopRingback()
+    audioActive = false
+    RTCAudioSession.sharedInstance().isAudioEnabled = false
     uuidsByCallId.removeAll()
     callIdsByUuid.removeAll()
     ids.forEach { emit("callUiEnd", ["callId": $0]) }
@@ -340,11 +406,21 @@ extension VocivoSipCallManager: CXProviderDelegate {
   }
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-    // WebRTC only starts moving audio once the session CallKit owns is active.
+    let rtc = RTCAudioSession.sharedInstance()
+    rtc.audioSessionDidActivate(audioSession)
+    rtc.isAudioEnabled = true
+    audioActive = true
+    playRingbackIfReady()
     emit("callUiAudioSession", ["active": true])
   }
 
   public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+    audioActive = false
+    ringback?.stop()
+    ringback = nil
+    let rtc = RTCAudioSession.sharedInstance()
+    rtc.isAudioEnabled = false
+    rtc.audioSessionDidDeactivate(audioSession)
     emit("callUiAudioSession", ["active": false])
   }
 }

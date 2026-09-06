@@ -6,6 +6,7 @@ import { readSipCredentials } from '../sip-credential-store.js';
 import { sipEdgeAuthorized, sipNonceIsValid } from '../sip-edge-auth.js';
 import { claimReplayKey } from '../../../shared/object-store.js';
 import { ownsSipRegistration, sipDigestReplayKey } from '../sip-registration-auth.js';
+import { sipRegistrationAllowed } from '../sip-registration-access.js';
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -22,7 +23,7 @@ function routeFields(call: SipCallAuthorization | null) {
   return { routeId: call.routeId, callerId: call.callerId, routeFlow: call.flow, routeOrganizationId: call.organizationId };
 }
 
-export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey }) {
+export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey, sipRegistrationAllowed }) {
   return async function handler(req: VercelRequest, res: VercelResponse) {
     if (allowMobile(req, res)) return;
     if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
@@ -75,6 +76,7 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       if (!stored.length) return res.status(403).json({ ok: false, reason: 'no_credential_for_user' });
       const ok = Boolean(matched);
       if (!ok) return res.status(403).json({ ok: false, reason: 'password_mismatch', credentials: stored.length });
+      if (!await deps.sipRegistrationAllowed(matched!)) return res.status(403).json({ ok: false, reason: 'calling_access_revoked' });
       if (ok) {
         const replayKey = sipDigestReplayKey(challenge);
         if (!replayKey || !await deps.claimReplayKey(replayKey, new Date(Number(challenge.nonce.split('.')[0]) * 1000))) {

@@ -1,4 +1,5 @@
 import type { PbxConfig } from '../organizations/pbx-config-store.js';
+import { createHash, createHmac } from 'node:crypto';
 
 export type VoiceEdge = 'telnyx' | 'sip';
 
@@ -46,7 +47,17 @@ function validIceUrl(value: unknown): value is string {
   return typeof value === 'string' && /^(?:stun|turn|turns):[^\s]+$/i.test(value);
 }
 
-export function voiceIceServers(_subject = 'voice-session'): VoiceIceServer[] {
+export function voiceIceServers(subject = 'voice-session'): VoiceIceServer[] {
+  if (voiceEdge() === 'sip' && trimmedEnv('VOCIVO_TURN_URLS')) {
+    const urls = trimmedEnv('VOCIVO_TURN_URLS').split(',').map((url) => url.trim());
+    if (urls.some((url) => !/^turns?:[^\s,]+$/i.test(url))) throw new Error('VOCIVO_TURN_URLS requires comma-separated TURN or TURNS URLs.');
+    const secret = trimmedEnv('VOCIVO_TURN_SECRET');
+    if (secret.length < 32) throw new Error('VOCIVO_TURN_SECRET must match the secure coturn authentication secret.');
+    // Coturn REST authentication: the expiry prefix is verified by the relay.
+    // Hash the subject so tenant and employee identifiers do not enter relay logs.
+    const username = `${Math.floor(Date.now() / 1000) + 3600}:${createHash('sha256').update(subject).digest('hex').slice(0, 24)}`;
+    return [{ urls, username, credential: createHmac('sha1', secret).update(username).digest('base64') }];
+  }
   const configured = trimmedEnv('TELNYX_ICE_SERVERS_JSON');
   if (!configured) return [];
   let parsed: unknown;
