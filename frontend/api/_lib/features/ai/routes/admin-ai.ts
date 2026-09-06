@@ -10,6 +10,7 @@ import { findExtension, listExtensions } from '../../organizations/pbx.js';
 import { requireFeature } from '../../organizations/saas-access.js';
 import { sipInboundEnabled } from '../../calling/voice-provider.js';
 import { activeAiTransferTargets, aiAssistantInstructions, aiAssistantTools } from '../ai-transfer.js';
+import { requestOrganizationId, writeTenantScopeError } from '../../organizations/request-organization.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -18,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const current = await readPbxConfig();
     await requireFeature(access.session, 'aiReceptionist', current);
-    const organizationId = access.superadmin ? current.activeOrganizationId : access.organizationId!;
+    const organizationId = requestOrganizationId(req, access.session, current);
     const tenant = pbxForOrganization(current, organizationId);
     const ai = nextAiSettings(tenant.ai, req.body);
     if (ai.voice === 'Telnyx.KokoroTTS.af') ai.voice = 'Telnyx.Bayan.Amanda';
@@ -70,6 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     afterResponse('receptionist prompt pre-render', prerenderTenantPrompts(organizationId, { config }));
     return res.status(200).json({ ai: saved, synced: syncedWithCarrier, engine: sipInboundEnabled() ? 'vocivo' : 'carrier' });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'AI receptionist is not enabled for this company.' });

@@ -82,6 +82,11 @@ async function clearSessionToken() {
 }
 
 export const api = {
+  // Bind a queued cancellation to its original verified login even if the
+  // current account changes while the HTTP request is being prepared.
+  cancelVoiceRoute: (routeId: string, sessionToken: string) => request<{ canceled: boolean }>('/api/voice/cancel', {
+    method: 'POST', body: JSON.stringify({ routeId }), headers: { Authorization: `Bearer ${sessionToken}` },
+  }),
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),

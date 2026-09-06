@@ -22,6 +22,34 @@ contains permission, ringtone, network presentation and ICE/media recovery.
 Screens render the context; components provide dialpad, caller-ID/rate selection
 and connectivity display. Do not open another signaling client in a screen.
 
+### Native control acknowledgments
+
+`callUi` deduplicates mute/hold state before crossing the native bridge. Native
+user commands update SIP, while acknowledgments do not generate another command.
+The iOS manager additionally correlates mirrored CallKit transactions by action
+UUID, so a delayed acknowledgment cannot reverse a newer control state.
+`sipBridge` serializes competing changes separately for hold and mute.
+
+### Irrecoverable transport loss
+
+`VoiceContext::emergencyTransportCleanup` stops UI timers, media confirmation,
+recovery work and call subscriptions. It invokes `emergencyEndCall`, not just
+`endNativeCall`. The SIP adapter retires its tracked call, closes the SIP.js
+session-description handler (tracks and peer connection), removes its listener,
+and bounds SIP disposal to 2.5 seconds. Late ACTIVE events cannot resurrect it.
+Native call UI closure runs independently from the signaling acknowledgment.
+
+`state/routeCancellation` persists pending route cancellation before sending it.
+`runtime/routeCancellation` stores it in device-only SecureStore, bound to the
+original login. Only `{ canceled: true }` removes a pending entry. Reconnect,
+foreground resume and a mounted-provider 30-second retry loop drain the queue.
+A different login never replays the old record with its credentials. The queue
+is capped at 64 entries and fails visibly rather than silently evicting work.
+Remote completion still requires network access and a valid original session;
+these retries are not a server-side worker and cannot execute while JS is killed.
+The API leaves failed carrier-leg cancellation retryable instead of returning a
+false success. Physical offline/foreground/killed-state tests remain release gates.
+
 ## Native and Tests
 
 `mobile/native/` owns CallKit/Android incoming-call UI and background startup;

@@ -17,6 +17,9 @@ export type StoredSipCredential = {
    * first one's phone off the registrar.
    */
   client?: string;
+  deviceId?: string;
+  sessionId?: string;
+  credentialId?: string;
   issuedAt?: string;
 };
 
@@ -62,9 +65,19 @@ const live = liveSipCredentials;
  * the oldest goes if the person has more phones than we keep passwords for.
  */
 export function mergeSipCredentials(existing: StoredSipCredential[], credential: StoredSipCredential, now = Date.now()) {
-  const slot = credential.client || '';
-  const kept = live(existing, now).filter((item) => (item.client || '') !== slot);
+  const kept = live(existing, now).filter((item) => credential.deviceId && credential.sessionId
+    ? item.deviceId !== credential.deviceId || item.sessionId !== credential.sessionId
+    : item.ha1 !== credential.ha1);
   return [...kept, credential].slice(-maximumCredentials);
+}
+
+export function removeSipCredential(existing: StoredSipCredential[], owner: { deviceId: string; sessionId: string; credentialId: string }) {
+  return existing.filter((item) => item.deviceId !== owner.deviceId || item.sessionId !== owner.sessionId || item.credentialId !== owner.credentialId);
+}
+
+export async function revokeSipCredential(username: string, owner: { deviceId: string; sessionId: string; credentialId: string }) {
+  await transactObject(pathname(username), (current) => encrypt(removeSipCredential(current ? decrypt(current) : [], owner)),
+    { access: 'private', contentType: 'application/octet-stream' });
 }
 
 export async function saveSipCredential(credential: StoredSipCredential) {
@@ -72,13 +85,7 @@ export async function saveSipCredential(credential: StoredSipCredential) {
   // ask at the same moment must not each write a file holding only their own.
   await transactObject(pathname(credential.username), (current) => {
     let existing: StoredSipCredential[] = [];
-    if (current) {
-      try {
-        existing = decrypt(current);
-      } catch {
-        existing = [];
-      }
-    }
+    if (current) existing = decrypt(current);
     return encrypt(mergeSipCredentials(existing, credential));
   }, { access: 'private', contentType: 'application/octet-stream' });
 }

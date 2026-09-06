@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { VercelRequest } from '@vercel/node';
 import { requiredEnv } from '../../shared/http.js';
+import type { VocivoSession } from '../auth/auth.js';
 
 function secretMatches(expected: string, supplied: string) {
   const left = Buffer.from(supplied);
@@ -29,14 +30,19 @@ export function newSipPassword() {
   return randomBytes(24).toString('base64url');
 }
 
+export function sipCredentialSession(session: VocivoSession) {
+  return createHmac('sha256', `${requiredEnv('AUTH_SECRET')}:sip-session`)
+    .update(JSON.stringify([session.sub, session.jti, session.iat, session.exp, session.organizationId, session.extensionId]))
+    .digest('hex');
+}
+
+export function validSipDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value);
+}
+
 /**
- * Which of a person's phones a SIP password is being issued to.
- *
- * One extension is regularly signed in on a browser and a handset at the same
- * time, and each needs a password of its own — a single stored credential
- * meant whichever signed in last quietly took the other off the registrar.
- * The client says which it is; when it does not, the user agent is enough to
- * tell an app from a browser.
+ * Diagnostic client category only. It must never identify a credential slot:
+ * two browsers or two handsets can belong to the same signed-in extension.
  */
 export function sipCredentialClient(req: { body?: unknown; headers?: Record<string, unknown> }) {
   const asked = (req.body as { client?: unknown } | undefined)?.client;

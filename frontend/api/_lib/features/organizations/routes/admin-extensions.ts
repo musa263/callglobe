@@ -5,6 +5,7 @@ import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../.
 import { normalizeRole, createExtension, deleteExtension, listExtensions, updateExtension } from '../pbx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { accessForSession } from '../saas-access.js';
+import { requestOrganizationId, TenantScopeError, writeTenantScopeError } from '../request-organization.js';
 import {
   findTenantAdminByEmail, findTenantAdminForExtension, readTenantSaasState,
   removeTenantAdminForExtension, saveTenantAdmin,
@@ -17,8 +18,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const actor = { superadmin: access.superadmin, role: access.session.role, extensionId: access.session.extensionId };
     const config = await readPbxConfig();
-    const requestedOrganizationId = typeof req.body?.organizationId === 'string' ? req.body.organizationId : typeof req.query.organizationId === 'string' ? req.query.organizationId : '';
-    const organizationId = access.superadmin ? requestedOrganizationId || config.activeOrganizationId : access.organizationId || '';
+    const organizationId = requestOrganizationId(req, access.session, config);
+    if (req.body?.organizationId !== undefined && req.body.organizationId !== organizationId) {
+      throw new TenantScopeError(409, 'The user belongs to another workspace. Reload before saving.');
+    }
     const organization = config.organizations.find((item) => item.id === organizationId);
     if (!organization) return res.status(404).json({ error: 'Organization not found.' });
     const subscriptionAccess = await accessForSession(access.session, config);
@@ -117,6 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await removeTenantAdminForExtension(id, organizationId, config);
     return res.status(200).json({ success: true });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     if (error instanceof Error && /Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This company subscription is not active.' });

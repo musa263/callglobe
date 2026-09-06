@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { liveSipCredentials, mergeSipCredentials, type StoredSipCredential } from './sip-credential-store.js';
+import { liveSipCredentials, mergeSipCredentials, removeSipCredential, type StoredSipCredential } from './sip-credential-store.js';
 import { sipCredentialClient } from './sip-edge-auth.js';
 
 const now = Date.UTC(2026, 8, 4, 12, 0, 0);
@@ -19,8 +19,8 @@ test('a browser and a handset each keep a password', () => {
 });
 
 test('the same device replaces its own password rather than collecting them', () => {
-  const first = mergeSipCredentials([], credential({ client: 'web', ha1: 'one' }), now);
-  const second = mergeSipCredentials(first, credential({ client: 'web', ha1: 'two' }), now);
+  const first = mergeSipCredentials([], credential({ client: 'web', deviceId: 'browser-one', sessionId: 'session-one', ha1: 'one' }), now);
+  const second = mergeSipCredentials(first, credential({ client: 'web', deviceId: 'browser-one', sessionId: 'session-one', ha1: 'two' }), now);
   assert.deepEqual(second.map((item) => item.ha1), ['two']);
 });
 
@@ -41,10 +41,31 @@ test('a person with more devices than we keep passwords for loses the oldest', (
   assert.equal(stored.at(-1)?.ha1, 'hash-7');
 });
 
-test('a device names its own slot, and the user agent decides when it does not', () => {
+test('the client category is diagnostic, with a user-agent fallback', () => {
   assert.equal(sipCredentialClient({ body: { client: 'Mobile' }, headers: {} }), 'mobile');
   assert.equal(sipCredentialClient({ body: {}, headers: { 'user-agent': 'okhttp/4.9 vocivo' } }), 'mobile');
   assert.equal(sipCredentialClient({ body: {}, headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) Safari' } }), 'web');
   assert.equal(sipCredentialClient({ body: {}, headers: {} }), 'web');
   assert.equal(sipCredentialClient({ body: { client: '../../etc/passwd' }, headers: {} }), 'etcpasswd');
+});
+
+test('two browsers, iPhone and Android retain four independent passwords through renewal', () => {
+  let stored: StoredSipCredential[] = [];
+  for (const [deviceId, client] of [['browser-one', 'web'], ['iphone', 'mobile'], ['browser-two', 'web'], ['android', 'mobile']]) {
+    stored = mergeSipCredentials(stored, credential({ deviceId, client, sessionId: 'one', credentialId: `${deviceId}-old`, ha1: deviceId }), now);
+  }
+  assert.equal(stored.length, 4);
+  const renewed = credential({ deviceId: 'browser-one', client: 'web', sessionId: 'one', credentialId: 'browser-one-new', ha1: 'renewed' });
+  stored = mergeSipCredentials(stored, renewed, now);
+  assert.deepEqual(stored.map(item => item.ha1), ['iphone', 'browser-two', 'android', 'renewed']);
+  const lateLogout = removeSipCredential(stored, { deviceId: 'browser-one', sessionId: 'one', credentialId: 'browser-one-old' });
+  assert.equal(lateLogout.length, 4, 'late teardown cannot revoke a newer registration');
+  const loggedOut = removeSipCredential(stored, { deviceId: 'iphone', sessionId: 'one', credentialId: 'iphone-old' });
+  assert.deepEqual(loggedOut.map(item => item.ha1), ['browser-two', 'android', 'renewed']);
+  assert.deepEqual(removeSipCredential(stored, { deviceId: 'iphone', sessionId: 'foreign-session', credentialId: 'iphone-old' }), stored);
+});
+
+test('legacy clients with the same category cannot replace each other by category alone', () => {
+  const stored = mergeSipCredentials([credential({ client: 'web', ha1: 'first' })], credential({ client: 'web', ha1: 'second' }), now);
+  assert.equal(stored.length, 2);
 });

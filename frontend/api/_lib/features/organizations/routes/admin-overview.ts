@@ -5,6 +5,7 @@ import { readBusinessVoiceConfig } from '../../numbers/number-config.js';
 import { listExtensions } from '../pbx.js';
 import { telnyx, telnyxCredentialConnectionPath } from '../../../shared/telnyx.js';
 import { readPbxConfig } from '../pbx-config-store.js';
+import { requestOrganizationId, writeTenantScopeError } from '../request-organization.js';
 
 async function data(path: string) {
   const response = await telnyx(path);
@@ -17,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const access = await requireAdmin(req);
     const config = await readPbxConfig();
-    const organizationId = access.superadmin ? config.activeOrganizationId : access.organizationId!;
+    const organizationId = requestOrganizationId(req, access.session, config);
     const [balance, numbers, connection, extensions, business] = await Promise.all([
       access.superadmin ? data('/balance') as Promise<{ balance?: string; currency?: string }> : Promise.resolve(null),
       data('/phone_numbers?page[size]=250&filter[status]=active') as Promise<Array<{ id: string; phone_number: string; status?: string }>>,
@@ -45,6 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       business,
     });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });
   }

@@ -40,6 +40,13 @@ let registrationRequest: Promise<number> | null = null;
 let registeredConfig: SipStackConfig | null = null;
 let registrationEpoch = 0;
 const sipSessionKey = 'vocivo.secure.sip-session.v1';
+const sipDeviceKey = 'vocivo.secure.sip-device.v1';
+type CachedSipSession = { sessionToken: string; config: SipStackConfig; expiresAt: number; deviceId: string; credentialId: string };
+
+async function revokeCredential(credential: Pick<CachedSipSession, 'deviceId' | 'credentialId'>) {
+  if (!credential.deviceId || !credential.credentialId) return;
+  await api.delete(`/api/voice/sip-credentials?deviceId=${encodeURIComponent(credential.deviceId)}&credentialId=${encodeURIComponent(credential.credentialId)}`);
+}
 
 /** Shared by foreground registration and a native killed-state wake. */
 export function ensureSipRegistration(forceRenew = false): Promise<number> {
@@ -49,14 +56,20 @@ export function ensureSipRegistration(forceRenew = false): Promise<number> {
     const sessionToken = await api.getSessionToken();
     if (!sessionToken) throw new Error('Sign in before receiving calls.');
     const raw = await SecureStore.getItemAsync(sipSessionKey);
-    let cached: { sessionToken: string; config: SipStackConfig; expiresAt: number } | null = null;
+    let cached: CachedSipSession | null = null;
     try { cached = raw ? JSON.parse(raw) : null; }
     catch { console.warn('[Vocivo SIP] Ignoring invalid secure session cache'); }
-    if (forceRenew || cached?.sessionToken !== sessionToken || !cached?.config?.password || !Number.isFinite(cached?.expiresAt) || Date.now() >= cached!.expiresAt - 30_000) cached = null;
+    if (forceRenew || cached?.sessionToken !== sessionToken || !cached?.deviceId || !cached?.credentialId || !cached?.config?.password || !Number.isFinite(cached?.expiresAt) || Date.now() >= cached!.expiresAt - 30_000) cached = null;
     if (!cached) {
-      const sip = await api.post<{ username: string; password: string; domain: string; wsUri: string; expires_in: number; ice_servers?: SipStackConfig['iceServers'] }>('/api/voice/sip-credentials', { client: 'mobile' });
-      if (!sip.username || !sip.password || !sip.wsUri || !(sip.expires_in > 0)) throw new Error('Incomplete SIP credentials.');
-      cached = { sessionToken, expiresAt: Date.now() + sip.expires_in * 1000, config: {
+      const deviceId = await SecureStore.getItemAsync(sipDeviceKey);
+      const sip = await api.post<{ username: string; password: string; domain: string; wsUri: string; expires_in: number; deviceId: string; credentialId: string; ice_servers?: SipStackConfig['iceServers'] }>('/api/voice/sip-credentials', { client: Platform.OS, ...(deviceId ? { deviceId } : {}) });
+      if (!sip.username || !sip.password || !sip.wsUri || !sip.deviceId || !sip.credentialId || !(sip.expires_in > 0)) throw new Error('Incomplete SIP credentials.');
+      if (epoch !== registrationEpoch || await api.getSessionToken() !== sessionToken) {
+        await revokeCredential(sip);
+        throw new Error('Calling session changed.');
+      }
+      await SecureStore.setItemAsync(sipDeviceKey, sip.deviceId, { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
+      cached = { sessionToken, deviceId: sip.deviceId, credentialId: sip.credentialId, expiresAt: Date.now() + sip.expires_in * 1000, config: {
         username: sip.username, password: sip.password, domain: sip.domain, wsUri: sip.wsUri, iceServers: sip.ice_servers,
       } };
     }
@@ -122,6 +135,11 @@ export async function unregisterVocivoSip() {
   if (pending) await pending.catch((error) => console.warn('[Vocivo SIP] Canceled registration', error));
   if (bridge) await bridge.unregister();
   registeredConfig = null;
+  const raw = await SecureStore.getItemAsync(sipSessionKey);
+  let cached: CachedSipSession | null = null;
+  try { cached = raw ? JSON.parse(raw) : null; }
+  catch (error) { console.warn('[Vocivo SIP] Invalid secure session during sign-out', error); }
+  if (cached && cached.sessionToken === await api.getSessionToken()) await revokeCredential(cached);
   await SecureStore.deleteItemAsync(sipSessionKey);
 }
 
@@ -179,7 +197,7 @@ export async function toggleVocivoSipSpeaker() {
 
 /** Takes a call off the system call screen when the engine no longer can. */
 export async function endVocivoSipCallUi(callId: string) {
-  await vocivoSipModule()?.reportCallEnded({ callId, reason: 'ended' }).catch(() => undefined);
+  await vocivoSipModule()?.reportCallEnded({ callId, reason: 'ended' });
 }
 
 /** True when this build can show a native incoming-call screen. */

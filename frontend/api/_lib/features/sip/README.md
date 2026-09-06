@@ -4,7 +4,7 @@ These handlers serve Vocivo's Kamailio/FreeSWITCH edge, not the Telnyx SDK.
 
 | Entry | Responsibility |
 | --- | --- |
-| `voice-sip-credentials` | Issue the authenticated extension's temporary credential and ICE configuration |
+| `voice-sip-credentials` | Issue device/session-scoped temporary credentials and ICE configuration; revoke an exact credential generation on DELETE |
 | `voice-sip-nonce`, `voice-sip-auth` | Challenge Digest registration, verify identity and consume replay evidence |
 | `sip-registration-auth::ownsSipRegistration` | Bind Digest username, From/To identity, realm and requested registration URI |
 | `sip-credential-store` | Store/select only live credentials; allow safe credential overlap during renewal |
@@ -39,6 +39,25 @@ Edge callbacks require `sip-edge-auth`; customer APIs require the user's session
 No unknown DID or absent tenant is permission to select a default customer.
 The corresponding server implementation is `services/sip/kamailio/kamailio.cfg`.
 Strict registration identity changes must ship with that config before API promotion.
+
+## Device credentials
+
+`POST /api/voice/sip-credentials` accepts a stable `deviceId` and returns that ID
+plus a new `credentialId`. The server derives `sessionId` from verified session
+claims; a client cannot choose its credential owner. Rotation replaces only the
+same device/session record, not every browser or every mobile device. The existing
+limit remains six live credentials per extension.
+
+`DELETE` requires the device and credential generation IDs. An old page cleanup
+cannot revoke a newer rotation or another signed-in session. Web documents claim
+exclusive device identities with Web Locks; native installations keep theirs in
+SecureStore across sign-out. Legacy clients without device IDs receive separate
+server-generated IDs rather than overwriting all other clients of the same type.
+
+Deploy this API before distributing the updated mobile build. Mobile now requires
+the returned ownership IDs. Reload old superadmin/browser tabs after deployment.
+This does not close audit H05: current user/subscription access must still be
+revalidated at REGISTER, and registrar contact revocation needs separate work.
 
 Run frontend tests/typecheck. `sip-config.test.ts` is a structural guard, not a
 Kamailio parser or real SIP-wire test; validate staged config in the pinned image.

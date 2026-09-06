@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import NetInfo, { type NetInfoStateType } from '@react-native-community/netinfo';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import {
   createTokenConfig,
   TelnyxVoipClient,
@@ -21,6 +21,7 @@ import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from './
 import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnection, waitForVoicePushToken } from './engine/session';
 import { useVoiceRegistration } from './engine/useVoiceRegistration';
 import { useAuth } from '../auth/AuthContext';
+import { routeCancellations } from './runtime/routeCancellation';
 
 /** A call that is over: nothing more will happen on it. */
 const isTerminalCall = (state: VoiceCallState) => isTerminalVoiceCallState(state);
@@ -77,6 +78,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const routePollsRef = useRef(new Map<string, { cancelled: boolean; timer?: ReturnType<typeof setTimeout>; wake?: () => void }>());
   const routePhaseByCallRef = useRef(new Map<string, string>());
   const mediaConfirmInFlightRef = useRef(new Set<string>());
+  const mediaConfirmationAbortsRef = useRef(new Map<string, AbortController>());
   const loginConfigRef = useRef<VoiceLoginConfig | null>(null);
   const iceListenerCleanupRef = useRef(new Map<string, () => void>());
   const lastNetworkTypeRef = useRef<NetInfoStateType | null>(null);
@@ -112,8 +114,11 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, []);
 
   const clearCallSubscriptions = useCallback((callId?: string) => {
-    const ids = callId ? [callId] : Array.from(callSubscriptions.current.keys());
+    const ids = callId ? [callId] : [...new Set([...callSubscriptions.current.keys(), ...mediaConfirmationAbortsRef.current.keys()])];
     ids.forEach((id) => {
+      mediaConfirmationAbortsRef.current.get(id)?.abort();
+      mediaConfirmationAbortsRef.current.delete(id);
+      mediaRecoveryRef.current.cancel(id);
       iceListenerCleanupRef.current.get(id)?.();
       iceListenerCleanupRef.current.delete(id);
       callSubscriptions.current.get(id)?.forEach((subscription) => subscription.unsubscribe());
@@ -129,14 +134,14 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   const cancelRemoteRoute = useCallback((routeId?: string) => {
     if (!routeId) return Promise.resolve();
-    return api.post('/api/voice/cancel', { routeId }).catch(() => api.post('/api/voice/cancel', { routeId })).catch((failure) => {
-      reportVoiceError('cancel route during hangup', failure);
-    });
-  }, [reportVoiceError]);
+    return routeCancellations.cancel(routeId);
+  }, []);
 
   const terminateCall = useCallback((callId: string, routeId?: string) => lifecycleRef.current.terminate(callId, async () => {
     const call = voice.getCall(callId);
-    const cancelRemote = cancelRemoteRoute(routeId);
+    // Retain an observed result while SIP terminates, so a fast HTTP failure
+    // cannot become an unhandled rejection. Both operations must complete.
+    const cancelRemote = cancelRemoteRoute(routeId).then(() => null, (failure: unknown) => ({ failure }));
     try {
       if (call) await call.hangup();
       else await voice.endNativeCall(callId);
@@ -148,8 +153,20 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         || isSettledLocalHangupError(error);
       if (!alreadyEnded) throw error;
     }
-    void cancelRemote;
+    const canceled = await cancelRemote;
+    if (canceled) throw canceled.failure;
   }), [cancelRemoteRoute]);
+
+  const retryRemoteCancellations = useCallback(() => {
+    void routeCancellations.flush().catch(failure => reportVoiceError('retry queued call cancellation', failure));
+  }, [reportVoiceError]);
+
+  useEffect(() => {
+    retryRemoteCancellations();
+    const resume = AppState.addEventListener('change', state => { if (state === 'active') retryRemoteCancellations(); });
+    const timer = setInterval(retryRemoteCancellations, 30_000);
+    return () => { resume.remove(); clearInterval(timer); };
+  }, [retryRemoteCancellations]);
 
   useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
@@ -225,8 +242,10 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   const confirmMediaConnected = useCallback(async (call: VoiceCall) => {
     if (mediaConfirmInFlightRef.current.has(call.callId)) return;
     mediaConfirmInFlightRef.current.add(call.callId);
+    const abort = new AbortController();
+    mediaConfirmationAbortsRef.current.set(call.callId, abort);
     try {
-    const stillThisCall = () => activeCallRef.current?.id === call.callId
+    const stillThisCall = () => !abort.signal.aborted && activeCallRef.current?.id === call.callId
       && call.currentState === CallState.ACTIVE
       && !lifecycleRef.current.isTerminating(call.callId);
     if (!stillThisCall()) return;
@@ -244,7 +263,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       activeCallRef.current = next;
       return next;
     });
-    let mediaReady = await waitForBidirectionalMedia(call);
+    let mediaReady = await waitForBidirectionalMedia(call, 8_000, abort.signal);
     if (!stillThisCall()) return;
     if (!mediaReady) {
       try {
@@ -253,7 +272,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         reportVoiceError('recover active call media', failure);
       }
       if (!stillThisCall()) return;
-      mediaReady = await waitForBidirectionalMedia(call);
+      mediaReady = await waitForBidirectionalMedia(call, 8_000, abort.signal);
     }
     if (!mediaReady) {
       if (stillThisCall()) setError('The call is connected, but audio is still starting. Stay on the call.');
@@ -262,6 +281,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     setError(null);
     } finally {
       mediaConfirmInFlightRef.current.delete(call.callId);
+      if (mediaConfirmationAbortsRef.current.get(call.callId) === abort) mediaConfirmationAbortsRef.current.delete(call.callId);
     }
   }, [cancelRoutePolling, reportVoiceError]);
 
@@ -388,6 +408,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((network) => {
+      if (network.isConnected === true) retryRemoteCancellations();
       const previous = lastNetworkTypeRef.current;
       lastNetworkTypeRef.current = network.type;
       if (!isTransportNetworkMigration(previous, network.type) || network.isConnected !== true) return;
@@ -399,7 +420,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         .catch((failure) => reportVoiceError('network migration recovery', failure));
     });
     return unsubscribe;
-  }, [reportVoiceError]);
+  }, [reportVoiceError, retryRemoteCancellations]);
 
   const emergencyTransportCleanup = useCallback((state: VoiceConnectionState) => {
     startAttemptRef.current += 1;
@@ -427,16 +448,24 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
     callRef.current = null;
     setActiveCall(null);
     setError(`The calling connection was lost (${state.toLowerCase()}). The call was closed safely.`);
-    lifecycleRef.current.clear();
     calls.forEach((call) => {
-      voice.endNativeCall(call.callId).catch((failure) => reportVoiceError('close native call after transport loss', failure));
+      lifecycleRef.current.transition(call.callId, 'FAILED');
+      const routeId = callRouteIdsRef.current.get(call.callId) || callMetaRef.current.get(call.callId)?.routeId;
+      void cancelRemoteRoute(routeId).catch(failure => {
+        reportVoiceError('queue remote cancellation after transport loss', failure);
+        setNotice('Call closed on this device. Remote cancellation will retry when connected.');
+      });
+      void voice.emergencyEndCall(call.callId).catch((failure) => reportVoiceError('dispose call after transport loss', failure));
+      callRouteIdsRef.current.delete(call.callId);
+      callMetaRef.current.delete(call.callId);
     });
-  }, [cancelRoutePolling, clearCallSubscriptions, finalizeCall, reportVoiceError, stopRingback]);
+  }, [cancelRemoteRoute, cancelRoutePolling, clearCallSubscriptions, finalizeCall, reportVoiceError, stopRingback]);
 
   useEffect(() => {
     const connectionSubscription = voice.connectionState$.subscribe((state) => {
       setConnection(state);
       if (state === ConnectionState.CONNECTED) {
+        retryRemoteCancellations();
         if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
         transportLossTimerRef.current = null;
         const current = callRef.current;
@@ -505,7 +534,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
       clearCallSubscriptions();
       lifecycleRef.current.clear();
     };
-  }, [attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup, reportVoiceError]);
+  }, [attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup, reportVoiceError, retryRemoteCancellations]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -931,6 +960,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           setError('Conference hangup was not acknowledged. Tap end call to retry.');
           throw failure;
         }
+        setNotice('Conference closed on this device. Remote cancellation is pending and will retry.');
       }
       conferenceCallIdsRef.current.clear();
       setConference(null);
@@ -955,6 +985,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
           setError('Hangup was not acknowledged. Tap end call to retry.');
           throw failure;
         }
+        setNotice('Call closed on this device. Remote cancellation is pending and will retry.');
       }
     }
     setError(null);

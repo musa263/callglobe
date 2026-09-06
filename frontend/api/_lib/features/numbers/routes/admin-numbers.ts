@@ -8,6 +8,7 @@ import { assignNumberToOrganization, removeNumberAssignment } from '../../organi
 import { getExtension } from '../../organizations/pbx.js';
 import { requireFeature } from '../../organizations/saas-access.js';
 import { invalidatePhoneNumberCache } from '../phone-number-access.js';
+import { requestOrganizationId, writeTenantScopeError } from '../../organizations/request-organization.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 
@@ -52,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const config = await readPbxConfig();
     const subscriptionAccess = await requireFeature(access.session, 'phoneNumbers', config);
-    const activeOrganizationId = access.superadmin ? config.activeOrganizationId : access.organizationId!;
+    const activeOrganizationId = requestOrganizationId(req, access.session, config);
     if (req.method === 'GET' && req.query.mode === 'search') {
       const country = text(req.query.country, 2).toUpperCase();
       if (!/^[A-Z]{2}$/.test(country)) return res.status(400).json({ error: 'Choose a two-letter country code.' });
@@ -205,6 +206,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     invalidatePhoneNumberCache('owned');
     return res.status(200).json({ number: payload.data });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Phone-number management is not enabled for this company.' });
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });

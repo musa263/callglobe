@@ -29,6 +29,7 @@ public final class VocivoSipCallManager: NSObject {
   private var uuidsByCallId: [String: UUID] = [:]
   private var callIdsByUuid: [UUID: String] = [:]
   private var pendingAnswers: [String: CXAnswerCallAction] = [:]
+  private var mirroredActions: [UUID: String] = [:]
   private var outgoingCalls = Set<String>()
   private var ringingDeadlines: [String: DispatchWorkItem] = [:]
 
@@ -95,6 +96,7 @@ public final class VocivoSipCallManager: NSObject {
   }
 
   private func forget(_ callId: String) {
+    mirroredActions = mirroredActions.filter { $0.value != callId }
     ringingDeadlines.removeValue(forKey: callId)?.cancel()
     pendingAnswers.removeValue(forKey: callId)?.fail()
     outgoingCalls.remove(callId)
@@ -166,14 +168,24 @@ public final class VocivoSipCallManager: NSObject {
     forget(callId)
   }
 
-  @objc public func reportMuted(callId: String, muted: Bool) {
-    guard let uuid = uuidsByCallId[callId] else { return }
-    controller.request(CXTransaction(action: CXSetMutedCallAction(call: uuid, muted: muted))) { _ in }
+  @objc public func reportMuted(callId: String, muted: Bool, completion: @escaping (Error?) -> Void) {
+    guard let uuid = uuidsByCallId[callId] else { completion(nil); return }
+    submitMirror(CXSetMutedCallAction(call: uuid, muted: muted), callId: callId, completion: completion)
   }
 
-  @objc public func reportHeld(callId: String, held: Bool) {
-    guard let uuid = uuidsByCallId[callId] else { return }
-    controller.request(CXTransaction(action: CXSetHeldCallAction(call: uuid, onHold: held))) { _ in }
+  @objc public func reportHeld(callId: String, held: Bool, completion: @escaping (Error?) -> Void) {
+    guard let uuid = uuidsByCallId[callId] else { completion(nil); return }
+    submitMirror(CXSetHeldCallAction(call: uuid, onHold: held), callId: callId, completion: completion)
+  }
+
+  private func submitMirror(_ action: CXAction, callId: String, completion: @escaping (Error?) -> Void) {
+    mirroredActions[action.uuid] = callId
+    controller.request(CXTransaction(action: action)) { error in
+      DispatchQueue.main.async {
+        if error != nil { self.mirroredActions.removeValue(forKey: action.uuid) }
+        completion(error)
+      }
+    }
   }
 
   // MARK: - Audio route
@@ -260,6 +272,7 @@ extension VocivoSipCallManager: CXProviderDelegate {
     let ids = Array(callIdsByUuid.values)
     pendingAnswers.values.forEach { $0.fail() }
     pendingAnswers.removeAll()
+    mirroredActions.removeAll()
     ringingDeadlines.values.forEach { $0.cancel() }
     ringingDeadlines.removeAll()
     outgoingCalls.removeAll()
@@ -280,6 +293,7 @@ extension VocivoSipCallManager: CXProviderDelegate {
   }
 
   public func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
+    mirroredActions.removeValue(forKey: action.uuid)
     guard let answer = action as? CXAnswerCallAction,
           let callId = callIdsByUuid[answer.callUUID] else { return }
     pendingAnswers.removeValue(forKey: callId)
@@ -296,13 +310,19 @@ extension VocivoSipCallManager: CXProviderDelegate {
 
   public func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
     guard let callId = callIdsByUuid[action.callUUID] else { action.fail(); return }
-    emit("callUiMute", ["callId": callId, "muted": action.isMuted])
+    // Acknowledging an engine update is not another user command. Correlate
+    // by action UUID so even delayed/out-of-order callbacks cannot toggle SIP.
+    if mirroredActions.removeValue(forKey: action.uuid) == nil {
+      emit("callUiMute", ["callId": callId, "muted": action.isMuted])
+    }
     action.fulfill()
   }
 
   public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
     guard let callId = callIdsByUuid[action.callUUID] else { action.fail(); return }
-    emit("callUiHold", ["callId": callId, "held": action.isOnHold])
+    if mirroredActions.removeValue(forKey: action.uuid) == nil {
+      emit("callUiHold", ["callId": callId, "held": action.isOnHold])
+    }
     action.fulfill()
   }
 

@@ -4,7 +4,7 @@ import { afterResponse, allowMobile, methodNotAllowed, publicError, writeAuthErr
 import { readBusinessVoiceConfig, saveBusinessVoiceConfig } from '../../numbers/number-config.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { prerenderTenantPrompts } from '../../ai/prompt-prerender.js';
-import { sessionOrganizationId } from '../tenancy.js';
+import { requestOrganizationId, writeTenantScopeError } from '../request-organization.js';
 import { requireFeature } from '../saas-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -16,12 +16,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pbx = await readPbxConfig();
     if (req.method === 'PUT' && req.body?.enabled) await requireFeature(session, 'ivr', pbx);
     if (req.method === 'PUT' && req.body?.backgroundImageUrl) await requireFeature(session, 'customBranding', pbx);
-    const organizationId = sessionOrganizationId(session, pbx);
+    const organizationId = requestOrganizationId(req, session, pbx);
     const config = req.method === 'PUT' ? await saveBusinessVoiceConfig(req.body ?? {}, organizationId) : await readBusinessVoiceConfig(organizationId);
     // A new greeting, menu or voice is rendered before anyone calls it.
     if (req.method === 'PUT') afterResponse('menu prompt pre-render', prerenderTenantPrompts(organizationId, { config: pbx }));
     return res.status(200).json({ config });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Organization administrator access is required.' });
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This voice feature is not enabled for your company.' });

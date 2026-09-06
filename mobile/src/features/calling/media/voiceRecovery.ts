@@ -152,19 +152,49 @@ export function isSetupSignalingBlip(sdkLiveCallCount: number, uiCallId?: string
   return sdkLiveCallCount === 0 && !uiCallId;
 }
 
-export async function waitForBidirectionalMedia(call: RecoverableCall, timeoutMs = 8_000) {
+function untilAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return work;
+  return new Promise((resolve, reject) => {
+    const cancel = () => { signal.removeEventListener('abort', cancel); resolve(undefined); };
+    work.then(value => { signal.removeEventListener('abort', cancel); resolve(value); }, error => {
+      signal.removeEventListener('abort', cancel); reject(error);
+    });
+    if (signal.aborted) { cancel(); return; }
+    signal.addEventListener('abort', cancel, { once: true });
+  });
+}
+
+function mediaDelay(delayMs: number, signal?: AbortSignal) {
+  return new Promise<void>(resolve => {
+    const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); };
+    const timer = setTimeout(finish, delayMs);
+    if (signal?.aborted) { finish(); return; }
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
+
+export async function waitForBidirectionalMedia(call: RecoverableCall, timeoutMs = 8_000, signal?: AbortSignal) {
+  if (signal?.aborted) return false;
   const deadline = Date.now() + timeoutMs;
-  const baseline = await readAudioRtpCounts(call);
-  while (Date.now() < deadline) {
-    if (await hasConfirmedBidirectionalMedia(call, baseline)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  const baseline = await untilAborted(readAudioRtpCounts(call), signal) ?? null;
+  while (!signal?.aborted && Date.now() < deadline) {
+    if (await untilAborted(hasConfirmedBidirectionalMedia(call, baseline), signal)) return true;
+    await mediaDelay(100, signal);
   }
-  return hasConfirmedBidirectionalMedia(call, baseline);
+  return !signal?.aborted && Boolean(await untilAborted(hasConfirmedBidirectionalMedia(call, baseline), signal));
 }
 
 export class VoiceMediaRecoveryCoordinator {
   private operations = new Map<string, Promise<void>>();
   private lastAttemptAt = new Map<string, number>();
+  private aborts = new Map<string, AbortController>();
+
+  cancel(callId: string) {
+    this.aborts.get(callId)?.abort();
+    this.aborts.delete(callId);
+    this.operations.delete(callId);
+    this.lastAttemptAt.delete(callId);
+  }
 
   constructor(
     private readonly reportError: (operation: string, error: unknown) => void,
@@ -179,6 +209,8 @@ export class VoiceMediaRecoveryCoordinator {
     const now = Date.now();
     if (now - (this.lastAttemptAt.get(callId) ?? 0) < 1_000) return Promise.resolve();
     this.lastAttemptAt.set(callId, now);
+    const abort = new AbortController();
+    this.aborts.set(callId, abort);
     const operation = (async () => {
       const peer = peerConnectionForCall(call);
       const nativeCall = call.telnyxCall as NativeCallLike | undefined;
@@ -187,9 +219,9 @@ export class VoiceMediaRecoveryCoordinator {
         // The patched Telnyx SDK method creates a fresh local offer and sends
         // it through Telnyx's supported attach/re-INVITE signaling path.
         if (call.restartMedia) {
-          await call.restartMedia();
+          await untilAborted(call.restartMedia(), abort.signal);
         } else if (nativeCall?.restartMedia) {
-          await nativeCall.restartMedia();
+          await untilAborted(nativeCall.restartMedia(), abort.signal);
         } else {
           // Without the patched restartMedia there is no supported way to send
           // the re-INVITE; fail before touching the peer connection's SDP.
@@ -199,13 +231,20 @@ export class VoiceMediaRecoveryCoordinator {
         this.reportError(`${reason}:media-renegotiation`, error);
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, this.recoveryDelayMs));
+      if (abort.signal.aborted) return;
+      await mediaDelay(this.recoveryDelayMs, abort.signal);
+      if (abort.signal.aborted) return;
       const iceState = String(peerConnectionForCall(call)?.iceConnectionState || '').toLowerCase();
       if (['connected', 'completed'].includes(iceState)) return;
       const pending = new Error(`ICE remained ${iceState || 'unknown'} after restart`);
       this.reportError(`${reason}:ice-pending`, pending);
       throw pending;
-    })().finally(() => { this.operations.delete(callId); });
+    })().finally(() => {
+      if (this.aborts.get(callId) === abort) {
+        this.aborts.delete(callId);
+        this.operations.delete(callId);
+      }
+    });
     this.operations.set(callId, operation);
     return operation;
   }

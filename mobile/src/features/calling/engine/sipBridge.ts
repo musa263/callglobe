@@ -96,6 +96,7 @@ type TrackedSession = {
   held: boolean;
   muted: boolean;
   terminal: boolean;
+  mediaUpdates?: Partial<Record<'held' | 'muted', Promise<void>>>;
 };
 
 export type SipStackBridgeOptions = {
@@ -177,16 +178,9 @@ export class SipStackBridge implements NativeSipBridge {
   private async teardown() {
     const stack = this.stack;
     this.stack = null;
-    for (const [callId, session] of this.sessions) {
-      if (session.terminal) continue;
-      try {
-        await session.handle.terminate();
-      } catch (error) {
-        console.warn('Vocivo SIP call teardown failed', describe(error));
-      }
-      this.emitState(callId, 'ENDED');
-    }
-    this.sessions.clear();
+    await Promise.all([...this.sessions.keys()].map((id) => this.disposeSession(id, 'ENDED').catch((error) => {
+      console.warn('Vocivo SIP call disposal failed', error);
+    })));
     if (stack) {
       try {
         await stack.stop();
@@ -236,21 +230,53 @@ export class SipStackBridge implements NativeSipBridge {
     }
   }
 
+  async emergencyDispose(callId: string) {
+    await this.disposeSession(callId, 'FAILED');
+  }
+
+  private async disposeSession(callId: string, state: 'ENDED' | 'FAILED') {
+    const session = this.sessions.get(callId);
+    if (!session || session.terminal) return;
+    // Retire the handle before invoking SIP: disposal can synchronously emit
+    // events, and no late ACTIVE/HELD update may recreate this call.
+    session.terminal = true;
+    this.sessions.delete(callId);
+    let disposal: Promise<void>;
+    try {
+      disposal = session.handle.dispose();
+    } finally {
+      this.emitState(callId, state);
+    }
+    await disposal;
+  }
+
   async hold(callId: string, on: boolean) {
-    const session = this.requireSession(callId);
-    await session.handle.setHold(on);
-    session.held = on;
-    this.events.emit('mediaState', { callId, onHold: on });
-    // The re-INVITE does not change the SIP.js session state, so the call state
-    // has to be republished here or the UI would never leave ACTIVE.
-    if (session.established) this.emitState(callId, on ? 'HELD' : 'ACTIVE');
+    await this.changeMediaControl(callId, 'held', on);
   }
 
   async mute(callId: string, on: boolean) {
+    await this.changeMediaControl(callId, 'muted', on);
+  }
+
+  private changeMediaControl(callId: string, control: 'held' | 'muted', on: boolean) {
     const session = this.requireSession(callId);
-    await session.handle.setMuted(on);
-    session.muted = on;
-    this.events.emit('mediaState', { callId, muted: on });
+    const apply = async () => {
+      if (session.terminal || session[control] === on) return;
+      if (control === 'held') await session.handle.setHold(on);
+      else await session.handle.setMuted(on);
+      if (session.terminal) return;
+      session[control] = on;
+      this.events.emit('mediaState', { callId, ...(control === 'held' ? { onHold: on } : { muted: on }) });
+      // Re-INVITE does not emit Established again, so publish the hold change.
+      if (control === 'held' && session.established) this.emitState(callId, on ? 'HELD' : 'ACTIVE');
+    };
+    session.mediaUpdates ||= {};
+    const previous = session.mediaUpdates[control];
+    // Queue conflicting commands; failed commands remain retryable. Duplicate
+    // callbacks observe the confirmed value before touching SIP a second time.
+    const update = previous ? previous.then(apply, apply) : apply();
+    session.mediaUpdates[control] = update;
+    return update;
   }
 
   async sendDtmf(callId: string, digit: string) {

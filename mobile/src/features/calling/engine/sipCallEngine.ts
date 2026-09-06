@@ -95,6 +95,11 @@ class SipCall implements VoiceCall {
     await this.bridge.hangup(this.callId);
   }
 
+  async emergencyDispose() {
+    if (!this.bridge.emergencyDispose) throw new Error('SIP emergency disposal is unavailable.');
+    await this.bridge.emergencyDispose(this.callId);
+  }
+
   async hold() {
     await this.bridge.hold(this.callId, true);
     this.isHeld$.next(true);

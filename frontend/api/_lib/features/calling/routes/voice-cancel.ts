@@ -7,7 +7,11 @@ import { sessionMayControlVoiceRoute } from '../voice-route-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute, updateVoiceRoute } from '../voice-route-store.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+const defaultDependencies = { requireSession, readVoiceRoute, sessionMayControlVoiceRoute, readOutboundCallPairByRoute, hangupConferenceParticipant, terminateOutboundPair, hangupCallControlIds, updateVoiceRoute };
+
+export function createVoiceCancelHandler(dependencies: Partial<typeof defaultDependencies> = {}) {
+  const { requireSession, readVoiceRoute, sessionMayControlVoiceRoute, readOutboundCallPairByRoute, hangupConferenceParticipant, terminateOutboundPair, hangupCallControlIds, updateVoiceRoute } = { ...defaultDependencies, ...dependencies };
+  return async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
   try {
@@ -19,17 +23,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const destHangup = Boolean(session.extensionId && session.extensionId === route.destinationExtensionId && route.userId !== session.sub);
 
     const pair = await readOutboundCallPairByRoute(routeId);
+    let complete = true;
     if (pair) {
       if (pair.status === 'conference' && pair.conferenceRole !== 'host') {
-        await hangupConferenceParticipant(pair, liveOutboundDestinationId(pair) || pair.destinationCallControlId, `cancel-${routeId.slice(-10)}`);
+        complete = await hangupConferenceParticipant(pair, liveOutboundDestinationId(pair) || pair.destinationCallControlId, `cancel-${routeId.slice(-10)}`);
       } else {
-        await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`);
+        complete = (await terminateOutboundPair(pair, `cancel-${routeId.slice(-10)}`)).complete;
       }
     }
     if (route.wakeupCallControlIds?.length) {
-      await hangupCallControlIds(route.wakeupCallControlIds, `sip-cancel-${routeId.slice(-10)}`);
+      const wakeupsComplete = await hangupCallControlIds(route.wakeupCallControlIds, `sip-cancel-${routeId.slice(-10)}`);
+      complete = complete && wakeupsComplete;
     }
-    await updateVoiceRoute(routeId, { phase: 'ended', failureCause: destHangup ? 'callee_rejected' : 'caller_hangup' });
+    if (!complete) {
+      res.setHeader('Retry-After', '2');
+      return res.status(503).json({ canceled: false, error: 'Call cancellation is pending. Please retry.' });
+    }
+    const ended = await updateVoiceRoute(routeId, { phase: 'ended', failureCause: destHangup ? 'callee_rejected' : 'caller_hangup' });
+    if (!ended) return res.status(503).json({ canceled: false, error: 'Call cancellation state could not be confirmed. Please retry.' });
 
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ canceled: true });
@@ -37,4 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });
   }
+  };
 }
+
+export default createVoiceCancelHandler();

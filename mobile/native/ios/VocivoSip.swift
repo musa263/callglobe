@@ -111,23 +111,27 @@ final class VocivoSip: RCTEventEmitter {
   }
 
   @objc(reportMuted:resolver:rejecter:)
-  func reportMuted(_ input: NSDictionary, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+  func reportMuted(_ input: NSDictionary, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     guard let callId = input["callId"] as? String else {
       reject("vocivo_sip_bad_call", "reportMuted needs a callId", nil)
       return
     }
-    VocivoSipCallManager.shared.reportMuted(callId: callId, muted: input["muted"] as? Bool ?? false)
-    resolve(nil)
+    VocivoSipCallManager.shared.reportMuted(callId: callId, muted: input["muted"] as? Bool ?? false) { error in
+      if let error = error { reject("vocivo_callkit_mute", "CallKit could not update mute", error) }
+      else { resolve(nil) }
+    }
   }
 
   @objc(reportHeld:resolver:rejecter:)
-  func reportHeld(_ input: NSDictionary, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+  func reportHeld(_ input: NSDictionary, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     guard let callId = input["callId"] as? String else {
       reject("vocivo_sip_bad_call", "reportHeld needs a callId", nil)
       return
     }
-    VocivoSipCallManager.shared.reportHeld(callId: callId, held: input["held"] as? Bool ?? false)
-    resolve(nil)
+    VocivoSipCallManager.shared.reportHeld(callId: callId, held: input["held"] as? Bool ?? false) { error in
+      if let error = error { reject("vocivo_callkit_hold", "CallKit could not update hold", error) }
+      else { resolve(nil) }
+    }
   }
 
   @objc(setSpeaker:resolver:rejecter:)

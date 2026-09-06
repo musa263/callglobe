@@ -4,7 +4,8 @@ import { requireAdmin } from '../../auth/auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { telnyx, TelnyxApiError } from '../../../shared/telnyx.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
-import { assignNumberToOrganization, removeNumberAssignment, sessionCanAccessNumber, sessionOrganizationId } from '../../organizations/tenancy.js';
+import { assignNumberToOrganization, removeNumberAssignment, numberOrganizationId } from '../../organizations/tenancy.js';
+import { requestOrganizationId, writeTenantScopeError } from '../../organizations/request-organization.js';
 import { invalidatePhoneNumberCache } from '../phone-number-access.js';
 
 const e164Pattern = /^\+[1-9]\d{6,14}$/;
@@ -22,13 +23,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const access = await requireAdmin(req);
     const session = access.session;
     const config = await readPbxConfig();
-    const organizationId = access.organizationId || (access.superadmin ? config.activeOrganizationId : sessionOrganizationId(session, config));
+    const organizationId = requestOrganizationId(req, session, config);
 
     if (req.method === 'GET') {
       const response = await telnyx('/verified_numbers?page[size]=250');
       const payload = await response.json() as { data?: Array<{ phone_number: string; verified_at?: string }> };
       return res.status(200).json({
-        numbers: (payload.data ?? []).filter((number) => sessionCanAccessNumber(session, number.phone_number, config)).map((number) => ({
+        numbers: (payload.data ?? []).filter((number) => numberOrganizationId(number.phone_number, config) === organizationId).map((number) => ({
           id: `verified-${number.phone_number}`,
           phone_number: number.phone_number,
           label: 'Verified caller ID',
@@ -42,7 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const phoneNumber = phoneNumberFrom(req);
     if (!e164Pattern.test(phoneNumber)) return res.status(400).json({ error: 'Enter a complete number in international format, for example +966501234567.' });
-    if (req.method === 'DELETE' && !sessionCanAccessNumber(session, phoneNumber, config)) return res.status(403).json({ error: 'This caller ID belongs to another organization.' });
+    if (req.method === 'DELETE' && numberOrganizationId(phoneNumber, config) !== organizationId) return res.status(403).json({ error: 'This caller ID belongs to another organization.' });
 
     if (req.method === 'DELETE') {
       await telnyx(`/verified_numbers/${encodeURIComponent(phoneNumber)}`, { method: 'DELETE' });
@@ -77,6 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(400).json({ error: 'Unknown verification action.' });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Administrative access is required.' });
     if (error instanceof TelnyxApiError && [400, 404, 422].includes(error.status)) return res.status(error.status).json({ error: error.message });

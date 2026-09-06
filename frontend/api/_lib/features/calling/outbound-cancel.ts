@@ -156,7 +156,8 @@ export async function terminateOutboundLegs(pair: OutboundCallPair, ids: string[
 
 export async function hangupConferenceParticipant(pair: OutboundCallPair, hangingCallControlId: string, commandPrefix: string) {
   const plan = conferenceParticipantTeardown(pair, hangingCallControlId);
-  await terminateOutboundLegs(pair, plan.hangIds, commandPrefix);
+  const updated = await terminateOutboundLegs(pair, plan.hangIds, commandPrefix);
+  if (!plan.hangIds.every(id => updated.termination?.[id]?.status === 'terminated')) return false;
   if (pair.peerClientCallControlId) {
     const peer = await readOutboundCallPairByClient(pair.peerClientCallControlId);
     if (peer) {
@@ -188,10 +189,12 @@ export async function hangupConferenceParticipant(pair: OutboundCallPair, hangin
   } else {
     await clearOutboundCallPair(pair);
   }
+  return true;
 }
 
 export async function hangupCallControlIds(ids: string[], commandPrefix: string) {
-  await Promise.all([...new Set(ids.filter(Boolean))].map((id) => hangupLeg(id, `${commandPrefix}-${id.slice(-8)}`)));
+  const results = await Promise.all([...new Set(ids.filter(Boolean))].map((id) => hangupLeg(id, `${commandPrefix}-${id.slice(-8)}`)));
+  return results.every(result => result.status === 'terminated');
 }
 
 export async function terminateOutboundPair(pair: OutboundCallPair, commandPrefix: string) {

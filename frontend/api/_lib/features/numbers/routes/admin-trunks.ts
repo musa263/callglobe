@@ -4,6 +4,8 @@ import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../.
 import { telnyx, telnyxCredentialConnectionPath } from '../../../shared/telnyx.js';
 import { deleteTrunkPolicy, normalizeTrunkPolicy, readTrunkPolicies, saveTrunkPolicy, type TrunkPolicy } from '../trunk-policy-store.js';
 import { requireFeature } from '../../organizations/saas-access.js';
+import { readPbxConfig } from '../../organizations/pbx-config-store.js';
+import { requestOrganizationId, writeTenantScopeError } from '../../organizations/request-organization.js';
 
 type UacConnection = {
   id: string;
@@ -28,6 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
   try {
     const access = await requireAdmin(req);
+    const organizationId = requestOrganizationId(req, access.session, await readPbxConfig());
     await requireFeature(access.session, 'sipTrunks');
     if (req.method === 'GET') {
       const [connectionResponse, uacResponse, policies] = await Promise.all([
@@ -39,12 +42,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const uac = (await uacResponse.json() as { data?: UacConnection[] }).data ?? [];
       return res.status(200).json({
         vocivoTrunk: access.superadmin && connection ? { id: connection.id, name: connection.connection_name, active: connection.active, host: 'sip.telnyx.com', username: connection.record_type === 'ip_connection' ? '' : connection.user_name, registrationStatus: connection.record_type === 'ip_connection' ? 'IP authenticated' : connection.registration_status, codecs: connection.inbound?.codecs ?? [], outboundProfileId: connection.outbound?.outbound_voice_profile_id, sipUriCalling: connection.sip_uri_calling_preference || 'disabled', transport: connection.transport_protocol || 'UDP' } : null,
-        externalTrunks: uac.filter((item) => access.superadmin || policies[item.id]?.organizationId === access.organizationId).map((item) => safeUac(item, policies[item.id])),
+        externalTrunks: uac.filter((item) => policies[item.id]?.organizationId === organizationId).map((item) => safeUac(item, policies[item.id])),
       });
     }
     const id = text(req.body?.id || req.query.id, 80);
     const currentPolicies = await readTrunkPolicies();
-    if (id && !access.superadmin && currentPolicies[id]?.organizationId !== access.organizationId) return res.status(404).json({ error: 'SIP trunk not found.' });
+    if (id && currentPolicies[id]?.organizationId !== organizationId) return res.status(404).json({ error: 'SIP trunk not found.' });
     if (req.method === 'DELETE') {
       if (!id) return res.status(400).json({ error: 'Trunk ID is required.' });
       await telnyx(`/uac_connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -60,8 +63,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const destinationUri = text(req.body?.destinationUri, 200);
     const transport = ['UDP', 'TCP', 'TLS'].includes(req.body?.transport) ? req.body.transport : 'TLS';
     if (!name || !proxy || !username || (!id && !password)) return res.status(400).json({ error: 'Name, proxy, username and password are required for a new trunk.' });
-    const policyOrganizationId = access.superadmin ? text(req.body?.policy?.organizationId, 50) || currentPolicies[id]?.organizationId || '' : access.organizationId || '';
-    if (!policyOrganizationId) return res.status(400).json({ error: 'Choose the customer organization that owns this SIP trunk.' });
+    const policyOrganizationId = organizationId;
+    if (req.body?.policy?.organizationId && req.body.policy.organizationId !== organizationId) return res.status(409).json({ error: 'The trunk belongs to another workspace. Reload before saving.' });
     const body = {
       connection_name: name,
       active: req.body?.active !== false,
@@ -74,6 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const policy = await saveTrunkPolicy(payload.data.id, { ...(req.body?.policy ?? {}), organizationId: policyOrganizationId });
     return res.status(id ? 200 : 201).json({ trunk: safeUac(payload.data, policy) });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'SIP trunk management is not enabled for this company.' });
     return res.status(500).json({ error: publicError(error) });

@@ -16,6 +16,7 @@ import {
   type SessionDescriptionHandlerOptions as WebSessionDescriptionHandlerOptions,
 } from 'sip.js/lib/platform/web';
 import { createRegistrationKeeper } from './sipRegistrationKeeper';
+import { terminationDeadline } from '../state/terminationDeadline';
 import type {
   SipDisposition,
   SipRegistererState,
@@ -107,6 +108,7 @@ class SipJsSession implements SipSessionHandle {
   private listener: ((state: SipSessionState) => void) | null = null;
   private ended: SipDisposition = {};
   private held = false;
+  private disposal?: Promise<void>;
   private readonly stateListener = (state: SessionState) => {
     try {
       this.listener?.(toSipSessionState(state));
@@ -195,6 +197,17 @@ class SipJsSession implements SipSessionHandle {
         // Already going away; nothing to send.
         return;
     }
+  }
+
+  dispose() {
+    if (this.disposal) return this.disposal;
+    this.listener = null;
+    this.session.stateChange.removeListener(this.stateListener);
+    // SIP.js closes media as part of disposal, but an early-dialog CANCEL can
+    // fail before it reaches that step. Close media first, independently.
+    this.session.sessionDescriptionHandler?.close();
+    this.disposal = terminationDeadline(Promise.resolve().then(() => this.session.dispose()));
+    return this.disposal;
   }
 
   async setHold(on: boolean) {

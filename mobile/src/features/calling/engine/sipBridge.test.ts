@@ -3,6 +3,7 @@ import test from 'node:test';
 import { SipEventBus, SipStackBridge, sessionStateToVoiceState } from './sipBridge';
 import type { SipDisposition, SipSessionHandle, SipSessionState, SipStack, SipStackConfig } from './sipStack';
 import type { SipEventMap, SipEventName, VoiceInviteHeader } from './voiceEngine';
+import { bindCallUi, type NativeCallUi, type CallUiEventSource } from './callUi';
 
 /** Narrows an optional lookup so the assertions below read as intent, not as null checks. */
 function must<T>(value: T | undefined, what: string): T {
@@ -16,6 +17,78 @@ const credentials: SipStackConfig = {
   domain: 'sip.vocivo.app',
   wsUri: 'wss://sip.vocivo.app:7443',
 };
+
+test('CallKit mute and hold echoes cause exactly one native transaction per app action', async () => {
+  const events = new SipEventBus();
+  const fake = fakeStack();
+  const bridge = new SipStackBridge({ createStack: () => fake.stack, events });
+  const listeners = new Map<string, (payload: any) => void>();
+  const ui: CallUiEventSource = { addListener: (name, listener) => {
+    listeners.set(name, listener);
+    return { remove: () => { listeners.delete(name); } };
+  } };
+  const transactions: string[] = [];
+  const native: NativeCallUi = {
+    reportIncomingCall: async () => {}, reportOutgoingCall: async () => {},
+    reportCallConnected: async () => {}, reportCallEnded: async () => {},
+    setSpeaker: async () => {}, isCallUiAvailable: async () => true,
+    reportMuted: async payload => {
+      transactions.push(`mute:${payload.muted}`);
+      // Model the old native delegate too: JS must defend against that echo.
+      if (transactions.length < 12) listeners.get('callUiMute')?.(payload);
+    },
+    reportHeld: async payload => {
+      transactions.push(`hold:${payload.held}`);
+      if (transactions.length < 12) listeners.get('callUiHold')?.(payload);
+    },
+  };
+  const binding = bindCallUi({ events, bridge, native, ui });
+  await bridge.register(credentials);
+  const id = await bridge.invite('1002');
+  const session = must(fake.outgoing[0], 'outgoing session');
+  session.move('Established');
+  await bridge.mute(id, true);
+  await bridge.mute(id, true);
+  await bridge.hold(id, true);
+  await bridge.hold(id, true);
+  await bridge.hold(id, false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(transactions, ['mute:true', 'hold:true', 'hold:false']);
+  assert.deepEqual(session.actions, ['mute:true', 'hold:true', 'hold:false']);
+  listeners.get('callUiMute')?.({ callId: id, muted: false });
+  listeners.get('callUiHold')?.({ callId: id, held: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(transactions.length, 3, 'native user commands are not mirrored back as transactions');
+  assert.deepEqual(session.actions, ['mute:true', 'hold:true', 'hold:false', 'mute:false', 'hold:true']);
+  session.move('Terminated');
+  events.emit('mediaState', { callId: id, muted: true, onHold: false });
+  assert.equal(transactions.length, 3, 'late state cannot recreate a finished native call');
+  binding.remove();
+  assert.equal(listeners.size, 0);
+  await bridge.unregister();
+});
+
+test('racing hold commands serialize, deduplicate and allow retry after failure', async () => {
+  const { bridge, fake } = harness();
+  await bridge.register(credentials);
+  const id = await bridge.invite('1002');
+  const session = must(fake.outgoing[0], 'outgoing session');
+  session.move('Established');
+  let finish!: () => void;
+  const seen: boolean[] = [];
+  session.setHold = async on => { seen.push(on); if (on) await new Promise<void>(resolve => { finish = resolve; }); };
+  const first = bridge.hold(id, true), duplicate = bridge.hold(id, true), resume = bridge.hold(id, false);
+  assert.deepEqual(seen, [true]);
+  finish();
+  await Promise.all([first, duplicate, resume]);
+  assert.deepEqual(seen, [true, false]);
+  session.setHold = async () => { throw new Error('re-INVITE refused'); };
+  await assert.rejects(bridge.hold(id, true), /refused/);
+  session.setHold = async on => { seen.push(on); };
+  await bridge.hold(id, true);
+  assert.deepEqual(seen, [true, false, true]);
+  await bridge.unregister();
+});
 
 class FakeSession implements SipSessionHandle {
   private listener: ((state: SipSessionState) => void) | null = null;
@@ -48,6 +121,7 @@ class FakeSession implements SipSessionHandle {
   peerConnection() { return null; }
   async accept() { this.actions.push('accept'); }
   async terminate() { this.actions.push('terminate'); }
+  async dispose() { this.actions.push('dispose'); this.listener = null; }
   async setHold(on: boolean) { this.actions.push(`hold:${on}`); }
   async setMuted(on: boolean) { this.actions.push(`mute:${on}`); }
   async sendDtmf(digit: string) { this.actions.push(`dtmf:${digit}`); }
@@ -240,7 +314,7 @@ test('unregister ends live calls, stops the stack and reports disconnection', as
   const session = must(fake.outgoing[0], 'the outgoing session');
   session.move('Established');
   await bridge.unregister();
-  assert.deepEqual(session.actions, ['terminate']);
+  assert.deepEqual(session.actions, ['dispose']);
   assert.equal(fake.state.stopped, true);
   assert.equal(of('callState').at(-1)?.state, 'ENDED');
   assert.equal(of('registration').at(-1)?.state, 'none');

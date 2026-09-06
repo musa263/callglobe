@@ -43,6 +43,8 @@ export type VoiceCall = {
    */
   readonly peerConnection?: unknown;
   restartMedia?(): Promise<void>;
+  /** Irrecoverable transport loss: force local cleanup even if signaling fails. */
+  emergencyDispose?(): Promise<void>;
 
   readonly callState$: VoiceObservable<VoiceCallState>;
   readonly isMuted$: VoiceObservable<boolean>;
@@ -82,6 +84,7 @@ export type NativeSipBridge = {
   invite(target: string, headers?: VoiceInviteHeader[]): Promise<string>;
   answer(callId: string): Promise<void>;
   hangup(callId?: string): Promise<void>;
+  emergencyDispose?(callId: string): Promise<void>;
   hold(callId: string, on: boolean): Promise<void>;
   mute(callId: string, on: boolean): Promise<void>;
   sendDtmf(callId: string, digit: string): Promise<void>;

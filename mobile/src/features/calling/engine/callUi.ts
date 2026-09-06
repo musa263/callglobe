@@ -82,6 +82,7 @@ export function bindCallUi(options: {
   const accepted = new Set<string>();
   const answers = new Map<string, { started: boolean; cancelTimer: () => void }>();
   const wakeTimers = new Map<string, () => void>();
+  const nativeMedia = new Map<string, { muted?: { value: boolean }; onHold?: { value: boolean } }>();
   // A delayed/replayed push or INVITE must not resurrect a cancelled call.
   const ended = new Set<string>();
   let disposed = false;
@@ -103,6 +104,7 @@ export function bindCallUi(options: {
     invitations.delete(callId);
     accepted.delete(callId);
     reported.delete(callId);
+    nativeMedia.delete(callId);
     ended.add(callId);
     if (ended.size > 128) ended.delete(ended.values().next().value!);
   };
@@ -172,11 +174,45 @@ export function bindCallUi(options: {
     }
   }));
 
+  const reportMedia = (callId: string, key: 'muted' | 'onHold', value: boolean) => {
+    if (disposed || ended.has(callId)) return;
+    const current = nativeMedia.get(callId) || {};
+    if (current[key]?.value === value) return;
+    const change = { value };
+    const next = { ...current, [key]: change };
+    // Set before crossing the bridge: CallKit can echo the action immediately.
+    nativeMedia.set(callId, next);
+    const update = key === 'muted' ? native.reportMuted({ callId, muted: value }) : native.reportHeld({ callId, held: value });
+    update.catch((error) => {
+      const latest = nativeMedia.get(callId);
+      if (latest?.[key] === change) delete latest[key];
+      swallow(`report ${key}`)(error);
+    });
+  };
   subscriptions.push(events.addListener('mediaState', (payload) => {
     if (!payload.callId) return;
-    if (typeof payload.muted === 'boolean') native.reportMuted({ callId: payload.callId, muted: payload.muted }).catch(swallow('report mute'));
-    if (typeof payload.onHold === 'boolean') native.reportHeld({ callId: payload.callId, held: payload.onHold }).catch(swallow('report hold'));
+    if (typeof payload.muted === 'boolean') reportMedia(payload.callId, 'muted', payload.muted);
+    if (typeof payload.onHold === 'boolean') reportMedia(payload.callId, 'onHold', payload.onHold);
   }));
+
+  const applyNativeMedia = (callId: string, key: 'muted' | 'onHold', value: boolean) => {
+    if (disposed || ended.has(callId)) return;
+    const previous = nativeMedia.get(callId) || {};
+    if (previous[key]?.value === value) return; // Acknowledgment of our own transaction.
+    const change = { value };
+    const next = { ...previous, [key]: change };
+    nativeMedia.set(callId, next);
+    const update = key === 'muted' ? bridge.mute(callId, value) : bridge.hold(callId, value);
+    update.catch((error) => {
+      const latest = nativeMedia.get(callId);
+      if (latest?.[key] === change) {
+        const old = previous[key];
+        if (old) reportMedia(callId, key, old.value);
+        else delete latest[key];
+      }
+      swallow(`${key} from call UI`)(error);
+    });
+  };
 
   // System call screen -> engine.
   subscriptions.push(ui.addListener('callUiAnswer', (payload) => {
@@ -195,11 +231,11 @@ export function bindCallUi(options: {
   }));
 
   subscriptions.push(ui.addListener('callUiMute', (payload) => {
-    bridge.mute(payload.callId, payload.muted).catch(swallow('mute from call UI'));
+    applyNativeMedia(payload.callId, 'muted', payload.muted);
   }));
 
   subscriptions.push(ui.addListener('callUiHold', (payload) => {
-    bridge.hold(payload.callId, payload.held).catch(swallow('hold from call UI'));
+    applyNativeMedia(payload.callId, 'onHold', payload.held);
   }));
 
   subscriptions.push(ui.addListener('callUiDtmf', (payload) => {
@@ -237,6 +273,7 @@ export function bindCallUi(options: {
       invitations.clear();
       accepted.clear();
       ended.clear();
+      nativeMedia.clear();
       native.stopCallUiEvents?.().catch(swallow('stop native event delivery'));
       subscriptions.forEach((subscription) => subscription.remove());
       subscriptions.length = 0;

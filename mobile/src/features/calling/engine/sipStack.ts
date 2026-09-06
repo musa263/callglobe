@@ -53,6 +53,8 @@ export type SipSessionHandle = {
   accept(): Promise<void>;
   /** Ends the session whatever stage it is at: CANCEL, 486 or BYE as appropriate. */
   terminate(): Promise<void>;
+  /** Close local media immediately, detach listeners, and dispose SIP with a bounded wait. */
+  dispose(): Promise<void>;
   setHold(on: boolean): Promise<void>;
   setMuted(on: boolean): Promise<void>;
   sendDtmf(digit: string): Promise<void>;

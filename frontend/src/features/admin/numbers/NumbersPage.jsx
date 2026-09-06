@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { CircleDot, FileClock, PhoneIncoming, RefreshCw, Search, ShieldCheck, Trash2 } from "lucide-react";
-import { api } from "../../../shared/api";
 import { countryOptions } from '../configuration.js';
 import { Status, PageHeader, Field, Empty } from '../components/ui.jsx';
 
-export function NumbersPage({ data, config, extensions, onRefresh, isSuperadmin }) {
+export function NumbersPage({ data, config, extensions, onRefresh, isSuperadmin, api }) {
   const [form, setForm] = useState({ country: 'US', areaCode: '', locality: '', type: 'local', features: 'voice' });
   const [results, setResults] = useState([]), [routingDrafts, setRoutingDrafts] = useState({}), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const search = async (event) => { event.preventDefault(); setBusy(true); setError(''); try { const query = new URLSearchParams(form); const response = await api(`/api/admin/numbers?mode=search&${query}`); setResults(response.numbers || []); } catch (err) { setError(err.message); } finally { setBusy(false); } };

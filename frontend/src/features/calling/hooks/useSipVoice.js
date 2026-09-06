@@ -7,6 +7,7 @@ import { SessionState } from 'sip.js';
 import { observeSipSession, terminateSipSession } from '../engine/sipCallLifecycle';
 import { monitorSipCall, restartSipMedia } from '../engine/sipCallHealth';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../engine/sipSession';
+import { browserSipDeviceId, revokeBrowserSipCredential } from '../engine/sipDevice';
 
 export function useSipVoice(token, enabled, identity = {}) {
   const sessionRef = useRef(null);
@@ -197,6 +198,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     sessionTeardownsRef.current.forEach((dispose) => dispose());
     sessionTeardownsRef.current.clear();
     const connection = credentialsRef.current;
+    const revoke = revokeBrowserSipCredential(api, connection).catch((failure) => reportWebVoiceError('SIP device revocation', failure));
     credentialsRef.current = null;
     sessionRef.current = null;
     incomingRef.current = null;
@@ -217,6 +219,7 @@ export function useSipVoice(token, enabled, identity = {}) {
       try { await connection?.registerer?.unregister(); } catch (failure) { reportWebVoiceError('SIP unregister', failure); }
       try { await connection?.userAgent?.stop(); } catch (failure) { reportWebVoiceError('SIP stop', failure); }
     }
+    await revoke;
   }, [hangupSession]);
 
   useEffect(() => {
@@ -225,8 +228,8 @@ export function useSipVoice(token, enabled, identity = {}) {
     setReady(false);
     setStatusLabel('Connecting phone…');
     let renewal;
-    api('/api/voice/sip-credentials', { method: 'POST', body: { client: 'web' } }).then(async (credentials) => {
-      if (cancelled) return;
+    browserSipDeviceId().then(deviceId => api('/api/voice/sip-credentials', { method: 'POST', body: { client: 'web', deviceId } })).then(async (credentials) => {
+      if (cancelled) { await revokeBrowserSipCredential(api, credentials); return; }
       if (!credentials.wsUri) throw new Error('VOCIVO_SIP_WSS_URI is not configured.');
       // Replaced at four fifths of its life, and never sooner than five
       // minutes from now however short the answer says it is. Getting a new
@@ -297,9 +300,10 @@ export function useSipVoice(token, enabled, identity = {}) {
       });
       if (cancelled) {
         await connection.stop();
+        await revokeBrowserSipCredential(api, credentials);
         return;
       }
-      credentialsRef.current = connection;
+      credentialsRef.current = { ...connection, deviceId: credentials.deviceId, credentialId: credentials.credentialId };
     }).catch((failure) => {
       if (cancelled) return;
       setError(failure instanceof Error ? failure.message : 'The SIP phone could not register.');

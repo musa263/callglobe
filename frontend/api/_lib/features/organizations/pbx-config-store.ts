@@ -314,7 +314,7 @@ export class PbxConfigConflictError extends Error {
 
 type PbxConfigUpdate = Partial<PbxConfig> | ((current: PbxConfig) => Partial<PbxConfig> | PbxConfig);
 
-export async function savePbxConfig(input: PbxConfigUpdate, options: { expectedUpdatedAt?: string } = {}) {
+export async function savePbxConfig(input: PbxConfigUpdate, options: { expectedUpdatedAt?: string } = {}): Promise<PbxConfig> {
   let next: PbxConfig | null = null;
   await transactObject(pathname, (stored) => {
     const current = stored ? mergeConfig(decrypt(stored)) : defaultPbxConfig();

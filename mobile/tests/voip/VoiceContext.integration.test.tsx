@@ -46,6 +46,10 @@ jest.mock('../../src/shared/api', () => ({
   api: { get: jest.fn(), post: jest.fn(async () => ({ token: 'test-token', expires_in: 3600 })) },
 }));
 
+jest.mock('../../src/features/calling/runtime/routeCancellation', () => ({
+  routeCancellations: { cancel: jest.fn(async () => undefined), flush: jest.fn(async () => undefined) },
+}));
+
 jest.mock('../../src/features/calling/media/ringtone', () => ({
   applyIncomingRingtone: jest.fn(async () => undefined),
   loadIncomingRingtone: jest.fn(async () => 'system'),
@@ -118,6 +122,10 @@ import NetInfo from '@react-native-community/netinfo';
 import { VoiceProvider, VoiceRoot, useVoice } from '../../src/features/calling/VoiceContext';
 import { loadVoiceSession, persistVoiceSession, voipClient } from '../../src/features/calling/runtime/voipClient';
 import { voice } from '../../src/features/calling/engine/voiceClientFacade';
+import { SipEventBus, SipStackBridge } from '../../src/features/calling/engine/sipBridge';
+import { SipVoiceClient } from '../../src/features/calling/engine/sipCallEngine';
+import { routeCancellations } from '../../src/features/calling/runtime/routeCancellation';
+import type { SipSessionHandle, SipSessionState } from '../../src/features/calling/engine/sipStack';
 
 function immediateSubject<T>(initial: T) {
   const listeners = new Set<(value: T) => void>();
@@ -146,6 +154,7 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
     callerNumber: '2000',
     destination: '2000',
     inviteCustomHeaders: [],
+    hangup: jest.fn(async () => undefined),
     callState$,
     isMuted$: immediateSubject(false),
     isHeld$: immediateSubject(false),
@@ -220,6 +229,7 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
   });
   expect(observed.current.activeCall).toBeNull();
   expect(VoicePnBridge.endCall).toHaveBeenCalledWith('mounted-active-call');
+  expect(call.hangup).toHaveBeenCalledTimes(1);
 
   await act(async () => tree!.unmount());
   expect(callState$.subscriberCount).toBe(0);
@@ -228,6 +238,61 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
   // ...and the client lets go of the engine underneath it.
   voice.detach();
   expect((voipClient as any).connectionState$.subscriberCount).toBe(0);
+});
+
+test('mounted SIP provider disposes media and engine calls on fatal transport loss even if BYE fails', async () => {
+  const events = new SipEventBus();
+  let stateListener: ((state: SipSessionState) => void) | undefined;
+  const track = { stopped: false };
+  const handle: SipSessionHandle = {
+    id: 'sip-live-call', incoming: false, remoteDisplayName: 'Colleague', remoteUser: '2001', remoteTarget: 'sip:2001@example.test', headers: [],
+    disposition: () => ({}), peerConnection: () => null,
+    onStateChange: listener => { stateListener = listener; },
+    accept: async () => {}, terminate: async () => { throw new Error('socket unavailable'); },
+    dispose: async () => { track.stopped = true; throw new Error('BYE transport failure'); },
+    setHold: async () => {}, setMuted: async () => {}, sendDtmf: async () => {},
+  };
+  const bridge = new SipStackBridge({ events, createStack: () => ({
+    onRegistrationChange: () => {}, onInvitation: () => {}, start: async () => {}, stop: async () => {},
+    refresh: async () => {}, invite: async () => handle, setSpeaker: async () => {},
+  }) });
+  const client = new SipVoiceClient({ events, bridge });
+  const nativeEnd = jest.fn(async () => {});
+  voice.use('sip', client, { endNativeCall: nativeEnd, toggleSpeaker: async () => false, hideIncomingCallUi: async () => {} });
+  const observed: { current: ReturnType<typeof useVoice> | null } = { current: null };
+  function Probe() { observed.current = useVoice(); return null; }
+  let tree!: TestRenderer.ReactTestRenderer;
+  const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await act(async () => {
+      tree = TestRenderer.create(<VoiceProvider><Probe /></VoiceProvider>);
+    });
+    await act(async () => {
+      await bridge.register({ username: 'employee', password: 'test-only', domain: 'example.test' });
+      events.emit('registration', { state: 'ok' });
+      await client.newCall('2001', 'Colleague', undefined, [{ name: 'X-Vocivo-Route-ID', value: 'test-route-12345678' }]);
+      stateListener?.('Established');
+    });
+    expect(observed.current?.activeCall).not.toBeNull();
+    await act(async () => { events.emit('registration', { state: 'failed' }); });
+    expect(track.stopped).toBe(true);
+    expect(client.currentCalls).toEqual([]);
+    expect(bridge.peerConnection(handle.id)).toBeUndefined();
+    expect(observed.current?.activeCall).toBeNull();
+    expect(observed.current?.duration).toBe(0);
+    expect(nativeEnd).toHaveBeenCalledWith(handle.id);
+    expect(routeCancellations.cancel).toHaveBeenCalledWith('test-route-12345678');
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('dispose call after transport loss'), expect.anything());
+    await act(async () => {
+      stateListener?.('Established');
+      events.emit('registration', { state: 'ok' });
+    });
+    expect(client.currentCalls).toEqual([]);
+    expect(observed.current?.activeCall).toBeNull();
+  } finally {
+    await act(async () => { tree?.unmount(); });
+    voice.detach(); client.dispose(); errors.mockRestore();
+  }
 });
 
 test('killed-state native push bootstraps a fresh secure voice session before HTTP auth completes', async () => {

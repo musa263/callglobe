@@ -1,5 +1,6 @@
 import { VoiceSubject, type VoiceSubscription } from './observable';
 import type { VoiceCall, VoiceClient, VoiceConnectionState, VoiceInviteHeader } from './voiceEngine';
+import { terminationDeadline } from '../state/terminationDeadline';
 
 /**
  * The one voice client the app talks to, whichever engine is underneath.
@@ -141,6 +142,20 @@ export class VoiceClientFacade implements VoiceClient {
   /** Used when the call object has already gone but the OS still shows a call. */
   async endNativeCall(callId: string) {
     await this.platform?.endNativeCall(callId);
+  }
+
+  async emergencyEndCall(callId: string) {
+    // Capture these before awaiting: a new login may install another engine.
+    const call = this.engine?.getCall(callId);
+    const platform = this.platform;
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => call?.emergencyDispose
+        ? call.emergencyDispose()
+        : call ? terminationDeadline(call.hangup()) : undefined),
+      Promise.resolve().then(() => platform?.endNativeCall(callId)),
+    ]);
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Call cleanup was not fully acknowledged.');
   }
 
   async hideIncomingCallUi() {

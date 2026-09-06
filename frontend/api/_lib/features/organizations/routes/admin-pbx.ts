@@ -1,45 +1,58 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createHash } from 'node:crypto';
 import { requireAdmin } from '../../auth/auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, readPbxConfig, savePbxConfig, type PbxConfig } from '../pbx-config-store.js';
 import { listExtensions } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
+import { requestOrganizationId, TenantScopeError, writeTenantScopeError } from '../request-organization.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+function workspaceVersion(config: PbxConfig, organizationId: string, extensionIds: Set<string>) {
+  const { ai: _ai, ...settings } = organizationSettingsFrom(pbxForOrganization(config, organizationId));
+  return createHash('sha256').update(JSON.stringify({
+    settings,
+    organization: config.organizations.find((item) => item.id === organizationId),
+    profiles: Object.entries(config.userProfiles).filter(([id]) => extensionIds.has(id)).sort(([a], [b]) => a.localeCompare(b)),
+  })).digest('hex');
+}
+
+export function createAdminPbxHandler(dependencies = { requireAdmin, readPbxConfig, savePbxConfig, listExtensions, requireFeature }) {
+  const { requireAdmin, readPbxConfig, savePbxConfig, listExtensions, requireFeature } = dependencies;
+  return async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (!['GET', 'PUT'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'PUT']);
   try {
     const access = await requireAdmin(req);
-    let config;
+    const current = await readPbxConfig();
+    const organizationId = requestOrganizationId(req, access.session, current, { allowInitialRead: true });
+    const extensionIds = new Set((await listExtensions(organizationId)).map((item) => item.id));
+    let config = current;
     if (req.method === 'PUT') {
-      const current = await readPbxConfig();
       const body = req.body && typeof req.body === 'object' ? req.body : {};
+      if (body.activeOrganizationId !== undefined && body.activeOrganizationId !== organizationId) {
+        throw new TenantScopeError(409, 'The form belongs to another workspace. Reload it before saving.');
+      }
+      if (body.workspaceVersion !== workspaceVersion(current, organizationId, extensionIds)) throw new PbxConfigConflictError();
       // Number routing, Business Voice and AI have dedicated endpoints. Ignoring
       // those fields here prevents a stale admin screen from undoing newer saves.
       const {
         version: _version,
         updatedAt: _updatedAt,
+        workspaceVersion: _workspaceVersion,
         numberAssignments: _numberAssignments,
         businessVoiceConfigs: _businessVoiceConfigs,
         organizationSettings: _organizationSettings,
         ai: _ai,
         ...editable
       } = body;
-      const requestedOrganizationId = access.superadmin && typeof editable.activeOrganizationId === 'string'
-        ? editable.activeOrganizationId
-        : access.organizationId!;
-      const organizationId = current.organizations.some((item) => item.id === requestedOrganizationId)
-        || Array.isArray(editable.organizations) && editable.organizations.some((item: { id?: string }) => item.id === requestedOrganizationId)
-        ? requestedOrganizationId
-        : current.activeOrganizationId;
-      const currentTenant = pbxForOrganization(current, access.superadmin ? organizationId : access.organizationId!);
+      const currentTenant = pbxForOrganization(current, organizationId);
       if (!access.superadmin) {
         if (editable.outboundRules) await requireFeature(access.session, 'outboundCalling', current);
         if (editable.callHandling?.ringGroups?.length || editable.callHandling?.queues?.length) await requireFeature(access.session, 'queues', current);
         if (editable.callHandling?.ivrs?.length) await requireFeature(access.session, 'ivr', current);
         if (editable.system?.recordingEnabled) await requireFeature(access.session, 'callRecording', current);
       }
-      if (editable.callHandling && (!access.superadmin || organizationId === current.activeOrganizationId)) {
+      if (editable.callHandling) {
         const extensionIds = new Set((await listExtensions(organizationId)).filter((item) => item.status === 'active').map((item) => item.id));
         const groups = [...(editable.callHandling.ringGroups || []), ...(editable.callHandling.queues || [])];
         const unknownMember = groups.flatMap((item: { members?: string[] }) => item.members || []).find((id: string) => !extensionIds.has(id));
@@ -61,8 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ownerEmail: typeof protectedOrganization.ownerEmail === 'string' ? protectedOrganization.ownerEmail : organization.ownerEmail,
           internalCallingEnabled: organization.internalCallingEnabled,
         } : organization;
-        const organizationExtensions = new Set((await listExtensions(organizationId)).map((item) => item.id));
-        const scopedProfiles = Object.fromEntries(Object.entries(editable.userProfiles || {}).filter(([id]) => organizationExtensions.has(id))) as typeof current.userProfiles;
+        const scopedProfiles = Object.fromEntries(Object.entries(editable.userProfiles || {}).filter(([id]) => extensionIds.has(id))) as typeof current.userProfiles;
         const tenant = organizationSettingsFrom({
           ...currentTenant,
           ...editable,
@@ -80,8 +92,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           userProfiles: { ...current.userProfiles, ...scopedProfiles },
         }, { expectedUpdatedAt: current.updatedAt });
       } else {
-        const switchingOrganization = organizationId !== current.activeOrganizationId;
-        const organizations = Array.isArray(editable.organizations) ? editable.organizations : current.organizations;
+        const organizationPatch = Array.isArray(editable.organizations)
+          ? editable.organizations.find((item: { id?: string }) => item.id === organizationId) : undefined;
+        const organizations = current.organizations.map((item) => item.id === organizationId && organizationPatch
+          ? { ...item, ...organizationPatch, id: organizationId } : item);
+        const profiles = Object.fromEntries(Object.entries(editable.userProfiles || {}).filter(([id]) => extensionIds.has(id))) as typeof current.userProfiles;
         const tenant = organizationSettingsFrom({
           ...currentTenant,
           ...editable,
@@ -93,23 +108,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         config = await savePbxConfig({
           organizations,
-          activeOrganizationId: organizationId,
-          platform: editable.platform || current.platform,
-          organizationSettings: switchingOrganization
-            ? current.organizationSettings
-            : { ...current.organizationSettings, [organizationId]: tenant },
-          userProfiles: editable.userProfiles || current.userProfiles,
+          activeOrganizationId: current.activeOrganizationId,
+          platform: current.platform,
+          organizationSettings: { ...current.organizationSettings, [organizationId]: tenant },
+          userProfiles: { ...current.userProfiles, ...profiles },
         }, { expectedUpdatedAt: current.updatedAt });
       }
-    } else {
-      config = await readPbxConfig();
     }
-    const organizationId = access.superadmin ? config.activeOrganizationId : access.organizationId!;
+    const revision = workspaceVersion(config, organizationId, extensionIds);
     const organization = config.organizations.find((item) => item.id === organizationId);
     config = pbxForOrganization(config, organizationId);
     config.company = { ...config.company, name: organization?.name || config.company.name };
     if (!access.superadmin) {
-      const extensionIds = new Set((await listExtensions(organizationId)).map((item) => item.id));
       // organizationSettings holds every tenant's phone system — their
       // greetings, voice menus, ring groups, outbound rules and receptionist
       // instructions — and platform holds which carrier is behind Vocivo,
@@ -126,8 +136,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } as PbxConfig;
     }
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ config });
+    return res.status(200).json({ config: { ...config, workspaceVersion: revision } });
   } catch (error) {
+    if (writeTenantScopeError(res, error)) return;
     if (error instanceof PbxConfigConflictError) return res.status(409).json({ error: error.message });
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
@@ -135,4 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error instanceof Error && /call-handling|Ring group|Queue|Voice menu|phone number points|Office hours|office-hours|holiday|user|forwarding/i.test(error.message)) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: publicError(error) });
   }
+  };
 }
+
+export default createAdminPbxHandler();
