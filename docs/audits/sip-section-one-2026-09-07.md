@@ -51,4 +51,19 @@ actual ingress rules through OPTIONS. It has 29 UDP/TCP/WebSocket packet cases
 plus healthy-listener checks. No production routes or credentials are used.
 
 Local execution exits with an explicit Docker prerequisite error. Runtime
-results are still pending; adding the gate does not establish a passing result.
+validation subsequently passed in GitHub Actions on commit `ae42f68`:
+[run 34060198852](https://github.com/musa263/vocivo/actions/runs/34060198852).
+The pinned 5.8.4 image parsed the complete configuration and passed all 29
+packet cases, including valid requests and malformed CSeq on WebSocket.
+`bash verify.sh` also passed on the combined application tree.
+
+[Deployment 34060343177](https://github.com/musa263/vocivo/actions/runs/34060343177)
+successfully shipped `ae42f68` through `sync-config`. The droplet's image parsed
+the staged configuration before replacement, and Kamailio restarted Up.
+The prior configuration was retained at
+`/opt/vocivo/sip-backups/20260906211234`. These results do not close the
+remaining authentication, timer, native-device or end-to-end media gates above.
+
+[Post-deployment status 34060487093](https://github.com/musa263/vocivo/actions/runs/34060487093)
+passed: FreeSWITCH profiles were RUNNING, the Telnyx gateway reported UP,
+required dialplan modules were present, and rejected call-record count was zero.
