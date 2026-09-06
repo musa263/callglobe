@@ -44,6 +44,7 @@ function config(overrides: Record<string, unknown> = {}) {
 
 function inputFor(base: PbxConfig, extensions: ExtensionUser[] = [extension()]) {
   return {
+    now: new Date('2026-09-07T09:00:00Z'),
     number: '+1 844 716 1777',
     config: base,
     tenantFor: () => base,

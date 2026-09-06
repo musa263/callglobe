@@ -47,6 +47,7 @@ function closedAllHours(config: PbxConfig) {
 }
 
 const staff = [extension()];
+const testTime = new Date('2026-09-07T09:00:00Z');
 
 function assigned(config: PbxConfig, destinationType = 'main') {
   config.numberAssignments['+15551212'] = { organizationId: 'primary', destinationType } as never;
@@ -55,7 +56,7 @@ function assigned(config: PbxConfig, destinationType = 'main') {
 
 test('keeps inbound DID lookup on Call Control until the SIP inbound flag is set', async () => {
   delete process.env.VOCIVO_SIP_INBOUND;
-  const lookup = await lookupSipInbound('+15551212', assigned(defaultPbxConfig()), new Date(), directory());
+  const lookup = await lookupSipInbound('+15551212', assigned(defaultPbxConfig()), testTime, directory());
   assert.equal(lookup.enabled, false);
   assert.equal(lookup.reason, 'call_control');
   assert.equal(lookup.bridge, '');
@@ -65,7 +66,7 @@ test('keeps inbound DID lookup on Call Control until the SIP inbound flag is set
 });
 
 test('a number nobody owns is refused rather than routed somewhere', async () => {
-  const lookup = await withSipInbound(() => lookupSipInbound('+15559999', defaultPbxConfig(), new Date(), directory()));
+  const lookup = await withSipInbound(() => lookupSipInbound('+15559999', defaultPbxConfig(), testTime, directory()));
   assert.equal(lookup.enabled, false);
   assert.equal(lookup.reason, 'unassigned');
 });
@@ -73,7 +74,7 @@ test('a number nobody owns is refused rather than routed somewhere', async () =>
 test('a closed business is told so rather than ringing somebody at midnight', async () => {
   const config = closedAllHours(assigned(defaultPbxConfig()));
   config.company.name = 'Vocivo';
-  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, new Date(), directory(staff)));
+  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, testTime, directory(staff)));
   assert.equal(lookup.action, 'closed');
   assert.equal(lookup.enabled, true);
   assert.match(lookup.prompt ?? '', /Vocivo/);
@@ -87,21 +88,21 @@ test('the receptionist answers even when the office is closed', async () => {
   // people through to nobody.)
   const config = closedAllHours(assigned(defaultPbxConfig()));
   config.ai.enabled = true;
-  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, new Date(), directory(staff)));
+  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, testTime, directory(staff)));
   assert.equal(lookup.action, 'ai');
 });
 
 test("the receptionist answers when the tenant has one switched on", async () => {
   const config = openAllHours(assigned(defaultPbxConfig()));
   config.ai.enabled = true;
-  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, new Date(), directory(staff)));
+  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, testTime, directory(staff)));
   assert.equal(lookup.action, 'ai');
   assert.equal(lookup.enabled, true);
 });
 
 test('a number with nobody to ring and no receptionist is refused', async () => {
   const config = openAllHours(assigned(defaultPbxConfig()));
-  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, new Date(), directory()));
+  const lookup = await withSipInbound(() => lookupSipInbound('+15551212', config, testTime, directory()));
   assert.equal(lookup.enabled, false);
   assert.equal(lookup.reason, 'no_contacts');
   assert.equal(lookup.action, undefined);
