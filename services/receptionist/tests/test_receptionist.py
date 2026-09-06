@@ -406,6 +406,16 @@ class VoiceSynthesis(unittest.IsolatedAsyncioTestCase):
 class SentenceSplitting(unittest.TestCase):
     """Answers are spoken a sentence at a time so the first plays while the rest render."""
 
+    def test_preserves_titles_and_sentence_intonation(self):
+        sentence = "I can connect you to Dr. Ahmed, who will help you with your booking today."
+        self.assertEqual(split_sentences(sentence), [sentence])
+        from app.brain import first_complete_sentence
+        self.assertEqual(first_complete_sentence(sentence + " Would"), sentence)
+        self.assertEqual(first_complete_sentence(sentence[:-1]), "")
+
+    def test_conversation_has_no_background_music_by_default(self):
+        self.assertEqual(Settings().speech_bed, "")
+
     def test_sentences_are_separated_and_tiny_ones_joined(self):
         self.assertEqual(
             split_sentences("We close at five. Thanks for calling! Anything else?"),

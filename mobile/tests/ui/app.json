@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "Vocivo UI Tests",
+    "slug": "vocivo-ui-tests",
+    "newArchEnabled": false,
+    "scheme": "vocivo",
+    "ios": { "bundleIdentifier": "app.vocivo.mobile" }
+  }
+}

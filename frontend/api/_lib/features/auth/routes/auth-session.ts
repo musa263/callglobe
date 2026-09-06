@@ -25,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         email: session.email,
         full_name: isOwner ? process.env.APP_ADMIN_NAME || VOCIVO_SUPERADMIN_NAME : session.name || `Extension ${session.extension || ''}`,
         currency: 'USD',
-        extension: session.extension,
+        extension: organization?.accountType === 'business' ? session.extension : undefined,
         organization_id: session.organizationId,
         role: session.role,
         account_type: isOwner ? 'platform' : organization?.accountType || session.accountType || 'business',

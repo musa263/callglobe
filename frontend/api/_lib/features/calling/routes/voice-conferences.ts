@@ -52,10 +52,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (participants.length < 2) return res.status(400).json({ error: 'Add at least two valid participants.' });
     const config = await readPbxConfig();
     const organizationId = sessionOrganizationId(session, config);
+    const organization = config.organizations.find((organization) => organization.id === organizationId && organization.status === 'active');
+    if (!organization) return res.status(403).json({ error: 'An active calling account is required to host a conference.' });
+    if (participants.some((participant) => participant.type === 'extension')) await requireFeature(session, 'internalCalling', config);
+    if (participants.some((participant) => participant.type === 'external')) await requireFeature(session, 'outboundCalling', config);
     const profile = session.extensionId ? config.userProfiles[session.extensionId] : undefined;
     const extension = session.extensionId ? await getExtension(session.extensionId) : undefined;
-    if (!extension || extension.organizationId !== organizationId || extension.status !== 'active' || !extension.sipUsername) return res.status(403).json({ error: 'An active company extension is required to host a conference.' });
-    const directory = await listExtensions(organizationId);
+    if (!extension || extension.organizationId !== organizationId || extension.status !== 'active' || !extension.sipUsername) return res.status(403).json({ error: 'An active calling account is required to host a conference.' });
+    const directory = participants.some((participant) => participant.type === 'extension') ? await listExtensions(organizationId) : [];
     const resolved = participants.map((participant) => {
       if (participant.type === 'external') return { destination: participant.number, displayName: participant.number, internal: false };
       const colleague = directory.find((candidate) => candidate.id === participant.extensionId && candidate.status === 'active');
@@ -65,7 +69,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const uniqueDestinations = new Set(resolved.map((participant) => participant.destination.toLowerCase()));
     if (uniqueDestinations.size !== resolved.length) return res.status(400).json({ error: 'Each conference participant can only be added once.' });
     const externalParticipants = resolved.filter((participant) => !participant.internal);
-    await requireFeature(session, externalParticipants.length ? 'outboundCalling' : 'internalCalling', config);
     await assertTelnyxVoiceReady();
     if (externalParticipants.length) {
       const wallet = await readTenantWallet(organizationId);

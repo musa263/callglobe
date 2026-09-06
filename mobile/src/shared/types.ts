@@ -9,6 +9,7 @@ export type ContactPhone = {
   extension?: string;
   sipUsername?: string;
   photoUrl?: string;
+  countryCode?: string;
 };
 
 export type NavigationTarget = {
@@ -16,6 +17,7 @@ export type NavigationTarget = {
   name?: string;
   internal?: boolean;
   photoUrl?: string;
+  countryCode?: string;
   nonce: number;
 };
 

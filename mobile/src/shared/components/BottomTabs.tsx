@@ -1,13 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Clock3, ContactRound, House, MessageSquareText, Settings2, type LucideIcon } from 'lucide-react-native';
+import { Clock3, ContactRound, Grid3X3, MessageSquareText, Settings2, type LucideIcon } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import type { AppTab } from '../types';
 import { colors } from '../theme';
 
 const tabs: Array<{ id: AppTab; label: string; icon: LucideIcon }> = [
-  { id: 'dial', label: 'Home', icon: House },
+  { id: 'dial', label: 'Dial Pad', icon: Grid3X3 },
   { id: 'contacts', label: 'Contacts', icon: ContactRound },
   { id: 'recents', label: 'Recents', icon: Clock3 },
   { id: 'messages', label: 'Messages', icon: MessageSquareText },

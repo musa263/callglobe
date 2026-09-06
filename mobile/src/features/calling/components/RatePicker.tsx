@@ -5,7 +5,7 @@ import type { CallRate } from '../../../shared/types';
 import { flagFromCode } from '../../billing/data/fallbackRates';
 import { colors } from '../../../shared/theme';
 
-export function RatePicker({ visible, rates, selected, onSelect, onClose }: { visible: boolean; rates: CallRate[]; selected: CallRate; onSelect: (rate: CallRate) => void; onClose: () => void }) {
+export function RatePicker({ visible, rates, selected, onSelect, onClose }: { visible: boolean; rates: CallRate[]; selected?: CallRate; onSelect: (rate: CallRate) => void; onClose: () => void }) {
   const [query, setQuery] = useState('');
   const filtered = useMemo(() => {
     const value = query.trim().toLowerCase();
@@ -34,7 +34,7 @@ export function RatePicker({ visible, rates, selected, onSelect, onClose }: { vi
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
-            const active = item.id === selected.id;
+            const active = item.id === selected?.id;
             return (
               <Pressable onPress={() => { onSelect(item); onClose(); }} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
                 <Text style={styles.flag}>{flagFromCode(item.country_code)}</Text>

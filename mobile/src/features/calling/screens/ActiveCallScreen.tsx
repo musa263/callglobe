@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ArrowLeftRight, Check, ChevronDown, Delete, Grid3X3, Merge, Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, UserMinus, UserPlus, Volume2, VolumeX, X } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useLocales } from 'expo-localization';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Keypad } from '../components/Keypad';
-import { flagFromCode } from '../../billing/data/fallbackRates';
 import { useVoice } from '../VoiceContext';
 import { useAuth } from '../../auth/AuthContext';
 import { RatePicker } from '../components/RatePicker';
@@ -12,42 +11,48 @@ import type { CallerNumber, CallRate } from '../../../shared/types';
 import { colors, shadow } from '../../../shared/theme';
 import { api } from '../../../shared/api';
 import { findPhoneContact } from '../../contacts/contactDirectory';
+import { cleanDialInput, defaultDialRegion, dialRegion, resolveDialNumber } from '../state/dialNumber';
 
 const formatTime = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
 
 function Control({ label, active, disabled, onPress, children }: { label: string; active?: boolean; disabled?: boolean; onPress: () => void; children: React.ReactNode }) {
   return (
-    <Pressable disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.controlWrap, disabled && styles.controlDisabled, pressed && styles.pressed]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: Boolean(disabled), selected: Boolean(active) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.controlWrap, disabled && styles.controlDisabled, pressed && styles.pressed]}>
       <View style={[styles.control, active && styles.controlActive]}>{children}</View>
       <Text style={[styles.controlLabel, active && styles.controlLabelActive]}>{label}</Text>
     </Pressable>
   );
 }
 
-const sanitize = (value: string) => value.replace(/\D/g, '').slice(0, 18);
-
 function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: boolean; rates: CallRate[]; caller?: CallerNumber; onClose: () => void; onStart: (number: string, rate: CallRate, caller?: CallerNumber) => Promise<void> }) {
-  const [selected, setSelected] = useState(() => rates.find((rate) => rate.country_code === 'SA') ?? rates[0]!);
+  const locales = useLocales();
+  const [regionOverride, setRegionOverride] = useState<string>();
+  const region = dialRegion(regionOverride) || defaultDialRegion(locales[0]?.regionCode);
   const [number, setNumber] = useState('');
+  const destination = resolveDialNumber(number, region, rates);
+  const selected = rates.find((rate) => rate.country_code === region);
   const [showRates, setShowRates] = useState(false);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState('');
 
   const start = async () => {
-    if (number.length < 4 || busy) return;
+    if (!destination.valid || busyRef.current) return;
     if (!caller?.phone_number) {
       setError('Choose a caller ID before adding an external caller.');
       return;
     }
+    busyRef.current = true;
     setBusy(true);
     setError('');
     try {
-      await onStart(`${selected.dial_code}${number}`, selected, caller);
+      await onStart(destination.number, destination.rate, caller);
       setNumber('');
       onClose();
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : 'The second call could not be started.');
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -56,13 +61,13 @@ function AddCallModal({ visible, rates, caller, onClose, onStart }: { visible: b
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={styles.addModal}>
         <View style={styles.addHeader}><View><Text style={styles.addEyebrow}>MULTI-CALL</Text><Text style={styles.addTitle}>Add another caller</Text></View><Pressable accessibilityLabel="Close add call" onPress={onClose} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View>
-        <Pressable onPress={() => setShowRates(true)} style={styles.addCountry}><Text style={styles.addFlag}>{flagFromCode(selected.country_code)}</Text><Text style={styles.addCountryName}>{selected.country_name}</Text><ChevronDown size={18} color={colors.textMuted} /></Pressable>
-        <View style={styles.addNumber}><Text style={styles.addCode}>{selected.dial_code}</Text><Text numberOfLines={1} adjustsFontSizeToFit style={[styles.addDigits, !number && styles.addPlaceholder]}>{number.replace(/(.{3})/g, '$1 ').trim() || 'Phone number'}</Text><Pressable onPress={() => setNumber((value) => value.slice(0, -1))} onLongPress={() => setNumber('')} style={styles.addDelete}><Delete size={21} color={colors.textMuted} /></Pressable></View>
-        <Text style={styles.addRate}>{selected.rate_per_min ? `$${selected.rate_per_min.toFixed(3)} per minute estimated` : 'Live carrier rate applies'}</Text>
+        <Pressable accessibilityLabel="Choose default country for local numbers" onPress={() => setShowRates(true)} style={styles.addCountry}><Text style={styles.addCountryName}>{selected?.country_name || 'Choose country'}</Text><ChevronDown size={18} color={colors.textMuted} /></Pressable>
+        <View style={styles.addNumber}><TextInput accessibilityLabel="Second caller phone number" value={number} onChangeText={(value) => setNumber(cleanDialInput(value))} keyboardType="phone-pad" showSoftInputOnFocus={false} placeholder="Phone number" placeholderTextColor={colors.textFaint} style={styles.addDigits} /><Pressable accessibilityLabel="Delete last digit" onPress={() => setNumber((value) => value.slice(0, -1))} onLongPress={() => setNumber('')} style={styles.addDelete}><Delete size={21} color={colors.textMuted} /></Pressable></View>
+        <Text style={styles.addRate}>{destination.valid ? destination.formatted : ' '}</Text>
         {!!error && <Text style={styles.addError}>{error}</Text>}
-        <View style={styles.addKeypad}><Keypad onPress={(digit) => setNumber((value) => sanitize(value + digit))} /></View>
-        <Pressable disabled={number.length < 4 || busy} onPress={start} style={[styles.addButton, (number.length < 4 || busy) && styles.addButtonDisabled]}>{busy ? <Text style={styles.addButtonText}>Calling...</Text> : <><Phone size={21} color={colors.ink} fill={colors.ink} /><Text style={styles.addButtonText}>Hold and call</Text></>}</Pressable>
-        <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={setSelected} onClose={() => setShowRates(false)} />
+        <View style={styles.addKeypad}><Keypad plain onPress={(digit) => setNumber((value) => cleanDialInput(value + digit))} onPlus={() => setNumber((value) => `+${value.replace(/^\+/, '')}`)} /></View>
+        <Pressable disabled={!destination.valid || busy} onPress={start} style={[styles.addButton, (!destination.valid || busy) && styles.addButtonDisabled]}>{busy ? <Text style={styles.addButtonText}>Calling...</Text> : <><Phone size={21} color={colors.ink} fill={colors.ink} /><Text style={styles.addButtonText}>Hold and call</Text></>}</Pressable>
+        <RatePicker visible={showRates} rates={rates} selected={selected} onSelect={(rate) => setRegionOverride(rate.country_code)} onClose={() => setShowRates(false)} />
       </View>
     </Modal>
   );
@@ -112,7 +117,8 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           : 'Calling';
   const extensionNumber = activeCall.number.replace(/\D/g, '');
   const visibleNumber = activeCall.destinationCountry === 'Internal' ? (extensionNumber ? `Extension ${extensionNumber}` : 'Internal call') : activeCall.number;
-  const transferEnabled = Boolean(profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
+  const businessAccount = profile?.account_type === 'business';
+  const transferEnabled = Boolean(businessAccount && profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
   const selectedCaller = callerNumbers.find((number) => number.phone_number === activeCall.callerId)
     ?? callerNumbers.find((number) => number.source === 'owned' && number.status === 'active')
     ?? callerNumbers[0];
@@ -164,8 +170,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   };
 
   return (
-    <View style={styles.page}>
-      <LinearGradient colors={['#081525', '#102842', '#07111F']} style={StyleSheet.absoluteFill} />
+    <ScrollView style={styles.page} contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
       <View style={[styles.top, { paddingTop: Math.max(insets.top, 18) }]}>
         <Pressable accessibilityLabel="Minimize call" onPress={onMinimize} style={styles.minimize}><ChevronDown size={24} color={colors.textMuted} /></Pressable>
         <View style={styles.secure}><View style={styles.secureDot} /><Text style={styles.secureText}>VOCIVO VOICE</Text></View>
@@ -175,9 +180,9 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
       <View style={styles.identity}>
         {waitingCall && <View style={styles.waiting}><View style={styles.waitingCopy}><Text style={styles.waitingLabel}>INCOMING CALL WAITING</Text><Text numberOfLines={1} style={styles.waitingNumber}>{waitingCall.displayName || waitingCall.number}</Text></View><Pressable accessibilityLabel="Decline waiting call" onPress={rejectWaitingCall} style={styles.decline}><PhoneOff size={18} color={colors.white} /></Pressable><Pressable accessibilityLabel="Answer waiting call" onPress={answerWaitingCall} style={styles.answer}><Phone size={18} color={colors.ink} fill={colors.ink} /></Pressable></View>}
         <View style={styles.avatarOuter}>
-          {remotePhoto ? <Image source={{ uri: remotePhoto }} style={styles.avatarPhoto} /> : <View style={styles.avatar}><Text style={styles.avatarFlag}>{flagFromCode(activeCall.countryCode ?? 'US')}</Text></View>}
+          {remotePhoto ? <Image source={{ uri: remotePhoto }} style={styles.avatarPhoto} /> : <View style={styles.avatar}><Text style={styles.avatarInitials}>{activeCall.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '#'}</Text></View>}
         </View>
-        <Text style={styles.name}>{activeCall.displayName}</Text>
+        <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75} style={styles.name}>{activeCall.displayName}</Text>
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={styles.number}>{visibleNumber}</Text>
         <Text style={[styles.status, activeCall.phase === 'active' && styles.statusLive]}>{status}</Text>
         {activeCall.phase === 'active' && activeCall.connectedAt ? <Text style={styles.timer}>{formatTime(duration)}</Text> : null}
@@ -199,7 +204,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
           <Control label={activeCall.onHold ? 'Resume' : 'Hold'} active={activeCall.onHold} disabled={Boolean(conference)} onPress={toggleHold}>{activeCall.onHold ? <Play size={24} color={colors.ink} fill={colors.ink} /> : <Pause size={24} color={conference ? colors.textFaint : colors.text} />}</Control>
           <Control label={swapBusy ? 'Swapping' : 'Swap'} active={!!heldCall && activeCall.phase === 'active'} disabled={!heldCall || activeCall.phase !== 'active' || Boolean(conference) || swapBusy} onPress={swap}>{swapBusy ? <ActivityIndicator size="small" color={colors.text} /> : <ArrowLeftRight size={24} color={heldCall && activeCall.phase === 'active' ? colors.ink : colors.textFaint} />}</Control>
           <Control label={mergeBusy ? 'Merging' : conference ? 'Merged' : 'Merge'} active={Boolean(conference)} disabled={!heldCall?.routeId || !activeCall.routeId || activeCall.phase !== 'active' || mergeBusy || Boolean(conference)} onPress={merge}>{mergeBusy ? <ActivityIndicator size="small" color={colors.text} /> : <Merge size={24} color={conference ? colors.ink : heldCall?.routeId && activeCall.routeId && activeCall.phase === 'active' ? colors.text : colors.textFaint} />}</Control>
-          <Control label="Transfer" disabled={!transferEnabled} onPress={openTransfer}><PhoneForwarded size={24} color={transferEnabled ? colors.text : colors.textFaint} /></Control>
+          {businessAccount && <Control label="Transfer" disabled={!transferEnabled} onPress={openTransfer}><PhoneForwarded size={24} color={transferEnabled ? colors.text : colors.textFaint} /></Control>}
         </View>
         <Pressable accessibilityLabel="End call" disabled={endingCall} onPress={hangup} style={({ pressed }) => [styles.end, pressed && styles.endPressed]}>{endingCall ? <ActivityIndicator color={colors.white} /> : <PhoneOff size={30} color={colors.white} strokeWidth={2.4} />}</Pressable>
       </View>}
@@ -218,29 +223,30 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
       <Modal visible={showParticipants} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowParticipants(false)}>
         <View style={styles.transferPage}><View style={styles.addHeader}><View><Text style={styles.addEyebrow}>LIVE CONFERENCE</Text><Text style={styles.addTitle}>Participants</Text></View><Pressable accessibilityLabel="Close participants" onPress={() => setShowParticipants(false)} style={styles.addClose}><X size={21} color={colors.text} /></Pressable></View><Text style={styles.transferHelp}>The primary caller stays connected. Added participants can be removed individually.</Text><ScrollView style={styles.transferList}>{conference?.participants.map((participant, index) => <View key={participant.id || `${participant.number}-${index}`} style={styles.transferRow}>{participant.photoUrl ? <Image source={{ uri: participant.photoUrl }} style={styles.transferPhoto} /> : <View style={styles.transferAvatar}><Text style={styles.transferInitial}>{(participant.displayName || participant.number).charAt(0).toUpperCase()}</Text></View>}<View style={styles.transferCopy}><Text style={styles.transferName}>{participant.displayName || participant.number}</Text><Text style={styles.transferMeta}>{index === 0 ? 'Primary caller' : participant.destinationCountry === 'Internal' ? `Extension ${participant.number}` : participant.number}</Text></View>{index === 0 ? <Text style={styles.primaryParticipant}>PRIMARY</Text> : <Pressable accessibilityLabel={`Remove ${participant.displayName || participant.number}`} disabled={!!removingParticipant} onPress={() => participant.id && removeParticipant(participant.id)} style={styles.removeParticipant}>{removingParticipant === participant.id ? <ActivityIndicator size="small" color={colors.coral} /> : <UserMinus size={19} color={colors.coral} />}</Pressable>}</View>)}</ScrollView></View>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: colors.ink },
-  top: { height: 84, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pageContent: { flexGrow: 1, width: '100%', maxWidth: 600, alignSelf: 'center' },
+  top: { minHeight: 84, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   minimize: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   secure: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   secureDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.mint },
   secureText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
-  identity: { flex: 1, alignItems: 'center', paddingTop: 18 },
+  identity: { flex: 1, alignItems: 'center', paddingTop: 18, paddingBottom: 24, paddingHorizontal: 20 },
   waiting: { minHeight: 58, width: '90%', paddingHorizontal: 10, marginBottom: 14, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, backgroundColor: colors.panelRaised, borderWidth: 1, borderColor: colors.amber },
   waitingCopy: { flex: 1, minWidth: 0 },
   waitingLabel: { color: colors.amber, fontSize: 9, fontWeight: '900' },
   waitingNumber: { color: colors.text, fontSize: 13, fontWeight: '800', marginTop: 4 },
   decline: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.coral, alignItems: 'center', justifyContent: 'center' },
   answer: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' },
-  avatarOuter: { width: 116, height: 116, borderRadius: 58, borderWidth: 1, borderColor: '#326484', alignItems: 'center', justifyContent: 'center', marginBottom: 25 },
+  avatarOuter: { width: 108, height: 108, borderRadius: 54, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
   avatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#12334A', alignItems: 'center', justifyContent: 'center' },
   avatarPhoto: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#12334A' },
-  avatarFlag: { fontSize: 46 },
-  name: { color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: 0 },
+  avatarInitials: { color: colors.blue, fontSize: 30, fontWeight: '600' },
+  name: { width: '100%', textAlign: 'center', color: colors.text, fontSize: 28, fontWeight: '700', letterSpacing: 0 },
   number: { color: colors.textMuted, fontSize: 15, marginTop: 7, fontVariant: ['tabular-nums'] },
   status: { color: colors.amber, fontSize: 12, fontWeight: '800', marginTop: 22, textTransform: 'uppercase' },
   statusLive: { color: colors.mint },

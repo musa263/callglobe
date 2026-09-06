@@ -179,7 +179,15 @@ export async function requireSession(req: VercelRequest) {
   if (tenantSession) {
     if (typeof payload.organizationId !== 'string' || !payload.organizationId.trim()) throw new Error('Unauthorized');
     const config = await readPbxConfig();
-    if (!config.organizations.some((organization) => organization.id === payload.organizationId && organization.status === 'active')) throw new Error('Unauthorized');
+    const organization = config.organizations.find((organization) => organization.id === payload.organizationId && organization.status === 'active');
+    if (!organization) throw new Error('Unauthorized');
+    // Membership can change during a token's lifetime. A previous company role
+    // must never survive a switch to an individual organization.
+    payload.accountType = organization.accountType;
+    if (organization.accountType === 'individual') {
+      if (payload.sub.startsWith('vocivo-account:')) throw new Error('Unauthorized');
+      payload.role = 'individual';
+    }
   }
   if (payload.sub.startsWith('vocivo-extension:')) {
     if (typeof payload.extensionId !== 'string' || typeof payload.extension !== 'string' || typeof payload.iat !== 'number') throw new Error('Unauthorized');

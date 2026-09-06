@@ -400,6 +400,13 @@ export async function initializeSaasRows(seed: SaasRows) {
   });
 }
 
+export async function readSaasPlanRows(): Promise<SaasPlanRow[]> {
+  return withDatabaseRetry(async (sql) => {
+    await ensureSaasTables(sql);
+    return selectSaasPlans(sql);
+  });
+}
+
 export async function readPlatformSaasRows(): Promise<SaasRows> {
   return withDatabaseRetry(async (sql) => {
     await ensureSaasTables(sql);

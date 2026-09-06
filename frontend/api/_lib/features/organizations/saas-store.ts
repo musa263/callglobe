@@ -8,6 +8,7 @@ import {
   findSaasAdminByEmailForAuthentication,
   initializeSaasRows,
   readPlatformSaasRows,
+  readSaasPlanRows,
   readTenantSaasRows,
   upsertSaasPlan,
   upsertTenantSaasAdmin,
@@ -40,6 +41,8 @@ export const featureCatalog = [
 ] as const;
 
 export type FeatureKey = typeof featureCatalog[number]['id'];
+// Account classification is a boundary, not a plan override or client preference.
+export const businessOnlyFeatures: readonly FeatureKey[] = ['internalCalling', 'sipTrunks', 'aiReceptionist', 'callRecording', 'queues', 'ivr', 'analytics', 'developerApi', 'customBranding'];
 export type FeatureSet = Record<FeatureKey, boolean>;
 export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'suspended' | 'canceled';
 
@@ -318,6 +321,11 @@ export async function readPlatformSaasState(config?: PbxConfig) {
   return stateFromRows(await readPlatformSaasRows(), config);
 }
 
+export async function readSignupPlans() {
+  await ensureSaasRows();
+  return stateFromRows({ plans: await readSaasPlanRows(), tenants: [], admins: [] }).plans;
+}
+
 export async function readTenantSaasState(organizationId: string, config?: PbxConfig) {
   if (!organizationId || (config && !config.organizations.some((organization) => organization.id === organizationId))) {
     throw new Error('Tenant organization was not found.');
@@ -351,7 +359,7 @@ export function effectiveEntitlements(state: SaasState, organizationId: string, 
   if (plan.id !== subscription.planId) console.warn(`[saas-store] Unknown plan "${subscription.planId}" for organization "${organizationId}"; falling back to plan "${plan.id}".`);
   const serviceActive = ['active', 'trialing'].includes(subscription.status);
   const features = Object.fromEntries(featureKeys.map((feature) => [feature, serviceActive && Boolean(state.featureOverrides[organizationId]?.[feature] ?? plan.features[feature])])) as FeatureSet;
-  if (accountType === 'individual') features.internalCalling = false;
+  if (accountType === 'individual') for (const feature of businessOnlyFeatures) features[feature] = false;
   return { subscription, plan, features, serviceActive };
 }
 

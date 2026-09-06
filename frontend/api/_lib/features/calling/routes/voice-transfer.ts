@@ -15,6 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = await requireSession(req);
     if (!session.extensionId) return res.status(403).json({ error: 'Transfers are available to organization extensions.' });
     const config = await readPbxConfig();
+    if (!config.organizations.some((organization) => organization.id === session.organizationId && organization.accountType === 'business' && organization.status === 'active' && organization.internalCallingEnabled)) return res.status(403).json({ error: 'Company extension calling is required to transfer a call.' });
     if (config.userProfiles[session.extensionId]?.permissions.transfer === false) return res.status(403).json({ error: 'Call transfer is disabled for this extension.' });
     const targetId = typeof req.body?.targetExtensionId === 'string' ? req.body.targetExtensionId : '';
     if (!targetId || targetId === session.extensionId) return res.status(400).json({ error: 'Choose another colleague.' });

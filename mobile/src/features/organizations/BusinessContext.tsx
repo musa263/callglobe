@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../shared/api';
 import { useAuth } from '../auth/AuthContext';
@@ -20,13 +20,10 @@ export type BusinessProfile = {
 type BusinessContextValue = {
   profile: BusinessProfile;
   loading: boolean;
-  callMode: 'personal' | 'business';
-  setCallMode: (mode: 'personal' | 'business') => void;
   saveProfile: (profile: BusinessProfile) => Promise<void>;
 };
 
-const storageKey = (userId: string) => `vocivo.business-profile.v2.${userId}`;
-const callModeStorageKey = (userId: string) => `vocivo.call-mode.v1.${userId}`;
+const storageKey = (scope: string) => `vocivo.business-profile.v3.${scope}`;
 const defaultProfile = (companyName = 'Your company'): BusinessProfile => ({
   enabled: false,
   voicemailEnabled: false,
@@ -45,37 +42,42 @@ const BusinessContext = createContext<BusinessContextValue | null>(null);
 export function BusinessProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, profile: authProfile } = useAuth();
   const [profile, setProfile] = useState(() => defaultProfile());
-  const [callModeState, setCallModeState] = useState<'personal' | 'business'>('personal');
   const [loading, setLoading] = useState(true);
+  const businessAccount = isAuthenticated && authProfile?.account_type === 'business';
+  const scope = businessAccount && authProfile.organization_id && authProfile.id ? `${authProfile.organization_id}:${authProfile.id}` : '';
+  const [loadedScope, setLoadedScope] = useState('');
+  const activeScope = useRef(scope);
+  activeScope.current = scope;
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       const defaults = defaultProfile(authProfile?.organization_name);
       setProfile(defaults);
-      setCallModeState(authProfile?.account_type === 'business' ? 'business' : 'personal');
+      setLoadedScope(scope);
+      setLoading(Boolean(scope));
+      if (!scope) return;
       try {
-        const [cached, cachedCallMode] = authProfile?.id ? await Promise.all([
-          AsyncStorage.getItem(storageKey(authProfile.id)),
-          AsyncStorage.getItem(callModeStorageKey(authProfile.id)),
-        ]) : [null, null];
+        const cached = await AsyncStorage.getItem(storageKey(scope));
         if (cached && active) {
           const parsed = JSON.parse(cached) as Partial<BusinessProfile> & { departmentOne?: string; departmentTwo?: string };
           setProfile({ ...defaults, ...parsed, departments: parsed.departments?.length ? parsed.departments : [parsed.departmentOne || 'Sales', parsed.departmentTwo || 'Operations'] });
         }
-        if (active && (cachedCallMode === 'personal' || cachedCallMode === 'business')) setCallModeState(cachedCallMode);
-        if (isAuthenticated) {
+        if (active) {
           const result = await api.get<{ config: Omit<BusinessProfile, 'aiTone'> }>('/api/voice/settings');
           if (active) setProfile((current) => ({ ...current, ...result.config }));
         }
-      } catch { /* Local profile remains available offline. */ }
+      } catch { console.warn('[Vocivo Business] Company settings could not be refreshed.'); }
       finally { if (active) setLoading(false); }
     };
     load();
     return () => { active = false; };
-  }, [authProfile?.id, isAuthenticated]);
+  }, [scope, authProfile?.organization_name]);
 
   const saveProfile = useCallback(async (next: BusinessProfile) => {
+    if (!scope || !['company_owner', 'company_admin', 'admin', 'owner', 'superadmin'].includes(authProfile?.role || '')) {
+      throw new Error('Company administrator access is required.');
+    }
     const normalized = {
       ...next,
       companyName: next.companyName.trim().slice(0, 80),
@@ -89,16 +91,11 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       const result = await api.put<{ config: Omit<BusinessProfile, 'aiTone'> }>('/api/voice/settings', normalized);
       Object.assign(normalized, result.config);
     }
-    setProfile(normalized);
-    if (authProfile?.id) await AsyncStorage.setItem(storageKey(authProfile.id), JSON.stringify(normalized));
-  }, [authProfile?.id, isAuthenticated]);
+    if (activeScope.current === scope) setProfile(normalized);
+    await AsyncStorage.setItem(storageKey(scope), JSON.stringify(normalized));
+  }, [scope, authProfile?.role, isAuthenticated]);
 
-  const setCallMode = useCallback((mode: 'personal' | 'business') => {
-    setCallModeState(mode);
-    if (authProfile?.id) AsyncStorage.setItem(callModeStorageKey(authProfile.id), mode).catch(() => undefined);
-  }, [authProfile?.id]);
-
-  const value = useMemo(() => ({ profile, loading, callMode: callModeState, setCallMode, saveProfile }), [callModeState, loading, profile, saveProfile, setCallMode]);
+  const value = useMemo(() => ({ profile: scope && loadedScope === scope ? profile : defaultProfile(authProfile?.organization_name), loading: Boolean(scope) && (loadedScope !== scope || loading), saveProfile }), [scope, loadedScope, authProfile?.organization_name, loading, profile, saveProfile]);
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
 }
 

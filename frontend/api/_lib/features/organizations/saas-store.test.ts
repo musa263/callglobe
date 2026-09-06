@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSubscription, defaultPlans, defaultSaasState, effectiveEntitlements } from './saas-store.js';
+import { businessOnlyFeatures, createSubscription, defaultPlans, defaultSaasState, effectiveEntitlements } from './saas-store.js';
 
 test('business plan exposes business features but keeps platform API gated', () => {
   const state = defaultSaasState();
@@ -31,9 +31,13 @@ test('inactive subscriptions disable every customer feature', () => {
 test('individual accounts never receive company extension calling', () => {
   const state = defaultSaasState();
   state.subscriptions.person = createSubscription('person', 'enterprise', state);
+  state.featureOverrides.person = Object.fromEntries(businessOnlyFeatures.map((key) => [key, true]));
   const access = effectiveEntitlements(state, 'person', 'individual');
   assert.equal(access.features.outboundCalling, true);
   assert.equal(access.features.internalCalling, false);
+  for (const feature of businessOnlyFeatures) assert.equal(access.features[feature], false, feature);
+  assert.equal(access.features.sms, true);
+  assert.equal(access.features.phoneNumbers, true);
 });
 
 test('feature overrides cannot bypass a suspended subscription', () => {

@@ -1,5 +1,16 @@
 # Mobile Calling
 
+## Navigation
+
+The first tab is **Dial Pad** and mounts `screens/DialerScreen` immediately.
+There is no separate Home/New call step. Call history lives only in
+`screens/RecentsScreen`; tapping a recent passes its identity to the dialer.
+The header conference icon opens `screens/ConferenceScreen`. Each participant
+is resolved as a regular phone number or a company-directory extension.
+Individual accounts can conference regular numbers but never query a company
+directory. External participants require an authorized caller ID and the
+server's outbound entitlement, wallet and destination-policy checks.
+
 `VoiceContext.tsx` coordinates UI actions and persistent engine subscriptions.
 `engine/useVoiceRegistration.ts` selects the configured edge, obtains credentials,
 registers device tokens and renews/reconnects sessions. `engine/voiceClientFacade`

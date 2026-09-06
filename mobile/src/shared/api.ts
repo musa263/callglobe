@@ -15,7 +15,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = String(init.method || 'GET').toUpperCase();
   const retryable = method === 'GET' || ['/api/auth/login', '/api/auth/enroll'].includes(path);
   const attempts = ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
-  const timeoutMs = path.startsWith('/api/voice/status') ? 5_000 : 10_000;
+  const timeoutMs = path.startsWith('/api/voice/status') ? 5_000 : path === '/api/auth/phone' ? 60_000 : 10_000;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {

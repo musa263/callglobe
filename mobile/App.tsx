@@ -17,7 +17,6 @@ import { SettingsScreen } from './src/features/settings/screens/SettingsScreen';
 import { ContactsScreen } from './src/features/contacts/screens/ContactsScreen';
 import { MessagesScreen } from './src/features/messaging/screens/MessagesScreen';
 import { ConferenceScreen } from './src/features/calling/screens/ConferenceScreen';
-import { HomeScreen } from './src/features/home/screens/HomeScreen';
 import { VideoMeetingScreen } from './src/features/video/screens/VideoMeetingScreen';
 import type { AppTab, NavigationTarget } from './src/shared/types';
 import { colors } from './src/shared/theme';
@@ -39,23 +38,21 @@ class LaunchBoundary extends Component<{ children: React.ReactNode }, { failed: 
 }
 
 function AuthenticatedApp() {
-  const { rates, callerNumbers } = useAuth();
   const [tab, setTab] = useState<AppTab>('dial');
   const [showWallet, setShowWallet] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [dialTarget, setDialTarget] = useState<NavigationTarget | null>(null);
   const [messageTarget, setMessageTarget] = useState<NavigationTarget | null>(null);
-  const [businessNonce, setBusinessNonce] = useState(0);
-  const [callSurface, setCallSurface] = useState<'home' | 'direct' | 'conference'>('home');
+  const [callSurface, setCallSurface] = useState<'direct' | 'conference'>('direct');
   const [callMinimized, setCallMinimized] = useState(false);
-  const { activeCall, duration, endCall, startCall, startInternalCall } = useVoice();
+  const { activeCall, duration, endCall, startInternalCall } = useVoice();
   useEffect(() => { if (!activeCall) setCallMinimized(false); }, [activeCall]);
   if (activeCall && !callMinimized) return <ActiveCallScreen onMinimize={() => setCallMinimized(true)} />;
   if (showVideo) return <VideoMeetingScreen onClose={() => setShowVideo(false)} />;
   if (showWallet) return <WalletScreen onBack={() => setShowWallet(false)} />;
-  const openDialer = (number: string, name?: string, internal = false, photoUrl?: string) => {
+  const openDialer = (number: string, name?: string, internal = false, photoUrl?: string, countryCode?: string) => {
     setCallSurface('direct');
-    setDialTarget({ number, name, internal, photoUrl, nonce: Date.now() });
+    setDialTarget({ number, name, internal, photoUrl, countryCode, nonce: Date.now() });
     setTab('dial');
   };
   const openMessages = (number: string, name?: string, internal = false) => {
@@ -63,7 +60,7 @@ function AuthenticatedApp() {
     setTab('messages');
   };
   const changeTab = (next: AppTab) => {
-    if (next === 'dial') setCallSurface('home');
+    if (next === 'dial') setCallSurface('direct');
     setTab(next);
   };
   const callContact = async (contact: Parameters<React.ComponentProps<typeof ContactsScreen>['onCall']>[0]) => {
@@ -72,13 +69,9 @@ function AuthenticatedApp() {
         await startInternalCall(contact.sipUsername, contact.extension, contact.name, contact.photoUrl);
         return;
       }
-      const normalized = contact.number.replace(/[\s()-]/g, '');
-      const rate = [...rates].filter((item) => normalized.startsWith(item.dial_code)).sort((a, b) => b.dial_code.length - a.dial_code.length)[0];
-      if (!normalized.startsWith('+') || !rate) {
-        openDialer(contact.number, contact.name, false, contact.photoUrl);
-        return;
-      }
-      await startCall(normalized, rate, callerNumbers.find((number) => number.status === 'active') ?? callerNumbers[0] ?? null, contact.name, contact.photoUrl);
+      // Keep contact country metadata and use the same validation/caller-ID
+      // controls as a manually entered number before placing the call.
+      openDialer(contact.number, contact.name, Boolean(contact.internal), contact.photoUrl, contact.countryCode);
     } catch (callError) {
       Alert.alert('Call could not start', callError instanceof Error ? callError.message : 'Try again shortly.');
     }
@@ -86,13 +79,12 @@ function AuthenticatedApp() {
   return (
     <View style={styles.app}>
       <View style={styles.screen}>
-        {tab === 'dial' && callSurface === 'home' && <HomeScreen onDial={() => setCallSurface('direct')} onConference={() => setCallSurface('conference')} onBusiness={() => { setBusinessNonce(Date.now()); setTab('settings'); }} onWallet={() => setShowWallet(true)} onRecentCall={(call) => openDialer(call.destination_number, call.destination_name ?? undefined, Boolean(call.internal || call.destination_country === 'Internal'))} />}
         {tab === 'dial' && callSurface === 'direct' && <DialerScreen target={dialTarget} onWallet={() => setShowWallet(true)} onConference={() => setCallSurface('conference')} />}
         {tab === 'dial' && callSurface === 'conference' && <ConferenceScreen onDirect={() => setCallSurface('direct')} onWallet={() => setShowWallet(true)} />}
         {tab === 'contacts' && <ContactsScreen onCall={callContact} onMessage={(contact) => openMessages(contact.number, contact.name, Boolean(contact.internal))} onVideoMeeting={() => setShowVideo(true)} />}
         {tab === 'recents' && <RecentsScreen onRedial={(call) => openDialer(call.destination_number, call.destination_name ?? call.destination_country ?? undefined, Boolean(call.internal || call.destination_country === 'Internal'))} />}
         {tab === 'messages' && <MessagesScreen target={messageTarget} onContacts={() => setTab('contacts')} />}
-        {tab === 'settings' && <SettingsScreen openBusinessNonce={businessNonce} onBusinessConsumed={() => setBusinessNonce(0)} onWallet={() => setShowWallet(true)} />}
+        {tab === 'settings' && <SettingsScreen onWallet={() => setShowWallet(true)} />}
       </View>
       {activeCall && callMinimized && <View style={styles.liveCallBar}>
         <Pressable accessibilityLabel="Return to active call" onPress={() => setCallMinimized(false)} style={styles.liveCallRestore}><View style={styles.liveCallIcon}><PhoneCall size={18} color={colors.ink} /></View><View style={styles.liveCallCopy}><Text numberOfLines={1} style={styles.liveCallName}>{activeCall.displayName || activeCall.number}</Text><Text style={styles.liveCallMeta}>{activeCall.onHold ? 'ON HOLD' : activeCall.phase === 'active' && activeCall.connectedAt ? 'LIVE CALL' : activeCall.phase.toUpperCase()}{activeCall.connectedAt ? ` · ${Math.floor(duration / 60).toString().padStart(2, '0')}:${(duration % 60).toString().padStart(2, '0')}` : ''}</Text></View><ChevronUp size={19} color={colors.textMuted} /></Pressable>

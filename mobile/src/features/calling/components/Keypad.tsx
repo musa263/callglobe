@@ -10,18 +10,20 @@ const keys = [
   ['*', ''], ['0', '+'], ['#', ''],
 ];
 
-export function Keypad({ onPress, compact = false }: { onPress: (digit: string) => void; compact?: boolean }) {
+export function Keypad({ onPress, compact = false, onPlus, plain = false }: { onPress: (digit: string) => void; compact?: boolean; onPlus?: () => void; plain?: boolean }) {
   return (
     <View style={[styles.grid, compact && styles.gridCompact]}>
       {keys.map(([digit, letters]) => (
         <Pressable
           key={digit}
           accessibilityLabel={`Dial ${digit}`}
+          accessibilityHint={digit === '0' && onPlus ? 'Hold for plus' : undefined}
+          onLongPress={digit === '0' ? onPlus : undefined}
           onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onPress(digit ?? '');
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => console.warn('[dialpad] Haptic feedback unavailable'));
           }}
-          style={({ pressed }) => [styles.key, compact && styles.keyCompact, pressed && styles.keyPressed]}
+          style={({ pressed }) => [styles.key, plain && styles.keyPlain, compact && styles.keyCompact, pressed && styles.keyPressed]}
         >
           <Text style={[styles.digit, compact && styles.digitCompact]}>{digit}</Text>
           <Text style={styles.letters}>{letters}</Text>
@@ -36,6 +38,7 @@ const styles = StyleSheet.create({
   gridCompact: { maxWidth: 292, rowGap: 7 },
   key: { width: '30.5%', height: 62, borderRadius: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
   keyCompact: { height: 52 },
+  keyPlain: { borderWidth: 0, backgroundColor: 'transparent', borderRadius: 8 },
   keyPressed: { backgroundColor: '#183A54', borderColor: colors.mintDark, transform: [{ scale: 0.96 }] },
   digit: { color: colors.text, fontSize: 25, lineHeight: 28, fontWeight: '600', fontVariant: ['tabular-nums'] },
   digitCompact: { fontSize: 21, lineHeight: 23 },

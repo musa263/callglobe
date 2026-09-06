@@ -9,6 +9,8 @@ import { isVoiceRouteId } from '../voice-route-id.js';
 import { readVoiceRoute } from '../voice-route-store.js';
 import { updateVoiceRoute } from '../voice-route-store.js';
 import { bridgeOutboundCalls } from '../outbound-bridge.js';
+import { readPbxConfig } from '../../organizations/pbx-config-store.js';
+import { requireFeature } from '../../organizations/saas-access.js';
 
 async function waitForPair(reader: (id: string) => Promise<OutboundCallPair | null>, id: string) {
   for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -108,6 +110,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const session = await requireSession(req);
+    const config = await readPbxConfig();
+    if (!config.organizations.some((organization) => organization.id === session.organizationId && organization.status === 'active')) return res.status(403).json({ error: 'An active calling account is required to manage a conference.' });
     if (req.body?.action === 'remove_participant') {
       const routeId = typeof req.body?.routeId === 'string' ? req.body.routeId.trim() : '';
       const conferenceId = typeof req.body?.conferenceId === 'string' ? req.body.conferenceId.trim() : '';
@@ -134,10 +138,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Two connected call legs are required before merging.' });
     }
     const reservations = await Promise.all(routeIds.map(readVoiceRoute));
-    if (reservations.some((route) => !route || route.userId !== session.sub || route.phase !== 'connected')) {
+    if (reservations.some((route) => !route || route.userId !== session.sub || route.organizationId !== session.organizationId || route.phase !== 'connected')) {
       return res.status(403).json({ error: 'Both calls must belong to this account and be connected before merging.' });
     }
-
+    if (reservations.some((route) => route?.flow === 'internal')) await requireFeature(session, 'internalCalling', config);
+    if (reservations.some((route) => route?.flow === 'outbound')) await requireFeature(session, 'outboundCalling', config);
     const pairs = await Promise.all(routeIds.map((id) => waitForPair(readOutboundCallPairByRoute, id)));
     if (pairs.some((pair) => !pair || pair.status !== 'direct')) {
       return res.status(409).json({ error: 'Both calls must be connected through Vocivo before they can be merged.' });
@@ -205,6 +210,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ merged: true, conferenceId, room, participants: 3 });
   } catch (error) {
     if (writeAuthError(res, error)) return;
+    if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'This calling feature is not enabled for your account.' });
     if (error instanceof TelnyxApiError && [400, 404, 409, 422].includes(error.status)) {
       return res.status(409).json({ error: `Telnyx could not merge these calls: ${error.message}` });
     }

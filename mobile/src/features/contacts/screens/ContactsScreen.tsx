@@ -7,7 +7,8 @@ import { ContactRound, MessageSquareText, Phone, Search, ShieldCheck, Video } fr
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ContactPhone } from '../../../shared/types';
 import { colors } from '../../../shared/theme';
-import { api } from '../../../shared/api';
+import { useAuth } from '../../auth/AuthContext';
+import { useCallingDirectory } from '../../calling/state/useCallingDirectory';
 
 const cleanNumber = (value: string) => {
   const trimmed = value.trim();
@@ -22,7 +23,9 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
   const insets = useSafeAreaInsets();
   const [permission, setPermission] = useState<'loading' | 'granted' | 'denied'>('loading');
   const [contacts, setContacts] = useState<ContactPhone[]>([]);
-  const [team, setTeam] = useState<ContactPhone[]>([]);
+  const { profile } = useAuth();
+  const directory = useCallingDirectory(profile?.account_type === 'business', profile?.organization_id, profile?.id);
+  const team = useMemo<ContactPhone[]>(() => directory.users.map((user) => ({ id: `team-${user.id}`, name: user.name, number: user.extension, extension: user.extension, photoUrl: user.photoUrl, label: user.department, internal: true })), [directory.users]);
   const [query, setQuery] = useState('');
   const searchRef = useRef<TextInput>(null);
 
@@ -39,6 +42,7 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
       name: contact.name || phone.number || 'Unnamed contact',
       number: cleanNumber(phone.number ?? ''),
       label: phone.label,
+      countryCode: phone.countryCode,
       photoUrl: contact.image?.uri,
     }))).filter((contact) => contact.number.length >= 4);
     setContacts(rows);
@@ -46,9 +50,6 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
   }, []);
 
   useEffect(() => { load().catch(() => setPermission('denied')); }, [load]);
-  useEffect(() => {
-    api.get<{ users: Array<{ id: string; extension: string; name: string; department: string; sipUsername: string; photoUrl?: string }> }>('/api/voice/directory').then(({ users }) => setTeam(users.map((user) => ({ id: `team-${user.id}`, name: user.name, number: user.extension, extension: user.extension, sipUsername: user.sipUsername, photoUrl: user.photoUrl, label: user.department, internal: true })))).catch(() => setTeam([]));
-  }, []);
 
   const filtered = useMemo(() => {
     const value = query.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();

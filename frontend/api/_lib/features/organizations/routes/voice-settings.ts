@@ -17,6 +17,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'PUT' && req.body?.enabled) await requireFeature(session, 'ivr', pbx);
     if (req.method === 'PUT' && req.body?.backgroundImageUrl) await requireFeature(session, 'customBranding', pbx);
     const organizationId = requestOrganizationId(req, session, pbx);
+    if (!pbx.organizations.some((organization) => organization.id === organizationId && organization.accountType === 'business' && organization.status === 'active')) {
+      return res.status(403).json({ error: 'An active company account is required.' });
+    }
     const config = req.method === 'PUT' ? await saveBusinessVoiceConfig(req.body ?? {}, organizationId) : await readBusinessVoiceConfig(organizationId);
     // A new greeting, menu or voice is rendered before anyone calls it.
     if (req.method === 'PUT') afterResponse('menu prompt pre-render', prerenderTenantPrompts(organizationId, { config: pbx }));

@@ -15,6 +15,7 @@ type AuthContextValue = {
   history: CallLog[];
   signIn: (email: string, password: string) => Promise<void>;
   enrollWithQr: (token: string) => Promise<void>;
+  signInWithPhone: (challengeId: string, code: string) => Promise<void>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
   addHistory: (call: CallLog) => Promise<void>;
@@ -251,6 +252,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await api.clearSessionToken();
   }, []);
 
+  const signInWithPhone = useCallback(async (challengeId: string, code: string) => {
+    const result = await api.post<LoginResponse>('/api/auth/phone', { step: 'verify', challengeId, code });
+    if (result.profile.account_type !== 'individual' || result.profile.role !== 'individual') throw new Error('Individual account verification failed.');
+    const next = initialProfile(result.profile);
+    await api.saveSessionToken(result.token);
+    setProfile(next);
+    setAuthenticated(true);
+    void loadAccount(result.profile).catch(() => console.warn('[Vocivo Auth] Account refresh failed.'));
+  }, [loadAccount]);
+
   const refresh = useCallback(async () => {
     if (!isAuthenticated) return;
     const session = await api.get<SessionResponse>('/api/auth/session');
@@ -270,7 +281,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setProfile((current) => current ? { ...current, ...mobileProfile(result.profile) } : current);
   }, []);
 
-  const value = useMemo(() => ({ loading, isAuthenticated, profile, rates, callerNumbers, history, signIn, enrollWithQr, signOut, refresh, addHistory, updateProfile }), [addHistory, callerNumbers, enrollWithQr, history, isAuthenticated, loading, profile, rates, refresh, signIn, signOut, updateProfile]);
+  const value = useMemo(() => ({ loading, isAuthenticated, profile, rates, callerNumbers, history, signIn, enrollWithQr, signInWithPhone, signOut, refresh, addHistory, updateProfile }), [addHistory, callerNumbers, enrollWithQr, signInWithPhone, history, isAuthenticated, loading, profile, rates, refresh, signIn, signOut, updateProfile]);
   if (nativeBridgeError) throw nativeBridgeError;
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

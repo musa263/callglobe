@@ -31,10 +31,9 @@ class Settings:
     #: played from here, and recordings arrive the same way.
     audio_dir: str = "/var/lib/vocivo-receptionist"
 
-    #: Soft music mixed under the receptionist's voice for the whole call, the
-    #: way a company's phone system sounds. A path FreeSWITCH can read (the
-    #: edge ships it in services/sip/freeswitch/sounds); empty turns it off.
-    speech_bed: str = "/opt/vocivo-fs/sounds/speech-bed.wav"
+    #: Conversation is dry speech by default, not hold music. An explicit
+    #: operator setting can still opt into a FreeSWITCH-readable background bed.
+    speech_bed: str = ""
 
     #: faster-whisper. "base" is enough for phone-band English and fits beside
     #: a live SIP process; "small" is better and wants its own box.

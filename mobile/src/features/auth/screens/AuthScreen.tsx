@@ -8,6 +8,7 @@ import { BrandMark } from '../../../shared/components/BrandMark';
 import { useAuth } from '../AuthContext';
 import { isApiConfigured } from '../../../shared/api';
 import { colors } from '../../../shared/theme';
+import { PhoneSignupScreen } from './PhoneSignupScreen';
 
 export function AuthScreen() {
   const { signIn, enrollWithQr } = useAuth();
@@ -17,6 +18,7 @@ export function AuthScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  const [showPhoneSignup, setShowPhoneSignup] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
 
@@ -77,6 +79,8 @@ export function AuthScreen() {
     };
   }, [scanEnrollment]);
 
+  if (showPhoneSignup) return <PhoneSignupScreen onBack={() => setShowPhoneSignup(false)} />;
+
   return (
     <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <LinearGradient colors={[colors.ink, '#0D2238', colors.ink]} style={StyleSheet.absoluteFill} />
@@ -101,6 +105,7 @@ export function AuthScreen() {
           </Pressable>
 
           <View style={styles.divider}><View style={styles.dividerLine} /><Text style={styles.dividerText}>OR</Text><View style={styles.dividerLine} /></View>
+          <Pressable accessibilityRole="button" disabled={busy || !isApiConfigured} onPress={() => setShowPhoneSignup(true)} style={styles.qrButton}><Text style={styles.qrButtonText}>Continue with phone number</Text></Pressable>
           <Pressable disabled={busy || !isApiConfigured} onPress={openScanner} style={({ pressed }) => [styles.qrButton, pressed && styles.pressed]}>
             <QrCode size={20} color={colors.mint} /><Text style={styles.qrButtonText}>Scan company setup QR</Text>
           </Pressable>
