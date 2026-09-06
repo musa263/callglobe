@@ -20,7 +20,7 @@ function fixture() {
     issuedAt: new Date().toISOString(), sessionIssuedAt: 1234 };
   const allowed = createSipRegistrationAccess({
     readPbxConfig: async () => config,
-    readExtensionDirectory: async () => directory,
+    readCurrentExtension: async (id) => directory?.find((item) => item.id === id) || null,
     readTenantSaasState: async (id) => { assert.equal(id, org.id); return state; },
     activeTenantAdmin: async () => null,
     isExtensionSessionRevoked: async (id, issuedAt, options) => {

@@ -3,6 +3,7 @@ import { telnyx, TelnyxApiError } from '../../shared/telnyx.js';
 import { readPbxConfig } from './pbx-config-store.js';
 import { revokeExtensionSessions } from './extension-session-store.js';
 import { extensionSipUsernames } from '../calling/internal-sip.js';
+import { readCurrentExtension } from './extension-identity.js';
 import {
   deleteExtensionCredential,
   readExtensionCredential,
@@ -241,7 +242,10 @@ async function requireManagedCredentialResource(id: string) {
   const stored = await readExtensionCredential(id);
   const storedData = credentialData(stored);
   if (storedData) {
-    const parsed = { ...stored!.extension, sipProvider: 'telnyx' as const };
+    const parsed = await readCurrentExtension(id);
+    if (!parsed || parsed.organizationId !== stored!.extension.organizationId || parsed.sipUsername !== stored!.sipUsername) {
+      throw new Error('Extension identity is inconsistent.');
+    }
     credentialCache.set(id, { expiresAt: Date.now() + 60_000, parsed, data: storedData });
     return { parsed, data: storedData };
   }
