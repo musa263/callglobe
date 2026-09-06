@@ -31,6 +31,24 @@ at Kamailio on 5060. `sofia status gateway telnyx` should say `State UP`.
 
 Inbound DIDs stay on the existing Call Control application until `VOCIVO_SIP_INBOUND=1` on both Vercel and this host. See [ADR 0003](../../docs/adr/0003-self-hosted-sip-edge.md).
 
+## Isolated protocol validation
+
+On a Linux host with Docker, run `python3 services/sip/tests/validate_edge.py`
+from the repository root. The `SIP protocol validation` GitHub Actions workflow
+runs the same gate for SIP changes and can be dispatched manually.
+
+The gate reads the pinned Kamailio image from Compose and checks the complete
+production configuration using `KAMAILIO_CHECK_ONLY=1`, with networking disabled
+and dummy environment values. It then starts a temporary loopback-only listener
+on ports 15060 and 8080 using the production ingress rules through OPTIONS.
+UDP, TCP and WebSocket probes cover valid requests, missing required headers,
+CSeq errors, exhausted hop counts and the WebSocket Content-Length exception.
+The temporary container is removed on success or failure. Ports must be free.
+
+This gate does not exercise authentication, registration, downstream call
+routing, media, transaction retransmission timers or native client behavior.
+It needs no production credentials and does not deploy anything.
+
 ## Clients
 
 - Web: SIP.js over `VOCIVO_SIP_WSS_URI` when `VOCIVO_VOICE_EDGE=sip`.

@@ -1,0 +1,28 @@
+name: SIP protocol validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'services/sip/**'
+      - '.github/workflows/sip-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/sip/**'
+      - '.github/workflows/sip-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ingress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Parse production configuration and probe isolated SIP ingress
+        run: python3 services/sip/tests/validate_edge.py
