@@ -43,6 +43,7 @@ export type ReceptionistOutcome =
   | 'transferred'
   | 'message_taken'
   | 'caller_hung_up'
+  | 'caller_went_quiet'
   | 'no_speech'
   | 'turn_limit'
   | 'error';
@@ -59,7 +60,7 @@ export type ReceptionistConversation = {
 };
 
 const outcomes: ReceptionistOutcome[] = [
-  'completed', 'transferred', 'message_taken', 'caller_hung_up', 'no_speech', 'turn_limit', 'error',
+  'completed', 'transferred', 'message_taken', 'caller_hung_up', 'caller_went_quiet', 'no_speech', 'turn_limit', 'error',
 ];
 
 /**
@@ -87,13 +88,16 @@ const kokoroVoiceIds = new Set(vocivoVoices.map((voice) => voice.sourceVoice));
  * is saved, rather than the first caller waiting for each of them.
  */
 export const receptionistPhrases = [
-  "Sorry, I couldn't hear you. Are you still there?",
-  "I'll put you through to someone.",
-  "I'll let the team know you called. Goodbye.",
-  'Let me pass this on to the team. Thanks for calling.',
-  'One moment.',
-  'Let me check that for you.',
-  'Sure, one second.',
+  "Sorry, I didn't catch that. Are you still there?",
+  "Let me put you through to someone who can help.",
+  "I'll let the team know you called. Bye for now.",
+  "Sorry about that — no one's picking up right now. I can take a message and have someone call you back, or is there anything else I can help with?",
+  "Take your time. I'm here if you need anything else.",
+  "I'll let you go now. Thanks for calling — goodbye.",
+  "Mm-hm, one moment.",
+  "Right, let me check.",
+  "Okay, one second.",
+  "Let me see.",
 ];
 
 /**
@@ -231,7 +235,7 @@ export function describeOfficeHours(hours: PbxConfig['officeHours']) {
   }
   if (!runs.length) return 'Closed every day.';
   const parts = runs.map((run) => `${run.days.length > 2 ? `${run.days[0]} to ${run.days[run.days.length - 1]}` : run.days.join(' and ')}, ${run.span}`);
-  const closedText = closed.length ? ` Closed ${closed.length > 2 ? `${closed[0]} to ${closed[closed.length - 1]}` : closed.join(' and ')}.` : '';
+  const closedText = closed.length ? ` Closed ${closed.length > 2 && spokenDays.indexOf(closed[closed.length - 1]) - spokenDays.indexOf(closed[0]) === closed.length - 1 ? `${closed[0]} to ${closed[closed.length - 1]}` : closed.join(' and ')}.` : '';
   return `${parts.join('; ')}.${closedText}`;
 }
 

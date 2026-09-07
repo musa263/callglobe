@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import logging
 import math
 import re
@@ -202,6 +203,10 @@ class Voice:
             log.debug("could not pre-render %d phrases: %s", len(items), error)
 
 
+class SpeechSynthesisError(RuntimeError):
+    """A required spoken response could not be rendered."""
+
+
 class SpeechRecognitionError(RuntimeError):
     """Recognition failed; this is not evidence that the caller was silent."""
 
@@ -218,6 +223,8 @@ class Ears:
         self._settings = settings
         self._model = None
         self._lock = asyncio.Lock()
+        self._inference_gate = asyncio.Semaphore(1)
+        self._inference_tasks: set[asyncio.Task] = set()
 
     async def _load(self):
         if self._model is not None:
@@ -259,9 +266,11 @@ class Ears:
         names = [hint.strip() for hint in (hints or []) if hint and hint.strip()]
         prompt = f"Phone call to {', '.join(dict.fromkeys(names))}." if names else None
 
+        audio = path.read_bytes()
+
         def run() -> str:
             segments, _ = model.transcribe(
-                str(path),
+                io.BytesIO(audio),
                 language=spoken,
                 initial_prompt=prompt,
                 beam_size=1,
@@ -273,7 +282,19 @@ class Ears:
             return " ".join(segment.text.strip() for segment in segments).strip()
 
         try:
-            return await asyncio.to_thread(run)
+            await asyncio.wait_for(self._inference_gate.acquire(), timeout=5)
+            # Cancelling an asyncio waiter cannot stop native inference. Keep
+            # the slot until the actual worker exits, and give it owned bytes
+            # so deleting the temporary WAV cannot race decoding.
+            worker = asyncio.create_task(asyncio.to_thread(run))
+            self._inference_tasks.add(worker)
+            def finished(task):
+                self._inference_tasks.discard(task)
+                self._inference_gate.release()
+                if not task.cancelled():
+                    task.exception()
+            worker.add_done_callback(finished)
+            return await asyncio.wait_for(asyncio.shield(worker), timeout=20)
         except Exception as error:  # noqa: BLE001 - distinguish failures from silence
             log.exception("speech recognition failed")
             raise SpeechRecognitionError("Speech recognition is temporarily unavailable") from error
@@ -308,7 +329,8 @@ def drop_hallucinated_transcript(heard: str, known_phrases: list[str]) -> str:
     The recogniser is primed with the business's name and the people it can
     transfer to, and on a stretch of line noise it tends to answer with that
     prompt — or with the greeting it has just heard echoed down the line. A
-    transcript that is nothing but one of those phrases is not the caller.
+    long exact greeting echo can be dropped. Short answers and names are
+    ambiguous and must survive; text matching alone cannot reject them.
     """
     text = " ".join(heard.split()).strip()
     if not text:
@@ -318,10 +340,10 @@ def drop_hallucinated_transcript(heard: str, known_phrases: list[str]) -> str:
         return ""
     for phrase in known_phrases:
         plain = _plain(phrase or "")
-        if len(plain) >= 8 and (normalised == plain or normalised in plain or (plain in normalised and len(normalised) <= len(plain) + 12)):
+        if len(plain.split()) >= 5 and normalised == plain:
             return ""
     # Whisper's silence fillers.
-    if normalised in {"thank you", "thanks for watching", "you", "bye", "thank you for watching", "subtitles by the amara org community"}:
+    if normalised in {"thanks for watching", "thank you for watching", "subtitles by the amara org community"}:
         return ""
     return text
 

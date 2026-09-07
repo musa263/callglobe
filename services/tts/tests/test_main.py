@@ -153,3 +153,27 @@ class CacheHousekeeping(unittest.TestCase):
                 )
             finally:
                 engine.cache_dir, engine.cache_ttl_seconds, engine.cache_max_bytes = original
+
+
+class QueueAndLocks(unittest.TestCase):
+    def test_lock_identity_survives_many_other_prompts(self):
+        key = '0' * 64
+        original = engine._render_lock(key)
+        for index in range(1024):
+            engine._render_lock(f'{index:064x}')
+        self.assertIs(engine._render_lock(key), original)
+        self.assertEqual(len(engine.render_locks), 512)
+
+    def test_full_prerender_queue_is_bounded_and_does_not_leave_pending_keys(self):
+        import queue
+        old_queue, old_pending = engine.prerender_queue, engine.prerender_pending
+        try:
+            engine.prerender_queue = queue.Queue(maxsize=1)
+            engine.prerender_pending = set()
+            request = engine.PrerenderRequest(items=[engine.SpeechRequest(input=f'Queue fixture {index}') for index in range(3)])
+            result = engine.prerender(request)
+            self.assertEqual(result['queued'], 1)
+            self.assertEqual(engine.prerender_queue.qsize(), 1)
+            self.assertEqual(len(engine.prerender_pending), 1)
+        finally:
+            engine.prerender_queue, engine.prerender_pending = old_queue, old_pending

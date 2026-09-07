@@ -11,8 +11,9 @@ from .api import VocivoApi
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, EslProtocolError, channel_variable
+from .idle import CallerIdleDeadline, CallerIdleTimeout
 from .interruption import IncomingSpeech
-from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, Voice, drop_hallucinated_transcript, recording_stats, split_sentences
+from .speech import CANNED, FILLERS, Ears, SpeechRecognitionError, SpeechSynthesisError, Voice, drop_hallucinated_transcript, recording_stats, split_sentences
 
 log = logging.getLogger("vocivo.call")
 
@@ -35,18 +36,21 @@ class CallHandler:
         call_id = connection.uuid
         caller = channel_variable(channel, "Caller-Caller-ID-Number", "caller_id_number", "sip_from_user")
         dialled = channel_variable(channel, "Caller-Destination-Number", "destination_number", "sip_to_user")
-        log.info("call %s from %s to %s", call_id[:8], caller or "unknown", dialled or "unknown")
+        log.info("call %s received", call_id[:8])
 
         assistant = await self._api.assistant_for(dialled, caller)
         if assistant is None:
-            log.warning("no receptionist is configured for %s; releasing the call", dialled)
-            await connection.hangup("NO_ROUTE_DESTINATION")
+            log.warning("call %s has no receptionist; releasing the call", call_id[:8])
+            try:
+                await connection.hangup("NO_ROUTE_DESTINATION")
+            finally:
+                await connection.close()
             return
 
         # Everything this receptionist may say besides the greeting and the
         # model's answers is rendered now, in the background, so none of it is
         # a cold render later in the call.
-        asyncio.create_task(self._voice.prerender([*CANNED.values(), *FILLERS], assistant.voice))
+        prerender = asyncio.create_task(self._voice.prerender([*CANNED.values(), *FILLERS], assistant.voice))
 
         if channel_variable(channel, "Answer-State").lower() != "answered":
             await connection.execute("answer")
@@ -92,6 +96,7 @@ class CallHandler:
                 _, pending_audio = await self._with_interruption(connection, lambda: self._speak(connection, assistant.greeting, assistant.voice))
                 conversation.add("assistant", assistant.greeting)
 
+            recognition_failures = 0
             silent_turns = 0
             last_heard = time.monotonic()
             wrapped_up = False
@@ -100,79 +105,123 @@ class CallHandler:
             # one exception is a line nobody has spoken on for
             # `idle_hangup_seconds` — a caller who walked away — which is
             # released with a goodbye so it does not sit open for an hour.
-            while True:
-                if connection.hungup.is_set():
-                    outcome = "caller_hung_up"
-                    break
+            with CallerIdleDeadline(self._settings.idle_hangup_seconds) as idle:
+                def caller_activity():
+                    nonlocal last_heard
+                    last_heard = time.monotonic()
+                    idle.touch()
 
-                try:
-                    if pending_audio:
-                        audio, pending_audio = pending_audio, b""
-                        heard = await self._transcribe_pcm(audio, assistant)
-                    else:
-                        heard = await self._listen(connection, call_id, assistant)
-                except SpeechRecognitionError:
+                while True:
                     if connection.hungup.is_set():
                         outcome = "caller_hung_up"
                         break
-                    silent_turns = 0
-                    await self._speak(connection, "Sorry, I couldn't process that. Could you repeat that, please?", assistant.voice)
-                    continue
-                if connection.hungup.is_set():
-                    outcome = "caller_hung_up"
-                    break
-                if not heard:
-                    silent_turns += 1
-                    quiet_for = time.monotonic() - last_heard
-                    if quiet_for >= self._settings.idle_hangup_seconds:
-                        if not wrapped_up:
-                            outcome = "caller_went_quiet"
-                            await self._speak(connection, CANNED["goodbye_idle"], assistant.voice)
-                        await connection.hangup()
-                        break
-                    if wrapped_up:
-                        # Goodbyes have been said; the caller is hanging up in
-                        # their own time. Stay on the line quietly.
+
+                    try:
+                        if pending_audio:
+                            audio, pending_audio = pending_audio, b""
+                            caller_activity()
+                            heard = await self._transcribe_pcm(audio, assistant)
+                        else:
+                            heard = await self._listen(connection, call_id, assistant, caller_activity)
+                    except SpeechRecognitionError:
+                        if connection.hungup.is_set():
+                            outcome = "caller_hung_up"
+                            break
+                        recognition_failures += 1
+                        if recognition_failures >= 3:
+                            allowed = {target.extension for target in assistant.targets}
+                            if assistant.office_open and assistant.transfer_enabled and assistant.fallback_extension in allowed:
+                                await self._transfer(connection, assistant.fallback_extension, dialled)
+                                transferred_to = assistant.fallback_extension
+                                outcome = "transferred"
+                            else:
+                                outcome = "error"
+                                await connection.hangup()
+                            break
+                        silent_turns = 0
+                        await self._speak(connection, "Sorry, I couldn't process that. Could you repeat that, please?", assistant.voice)
                         continue
-                    if silent_turns == 1:
-                        await self._speak(connection, CANNED["not_heard"], assistant.voice)
-                    elif silent_turns == 2:
-                        await self._speak(connection, CANNED["still_here"], assistant.voice)
-                    continue
+                    recognition_failures = 0
+                    if connection.hungup.is_set():
+                        outcome = "caller_hung_up"
+                        break
+                    if not heard:
+                        silent_turns += 1
+                        quiet_for = time.monotonic() - last_heard
+                        if quiet_for >= self._settings.idle_hangup_seconds:
+                            if not wrapped_up:
+                                outcome = "caller_went_quiet"
+                                await self._speak(connection, CANNED["goodbye_idle"], assistant.voice)
+                            await connection.hangup()
+                            break
+                        if wrapped_up:
+                            # Goodbyes have been said; the caller is hanging up in
+                            # their own time. Stay on the line quietly.
+                            continue
+                        if silent_turns == 1:
+                            await self._speak(connection, CANNED["not_heard"], assistant.voice)
+                        elif silent_turns == 2:
+                            await self._speak(connection, CANNED["still_here"], assistant.voice)
+                        continue
 
-                silent_turns = 0
-                last_heard = time.monotonic()
-                wrapped_up = False
-                conversation.add("caller", heard)
-                async def reply():
-                    decision = await self._think(connection, conversation, assistant.voice)
-                    await self._speak(connection, decision.say, assistant.voice)
-                    return decision
+                    silent_turns = 0
+                    last_heard = time.monotonic()
+                    idle.touch()
+                    wrapped_up = False
+                    conversation.add("caller", heard)
+                    async def reply():
+                        decision = await self._think(connection, conversation, assistant.voice)
+                        await self._speak(connection, decision.say[len(decision.spoken_prefix):].lstrip(), assistant.voice)
+                        return decision
 
-                decision, pending_audio = await self._with_interruption(connection, reply)
-                if decision is None:
-                    if pending_audio:
-                        conversation.add("assistant", "(response interrupted by the caller)")
-                    continue
-                conversation.add("assistant", decision.say)
-                if decision.action == "transfer":
-                    await self._transfer(connection, decision.extension, dialled)
+                    decision, pending_audio = await self._with_interruption(connection, reply, caller_activity)
+                    if decision is None:
+                        if pending_audio:
+                            conversation.add("assistant", "(response interrupted by the caller)")
+                        continue
+                    conversation.add("assistant", decision.say)
+                    if decision.action == "transfer":
+                        await self._transfer(connection, decision.extension, dialled)
 
-                if decision.action == "transfer":
-                    transferred_to = decision.extension
+                    if decision.action == "transfer":
+                        transferred_to = decision.extension
+                        outcome = "transferred"
+                        break
+                    if decision.action == "message":
+                        outcome = "message_taken"
+                        if decision.note:
+                            notes.append(decision.note)
+                        continue
+                    if decision.action == "wrap_up":
+                        # Goodbye has been said. The line stays open until the
+                        # caller hangs up; anything more they say is answered.
+                        wrapped_up = True
+                        outcome = "message_taken" if notes else "completed"
+                        continue
+        except CallerIdleTimeout:
+            outcome = "caller_went_quiet"
+            # The deadline cancels pending recording/model/synthesis work. Do
+            # not let a failed goodbye keep the channel alive indefinitely.
+            try:
+                await asyncio.wait_for(connection.api(f"uuid_break {connection.uuid} all"), timeout=2)
+                await asyncio.wait_for(self._speak(connection, CANNED["goodbye_idle"], assistant.voice), timeout=3)
+            except Exception:
+                log.warning("call %s idle farewell unavailable", call_id[:8])
+            finally:
+                await asyncio.wait_for(connection.hangup(), timeout=3)
+        except SpeechSynthesisError:
+            outcome = "error"
+            allowed = {target.extension for target in assistant.targets}
+            if assistant.office_open and assistant.transfer_enabled and assistant.fallback_extension in allowed:
+                try:
+                    await self._transfer(connection, assistant.fallback_extension, dialled)
+                    transferred_to = assistant.fallback_extension
                     outcome = "transferred"
-                    break
-                if decision.action == "message":
-                    outcome = "message_taken"
-                    if decision.note:
-                        notes.append(decision.note)
-                    continue
-                if decision.action == "wrap_up":
-                    # Goodbye has been said. The line stays open until the
-                    # caller hangs up; anything more they say is answered.
-                    wrapped_up = True
-                    outcome = "message_taken" if notes else "completed"
-                    continue
+                except Exception:
+                    log.exception("call %s voice failure fallback failed", call_id[:8])
+                    await connection.hangup()
+            else:
+                await connection.hangup()
         except EslProtocolError as error:
             # The socket went away under us: FreeSWITCH dropped the channel
             # because the caller hung up (the hangup event can lose the race
@@ -187,6 +236,8 @@ class CallHandler:
             except Exception:  # noqa: BLE001
                 log.exception("call %s could not be terminated after failure", call_id[:8])
         finally:
+            prerender.cancel()
+            await asyncio.gather(prerender, return_exceptions=True)
             log.info("call %s ended: %s after %.0fs, %d turns%s", call_id[:8], outcome, time.time() - started, len(conversation.turns), f", transferred to {transferred_to}" if transferred_to else "")
             try:
                 await self._api.record_conversation({
@@ -228,8 +279,8 @@ class CallHandler:
                     return await self._voice.say(part, voice)
                 except Exception as error:  # noqa: BLE001
                     # Losing the voice engine mid-call is survivable; losing the call is not.
-                    log.error("could not synthesise %r: %s", part[:60], error)
-                    return None
+                    log.error("could not synthesise %d characters (%s)", len(part), type(error).__name__)
+                    raise SpeechSynthesisError("Required speech could not be rendered") from error
 
         renders = [asyncio.create_task(render(part)) for part in parts]
         index = 0
@@ -271,11 +322,16 @@ class CallHandler:
         # entire reply, and that serial wait was most of the pause before every
         # answer.
         first_ready = asyncio.Event()
-        early: list[asyncio.Task[Path]] = []
+        early: list[asyncio.Task] = []
+        first_sentence = ""
+        first_sentence_seconds: float | None = None
 
         def render_first(sentence: str) -> None:
+            nonlocal first_sentence_seconds, first_sentence
             if not early:
-                early.append(asyncio.create_task(self._voice.say(sentence, voice)))
+                first_sentence_seconds = time.monotonic() - thinking_started
+                first_sentence = sentence
+                early.append(asyncio.create_task(self._speak(connection, sentence, voice)))
             first_ready.set()
 
         thinking_started = time.monotonic()
@@ -294,13 +350,13 @@ class CallHandler:
             decision = await thinking
             model_seconds = time.monotonic() - thinking_started
             if early:
-                try:
-                    await early[0]
-                except Exception as error:  # noqa: BLE001 - _speak reports the failure when it tries again
-                    log.debug("early render failed: %s", error)
+                await early[0]
+                if decision.say.startswith(first_sentence):
+                    decision.spoken_prefix = first_sentence
             log.info(
-                "model answered in %.1fs (%s), first sentence ready %.1fs after the caller finished%s",
-                model_seconds, decision.action, time.monotonic() - thinking_started, "" if early else " (no early render)",
+                "call %s model answered in %.1fs (%s), first sentence after model start: %s",
+                connection.uuid[:8], model_seconds, decision.action,
+                f"{first_sentence_seconds:.3f}s" if first_sentence_seconds is not None else "unavailable",
             )
             return decision
 
@@ -309,7 +365,7 @@ class CallHandler:
                 task.cancel()
             await asyncio.gather(thinking, waiter, *early, return_exceptions=True)
 
-    async def _with_interruption(self, connection: EslConnection, respond):
+    async def _with_interruption(self, connection: EslConnection, respond, on_activity=None):
         if not self._settings.barge_in:
             return await respond(), b""
         path = Path(self._settings.audio_dir) / "turns" / f"incoming-{uuid4().hex}.r8"
@@ -332,6 +388,8 @@ class CallHandler:
             if connection.hungup.is_set():
                 return None, b""
             if incoming.started.is_set():
+                if on_activity is not None:
+                    on_activity()
                 response.cancel()
                 await asyncio.gather(response, return_exceptions=True)
                 # API commands bypass the application's event-lock. All queued
@@ -377,7 +435,7 @@ class CallHandler:
         finally:
             self._discard(path)
 
-    async def _listen(self, connection: EslConnection, call_id: str, assistant: Assistant) -> str:
+    async def _listen(self, connection: EslConnection, call_id: str, assistant: Assistant, on_activity=None) -> str:
         """
         Waits for the caller to say something, then transcribes it.
 
@@ -398,10 +456,16 @@ class CallHandler:
                 str(self._settings.silence_seconds),
             ])
             recording_started = time.monotonic()
-            await connection.execute("record", argument, timeout=self._settings.listen_seconds + 10)
+            try:
+                await connection.execute("record", argument, timeout=self._settings.listen_seconds + 10)
+            except BaseException:
+                self._discard(path)
+                raise
             recorded_for = time.monotonic() - recording_started
             stats = recording_stats(path)
             if stats.has_audio:
+                if on_activity is not None:
+                    on_activity()
                 break
             log.info("call %s nothing yet (%.1fs, rms %d)", call_id[:8], recorded_for, stats.rms)
             self._discard(path)
@@ -416,13 +480,13 @@ class CallHandler:
         raw = heard
         heard = drop_hallucinated_transcript(heard, [assistant.greeting, assistant.name, *hints])
         if raw.strip() and not heard:
-            log.info("call %s dropped %r as an echo or a recogniser filler", call_id[:8], raw[:120])
+            log.info("call %s dropped an echo or recogniser filler", call_id[:8])
         # Timing per turn, so a slow answer can be blamed on the right stage
         # from the logs alone: how long the recorder ran (and whether it hit
         # its limit instead of hearing silence), and how long recognition took.
         log.info(
-            "call %s heard %r (recorded %.1fs%s, rms %d, transcribed in %.1fs)",
-            call_id[:8], heard[:120], recorded_for,
+            "call %s heard %d characters (recorded %.1fs%s, rms %d, transcribed in %.1fs)",
+            call_id[:8], len(heard), recorded_for,
             " — hit the time limit, silence was never detected" if recorded_for >= self._settings.listen_seconds - 0.5 else "",
             stats.rms, time.monotonic() - transcribing,
         )

@@ -448,8 +448,8 @@ class HallucinationFilter(unittest.TestCase):
     def test_prompt_and_greeting_echoes_are_not_the_caller(self):
         from app.speech import drop_hallucinated_transcript
         known = ["Welcome to Global Heritage. How can I help?", "Global Heritage Receptionist", "Sam"]
-        self.assertEqual(drop_hallucinated_transcript("Welcome to Global Heritage Receptionist.", known), "")
-        self.assertEqual(drop_hallucinated_transcript("Global Heritage.", known), "")
-        self.assertEqual(drop_hallucinated_transcript("Thank you.", known), "")
+        self.assertEqual(drop_hallucinated_transcript(known[0], known), "")
+        self.assertEqual(drop_hallucinated_transcript("Global Heritage.", known), "Global Heritage.")
+        self.assertEqual(drop_hallucinated_transcript("Thank you.", known), "Thank you.")
         self.assertEqual(drop_hallucinated_transcript("Can I speak to Sam about my order?", known), "Can I speak to Sam about my order?")
         self.assertEqual(drop_hallucinated_transcript("  yes   please ", known), "yes please")

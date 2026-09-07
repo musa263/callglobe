@@ -41,7 +41,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!conversation) return res.status(400).json({ error: 'A conversation needs a callId.' });
     console.log('vocivo receptionist call', JSON.stringify({
       callId: conversation.callId,
-      number: conversation.number,
       outcome: conversation.outcome,
       transferredTo: conversation.transferredTo,
       seconds: conversation.seconds,
