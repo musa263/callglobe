@@ -208,41 +208,47 @@ def decision_from_response(payload: dict[str, Any], assistant: Assistant) -> Dec
     transfer to an extension that is not on the tenant's list is refused
     outright rather than dialled.
     """
-    spoken: list[str] = []
+    content = payload.get("content", [])
+    if not isinstance(content, list):
+        content = []
+    blocks = [block for block in content if isinstance(block, dict)]
+    tools = [block for block in blocks if block.get("type") == "tool_use"]
+    if len(tools) > 1:
+        # One call turn can execute one action. Never confirm a message and
+        # then overwrite it with a transfer (or the reverse).
+        return Decision(say="Would you like me to take a message or put you through?")
+    spoken = [block["text"].strip() for block in blocks
+              if block.get("type") == "text" and isinstance(block.get("text"), str)]
     decision = Decision()
-    allowed = {target.extension for target in assistant.targets}
-
-    for block in payload.get("content", []):
-        if block.get("type") == "text":
-            spoken.append(str(block.get("text", "")).strip())
-            continue
-        if block.get("type") != "tool_use":
-            continue
-        arguments = block.get("input") or {}
+    for block in tools:
+        arguments = block.get("input")
         if not isinstance(arguments, dict):
             continue
         name = block.get("name")
-        said = str(arguments.get("say", "")).strip()
-        if said:
-            spoken.append(said)
+        said = arguments.get("say")
+        said = said.strip() if isinstance(said, str) else ""
         if name == "transfer_call":
-            extension = str(arguments.get("extension", "")).strip()
-            if assistant.office_open and assistant.transfer_enabled and extension in allowed:
-                decision.action = "transfer"
-                decision.extension = extension
+            extension = arguments.get("extension")
+            allowed = {target.extension for target in assistant.targets}
+            if (assistant.office_open and assistant.transfer_enabled
+                    and isinstance(extension, str) and extension in allowed):
+                decision.action, decision.extension = "transfer", extension
+                spoken.append(said or "One moment, I'll put you through.")
             else:
-                # A hallucinated extension would dial a stranger, or nobody.
-                log.warning("refusing a transfer to %r, which is not a configured target", extension)
+                log.warning("refusing an unavailable model transfer target")
                 spoken.append("Sorry, I can't put you through to that. Let me take a message instead.")
-                decision.action = "speak"
         elif name == "take_message":
-            decision.action = "message"
-            decision.note = str(arguments.get("message", "")).strip()
+            note = arguments.get("message")
+            if isinstance(note, str) and note.strip():
+                decision.action, decision.note = "message", note.strip()
+                spoken.append(said or "I've noted that for the team.")
+            else:
+                spoken.append("What message would you like me to pass on?")
         elif name in {"wrap_up", "end_call"}:
             decision.action = "wrap_up"
-
+            spoken.append(said or "Thanks for calling. Goodbye.")
     decision.say = " ".join(part for part in spoken if part).strip()
-    if not decision.say and decision.action == "speak":
+    if not decision.say:
         decision.say = "Sorry, I didn't catch that. Could you say it again?"
     return decision
 
@@ -385,6 +391,7 @@ class Brain:
         first_text = ""
         event = ""
         complete = False
+        open_blocks: set[int] = set()
         async for line in response.aiter_lines():
             if line.startswith("event:"):
                 event = line[6:].strip()
@@ -393,25 +400,38 @@ class Brain:
                 continue
             try:
                 data = json.loads(line[5:].strip() or "{}")
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as error:
+                raise httpx.RemoteProtocolError("Malformed model stream JSON") from error
             if not isinstance(data, dict):
                 raise httpx.RemoteProtocolError("Invalid model stream event")
             kind = data.get("type") or event
             if kind == "error":
                 raise httpx.RemoteProtocolError("Model stream reported an error")
+            if kind in {"content_block_start", "content_block_delta", "content_block_stop"}:
+                index = data.get("index")
+                if type(index) is not int or not 0 <= index < 64:
+                    raise httpx.RemoteProtocolError("Invalid model block index")
             if kind == "content_block_start":
-                index = int(data.get("index", 0))
-                block = dict(data.get("content_block") or {})
+                block = data.get("content_block")
+                if not isinstance(block, dict) or index in blocks:
+                    raise httpx.RemoteProtocolError("Invalid model content block")
+                block = dict(block)
+                if block.get("type") == "text" and not isinstance(block.get("text", ""), str):
+                    raise httpx.RemoteProtocolError("Invalid model text")
+                open_blocks.add(index)
                 if block.get("type") == "text":
                     block["text"] = block.get("text", "")
                 if block.get("type") == "tool_use":
                     partial_json[index] = ""
                 blocks[index] = block
             elif kind == "content_block_delta":
-                index = int(data.get("index", 0))
-                delta = data.get("delta") or {}
-                block = blocks.setdefault(index, {"type": "text", "text": ""})
+                delta = data.get("delta")
+                if index not in open_blocks or not isinstance(delta, dict):
+                    raise httpx.RemoteProtocolError("Invalid model delta")
+                block = blocks[index]
+                field = "text" if delta.get("type") == "text_delta" else "partial_json"
+                if delta.get("type") in {"text_delta", "input_json_delta"} and not isinstance(delta.get(field), str):
+                    raise httpx.RemoteProtocolError("Invalid model delta value")
                 if delta.get("type") == "text_delta":
                     block["text"] = block.get("text", "") + str(delta.get("text", ""))
                     if not announced and block is blocks.get(min(blocks)):
@@ -423,7 +443,9 @@ class Brain:
                 elif delta.get("type") == "input_json_delta":
                     partial_json[index] = partial_json.get(index, "") + str(delta.get("partial_json", ""))
             elif kind == "content_block_stop":
-                index = int(data.get("index", 0))
+                if index not in open_blocks:
+                    raise httpx.RemoteProtocolError("Unexpected model block completion")
+                open_blocks.remove(index)
                 block = blocks.get(index)
                 if block is not None and block.get("type") == "text" and not announced and block.get("text", "").strip():
                     # A one-sentence answer never grows a trailing space.
@@ -441,6 +463,8 @@ class Brain:
                     # Tool speech is held until the complete decision passes
                     # the tenant transfer policy; it is never played speculatively.
             elif kind == "message_stop":
+                if open_blocks:
+                    raise httpx.RemoteProtocolError("Model stopped with incomplete content")
                 complete = True
                 break
         if not complete:

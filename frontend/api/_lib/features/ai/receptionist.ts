@@ -146,7 +146,7 @@ export function spokenVoice(sourceVoice: string): string {
  */
 export function transferTargets(extensions: ExtensionUser[]): ReceptionistTarget[] {
   return extensions
-    .filter((entry) => entry.status === 'active' && entry.sipUsername && entry.extension)
+    .filter((entry) => entry.status === 'active' && entry.sipUsername?.trim() && /^\d{2,5}$/.test(String(entry.extension)))
     .map((entry) => ({
       extension: String(entry.extension),
       label: (entry.name || '').trim() || entry.email || String(entry.extension),

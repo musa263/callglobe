@@ -177,3 +177,34 @@ class QueueAndLocks(unittest.TestCase):
             self.assertEqual(len(engine.prerender_pending), 1)
         finally:
             engine.prerender_queue, engine.prerender_pending = old_queue, old_pending
+
+
+class AudioValidation(unittest.TestCase):
+    def test_silent_nonfinite_and_empty_audio_are_rejected(self):
+        from unittest.mock import patch
+        import numpy as np
+        for samples in [np.zeros(20), np.array([float('nan')]), np.array([float('inf')]), np.array([])]:
+            with self.subTest(samples=samples), patch.object(engine, 'pipeline_for', return_value=lambda *args, **kwargs: [('text', None, samples)]):
+                with self.assertRaises(engine.HTTPException):
+                    engine.synthesize(engine.SpeechRequest(input='Audio validation'))
+
+    def test_bad_unicode_auth_is_unauthorized_not_an_internal_error(self):
+        with self.assertRaises(engine.HTTPException) as error:
+            engine.authorize('Bearer invalid-\u00e9')
+        self.assertEqual(error.exception.status_code, 401)
+
+    def test_corrupt_cache_is_not_a_hit(self):
+        from unittest.mock import patch
+        with TemporaryDirectory() as directory, patch.object(engine, 'cache_dir', Path(directory)):
+            request = engine.SpeechRequest(input='Corrupt cache')
+            engine.cached_path(request).write_bytes(b'x' * 100)
+            self.assertFalse(engine.is_cached(request))
+            engine.render_to_cache(request)
+            self.assertTrue(engine.is_cached(request))
+
+    def test_warmup_runs_inference_even_when_prompt_is_cached(self):
+        from unittest.mock import patch
+        with patch.object(engine, 'synthesize', return_value=b'wav') as synth, patch.object(engine, 'render_to_cache') as cache:
+            engine._warm_up()
+            synth.assert_called_once()
+            cache.assert_not_called()
