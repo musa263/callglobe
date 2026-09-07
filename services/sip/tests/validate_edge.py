@@ -17,6 +17,7 @@ import tempfile
 import time
 import uuid
 from delivery import PORT as DELIVERY_PORT, Peer, delivery_config, run_delivery_probes
+from auth import auth_config, exchange as auth_exchange, mock_auth, run_auth_probes
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -181,6 +182,27 @@ def main():
             else:
                 raise RuntimeError('Isolated Kamailio listener did not become ready')
             run_probes()
+        finally:
+            subprocess.run(['docker', 'logs', name], check=False)
+            subprocess.run(['docker', 'rm', '-f', name], check=False)
+    with mock_auth() as state, tempfile.TemporaryDirectory(prefix='sip-auth-') as directory:
+        config = Path(directory) / 'auth.cfg'
+        config.write_text(auth_config((ROOT / 'kamailio/kamailio.cfg').read_text()))
+        name = 'sip-auth-' + uuid.uuid4().hex[:12]
+        try:
+            docker('run', '-d', '--name', name, '--network', 'host',
+                   '-e', 'VOCIVO_SIP_REALM=check',
+                   '-v', f'{config}:/etc/kamailio/auth.cfg:ro',
+                   '--entrypoint', 'kamailio', image, '-DD', '-E', '-f', '/etc/kamailio/auth.cfg')
+            for attempt in range(20):
+                try:
+                    if auth_exchange('OPTIONS').startswith('SIP/2.0 200 '):
+                        break
+                except OSError:
+                    time.sleep(0.25)
+            else:
+                raise RuntimeError('Isolated auth listener did not become ready')
+            run_auth_probes(state)
         finally:
             subprocess.run(['docker', 'logs', name], check=False)
             subprocess.run(['docker', 'rm', '-f', name], check=False)

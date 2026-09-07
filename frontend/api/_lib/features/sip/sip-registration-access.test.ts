@@ -15,20 +15,20 @@ function fixture() {
     name: 'Test User', email: '', mobile: '', department: '', role: 'user', sipUsername: 'sip-user', status: 'active' };
   let directory: ExtensionUser[] | null = [extension];
   let revoked = false;
+  let tenantReads = 0;
   const credential: StoredSipCredential = { username: extension.sipUsername, organizationId: org.id,
     extensionId: extension.id, realm: 'sip.example', ha1: 'not-used', expiresAt: new Date(Date.now() + 60000).toISOString(),
     issuedAt: new Date().toISOString(), sessionIssuedAt: 1234 };
   const allowed = createSipRegistrationAccess({
     readPbxConfig: async () => config,
     readCurrentExtension: async (id) => directory?.find((item) => item.id === id) || null,
-    readTenantSaasState: async (id) => { assert.equal(id, org.id); return state; },
-    activeTenantAdmin: async () => null,
+    readTenantSaasState: async (id, _config, options) => { tenantReads++; assert.equal(id, org.id); assert.equal(options?.initialize, false); return state; },
     isExtensionSessionRevoked: async (id, issuedAt, options) => {
       assert.equal(id, extension.id); assert.equal(issuedAt, 1234); assert.equal(options?.fresh, true);
       return revoked;
     },
   });
-  return { config, org, state, extension, credential, allowed,
+  return { config, org, state, extension, credential, allowed, get tenantReads() { return tenantReads; },
     deleteDirectory: () => { directory = null; }, revoke: () => { revoked = true; } };
 }
 
@@ -54,3 +54,19 @@ for (const scenario of ['tenant', 'employee', 'deleted', 'moved', 'username', 's
     assert.equal(await f.allowed(f.credential), false);
   });
 }
+
+
+test('admin REGISTER uses one read-only tenant snapshot and still enforces admin ownership and password reset', async () => {
+  const f = fixture();
+  f.credential.accountId = 'owner';
+  f.state.tenantAdmins = [{ id: 'owner', organizationId: f.org.id, extensionId: f.extension.id,
+    email: 'owner@example.test', name: 'Owner', role: 'company_owner', passwordHash: 'unused',
+    status: 'active', forcePasswordChange: false, createdAt: '', updatedAt: '' }];
+  assert.equal(await f.allowed(f.credential), true);
+  assert.equal(f.tenantReads, 1);
+  f.state.tenantAdmins[0].forcePasswordChange = true;
+  assert.equal(await f.allowed(f.credential), false);
+  f.state.tenantAdmins[0].forcePasswordChange = false;
+  f.state.tenantAdmins[0].organizationId = 'other';
+  assert.equal(await f.allowed(f.credential), false);
+});

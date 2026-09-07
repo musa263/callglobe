@@ -121,7 +121,7 @@ export function transientDatabaseError(error: unknown) {
     || /too many connections|connection (?:terminated|timed? out|refused)|connect_timeout/i.test(value?.message || '');
 }
 
-export async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) {
+export async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>, options: { initializeObjects?: boolean } = {}) {
   const delays = [0, 100, 350];
   let lastError: unknown;
   for (const delay of delays) {
@@ -131,7 +131,7 @@ export async function withDatabaseRetry<T>(operation: (sql: Sql) => Promise<T>) 
       try {
         return await operation(sql);
       } catch (error) {
-        if ((error as { code?: string })?.code !== '42P01') throw error;
+        if ((error as { code?: string })?.code !== '42P01' || options.initializeObjects === false) throw error;
         await ensureTable(sql);
         return await operation(sql);
       }
@@ -431,10 +431,10 @@ export async function readPlatformSaasRows(): Promise<SaasRows> {
   });
 }
 
-export async function readTenantSaasRows(organizationId: string): Promise<SaasRows> {
+export async function readTenantSaasRows(organizationId: string, options: { initialize?: boolean } = {}): Promise<SaasRows> {
   if (!organizationId) throw new Error('Tenant organization is required.');
   return withDatabaseRetry(async (sql) => {
-    await ensureSaasTables(sql);
+    if (options.initialize !== false) await ensureSaasTables(sql);
     return sql.begin(async (transaction) => {
       await setSaasTransactionContext(transaction, organizationId);
       const plans = await selectSaasPlans(transaction);
@@ -453,7 +453,7 @@ export async function readTenantSaasRows(organizationId: string): Promise<SaasRo
       `;
       return { plans, tenants: assertTenantRows(organizationId, tenants), admins: assertTenantRows(organizationId, admins) };
     });
-  });
+  }, { initializeObjects: options.initialize });
 }
 
 export async function findSaasAdminByEmailForAuthentication(email: string) {
