@@ -25,7 +25,7 @@ const {
  * inside a plugin.
  */
 
-const IOS_SOURCES = ['VocivoSipCallManager.swift', 'VocivoSip.swift', 'VocivoSip.m'];
+const IOS_SOURCES = ['VocivoPushEnvironment.swift', 'VocivoSipCallManager.swift', 'VocivoSip.swift', 'VocivoSip.m'];
 const ANDROID_SOURCES = [
   'VocivoSipCallRegistry.kt',
   'VocivoConnection.kt',

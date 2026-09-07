@@ -9,6 +9,10 @@ import React
 /// own edge, so nothing about a carrier appears anywhere in this file.
 @objc(VocivoSip)
 final class VocivoSip: RCTEventEmitter {
+  override func constantsToExport() -> [AnyHashable: Any]! {
+    ["pushEnvironment": VocivoPushEnvironment.current]
+  }
+
   private var listening = false
 
   override init() {

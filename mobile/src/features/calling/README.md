@@ -105,3 +105,19 @@ keep established media alive during the existing 45-second recovery grace.
 Repeated failures cannot extend that deadline; successful registration clears
 it. Keeper tests cover callback ordering and mounted-provider tests cover media
 survival, recovery and bounded cleanup. These changes require a mobile build.
+
+APNs routing follows the signed iOS provisioning profile, exposed through
+`VocivoSip.pushEnvironment`. Release JavaScript does not imply production APNs:
+a locally development-signed Release build receives sandbox tokens. App Store
+installs without an embedded profile use production. Older native modules keep
+the previous build-mode fallback. Run the native parser regression with:
+
+```sh
+swiftc native/ios/VocivoPushEnvironment.swift tests/native/PushEnvironmentTests.swift -o /tmp/vocivo-push-test
+/tmp/vocivo-push-test
+```
+
+The pinned React Native 0.81.5 patch preserves the `nativeviewconfig` header
+subdirectory for static CocoaPods builds. The Telnyx compatibility patch declares
+stored ICE servers after the completed `useTrickleIce` expression; clean dependency
+installation must apply these patches before producing a native bundle.

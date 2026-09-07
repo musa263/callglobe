@@ -13,6 +13,7 @@ import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '.
 import type { ActiveCall } from '../../../shared/types';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 import { voiceLoginConfig } from './session';
+import { pushEnvironment } from '../runtime/pushEnvironment';
 
 type VoiceRegistrationInput = {
   activeCallRef: MutableRefObject<ActiveCall | null>;
@@ -91,7 +92,7 @@ export function useVoiceRegistration({
             await api.post('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android',
               token: pushNotificationDeviceToken,
-              environment: __DEV__ ? 'sandbox' : 'production',
+              environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__),
               bundleId: 'app.vocivo.mobile',
             });
             storedPushToken = pushNotificationDeviceToken;
@@ -272,7 +273,7 @@ export function useVoiceRegistration({
           try {
             await api.post('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android', token,
-              environment: __DEV__ ? 'sandbox' : 'production', bundleId: 'app.vocivo.mobile',
+              environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
             });
             if (canceled) return;
             await login(token);

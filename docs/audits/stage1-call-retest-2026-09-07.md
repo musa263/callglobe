@@ -98,3 +98,47 @@ passed (604 total), API/mobile typechecks and web build passed. Additional auth
 timing instrumentation passed API typecheck and handler regressions. These are
 software regressions, not physical-device acceptance. An iPhone build and live
 unlocked/locked/terminated-state calls remain required; Android is unavailable.
+
+## Follow-up latency and native-build checks
+
+Production timing instrumentation still found 4–7 second auth requests after the
+first fix. Tenant data is now fetched by one query inside the same RLS-scoped
+transaction, and the replay claim is an atomic conditional upsert. REGISTER skips
+replay-table DDL; occasional expiry cleanup is retained for SIP-only deployments.
+The edge HTTP deadline is ten seconds, below SIP transaction expiry.
+
+A disposable PostgreSQL gate passed with a non-superuser and forced RLS:
+missing-schema reads create no tables; concurrent tenant reads remain isolated;
+missing subscriptions fail closed; exactly one of 20 concurrent replay claims
+wins; expired claims can be reclaimed once. Runs 34127225501 (PostgreSQL),
+34127225286 (SIP), and 34127225444 (quality) passed. Concurrent push-ownership
+commit 2195b2e was preserved in merge 58b50ce before deployment.
+
+Four bounded live API Digest probes passed for 2000 and 2003: 2879, 1794, 2421,
+and 1658 ms, including network time from this Mac. Replays for both extensions
+returned 403/replayed_digest. These probes did not register contacts or place
+calls. They do not prove handset ringing, media, or call stability.
+
+The iPhone build uncovered a React Native 0.81.5 static-header mapping failure;
+the patch preserves its nativeviewconfig directory. A malformed statement in the
+existing Telnyx compatibility patch was corrected before a clean npm install.
+APNs environment is now read from the signing profile because a development-signed
+Release build still receives sandbox tokens. Native profile tests and the updated
+606-test app gate pass. Signed iOS/Android builds and physical acceptance remain
+pending at this checkpoint.
+
+## Native artifacts
+
+Android debug APK compiled successfully (486 tasks) after clean dependency
+installation. No Android device was available for audio or background acceptance.
+iOS Release build 61 compiled and passed deep/strict code-signature verification.
+The provisioning profile includes the test iPhone and has development APNs,
+confirming the new profile-derived sandbox routing is needed for this build.
+The final bundle SHA-256 is
+`596c9ae11c9f2debaacf427e09e37d7b0e57917e6b9cae568de2755cb8a12388`.
+The local `/tmp` versus `/private/tmp` Metro entry mismatch was resolved in the
+ignored Xcode environment using the canonical entry-file path.
+
+The additional internal-route wire gate passed in run 34129054266. Final server
+source merge 3d297c7 preserves inbound diagnostics from concurrent commits
+0c6f4b9/a4a4cae. Physical iPhone acceptance remains the next gate.
