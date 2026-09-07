@@ -7,7 +7,7 @@ test('every workspace request captures its own tab and preserves other query par
   const request = async (path, options) => { paths.push([path, options]); return {}; };
   const a = workspaceApi(request, 'company-a');
   const b = workspaceApi(request, 'company-b');
-  for (const path of ['/api/admin/pbx', '/api/admin/ai', '/api/admin/extensions', '/api/admin/overview', '/api/admin/events', '/api/admin/api-keys', '/api/admin/numbers', '/api/admin/trunks', '/api/admin/background', '/api/voice/settings']) {
+  for (const path of ['/api/admin/pbx', '/api/admin/ai', '/api/admin/extensions', '/api/admin/overview', '/api/admin/events', '/api/admin/api-keys', '/api/admin/numbers', '/api/admin/trunks', '/api/admin/carrier-trunks', '/api/admin/background', '/api/voice/settings']) {
     await a(`${path}?id=123`, { method: 'PUT', body: { greeting: 'A' } });
     await b(path);
     assert.equal(new URL(paths.at(-2)[0], 'https://local').searchParams.get('organizationId'), 'company-a');

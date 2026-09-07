@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import background from '../_lib/features/platform/routes/admin-background.js';
 import extensions from '../_lib/features/organizations/routes/admin-extensions.js';
 import overview from '../_lib/features/organizations/routes/admin-overview.js';
+import carrierTrunks from '../_lib/features/numbers/routes/admin-carrier-trunks.js';
 import trunks from '../_lib/features/numbers/routes/admin-trunks.js';
 import enrollments from '../_lib/features/enrollment/routes/admin-enrollments.js';
 import pbx from '../_lib/features/organizations/routes/admin-pbx.js';
@@ -13,7 +14,7 @@ import apiKeys from '../_lib/features/platform/routes/admin-api-keys.js';
 import saas from '../_lib/features/organizations/routes/admin-saas.js';
 import wallets from '../_lib/features/billing/routes/admin-wallets.js';
 
-const routes = { background, extensions, overview, trunks, enrollments, pbx, ai, events, numbers, voices, saas, wallets, 'api-keys': apiKeys } as const;
+const routes = { background, extensions, overview, trunks, enrollments, pbx, ai, events, numbers, voices, saas, wallets, 'api-keys': apiKeys, 'carrier-trunks': carrierTrunks } as const;
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const resource = Array.isArray(req.query.resource) ? req.query.resource[0] : req.query.resource;
