@@ -1,8 +1,9 @@
 # Global Heritage Go Telecom temporary cutover preflight
 
-The requested temporary Vocivo test has **not started**. Server authentication
-blocked preparation of a reversible SIP cutover. The existing 3CX service,
-trunk, DID destinations, public IP and DNS were not changed.
+Root console access is now confirmed after the owner completed the password
+reset. Preparation of the requested temporary test is underway. No existing
+3CX service, trunk, DID destination, public IP or DNS has been changed by this
+diagnostic work.
 
 ## Verified evidence
 
@@ -31,13 +32,37 @@ trunk, DID destinations, public IP and DNS were not changed.
 
 Runs: [initial probe](https://github.com/musa263/vocivo/actions/runs/34141089383),
 [restricted SSH probe](https://github.com/musa263/vocivo/actions/runs/34141615463).
-These report diagnostic execution, not carrier acceptance. No INVITE, paid call,
-REGISTER or service restart was performed.
+These report diagnostic execution, not carrier acceptance.
+
+## Authenticated host preflight (2026-09-08 Dubai)
+
+- Root shell on `ghsl-3cx-01` is authenticated through the DigitalOcean recovery
+  console. No new SSH credential or firewall exception was added.
+- The checksum-verified probe at revision `f98dfef` received SIP **200 OK**
+  from Go `185.139.121.42:5060`, with actual socket source `64.226.96.144`.
+  This confirms signaling reachability from the intended IP, not authorization
+  of INVITEs or working audio.
+- Debian 12 has Python 3 and curl, no installed Docker, and approximately
+  71 GiB free. 3CX owns public UDP/TCP 5060 and TCP 5061. No bound RTP socket
+  in the proposed test range was observed in the preflight UDP inventory.
+- The actual SIP unit is `3CXPhoneSystem01.service`. Reverse dependencies include
+  `3CXCallFlow01.service`, `3CXIVR01.service`, and `3CXQueueManager01.service`;
+  restoring only the SIP unit would be an insufficient restoration check.
+- Local Docker validation of the pinned FreeSWITCH image passed SIP 100/200,
+  ACK, tone and echo RTP, and automatic BYE after 35.1 seconds. The simulated
+  handset received 1,512 packets, including 50 tone and 1,462 echo packets.
+  This was isolated loopback traffic, with no carrier or phone called.
+- An initial local attempt exposed FreeSWITCH throttling at a one-session-per-
+  second setting; the test allows five session starts per second while keeping
+  at most two concurrent sessions. The corrected wire test passed.
+
+No carrier INVITE, paid call, REGISTER or agent-initiated 3CX restart has yet
+been performed. The standalone test does not close portal activation gates.
 
 ## Remaining acceptance gates
 
-1. Obtain an existing SSH username/key or authenticated root/sudo console.
-2. Inspect actual service units, ports, host firewall, resources and active calls.
+1. Root console access is satisfied; retain it through restoration.
+2. Complete host firewall and active-call checks before interruption.
    Capture configuration and exact restoration commands.
 3. Prepare an isolated Vocivo test service and bounded automatic rollback before
    interrupting 3CX. Keep the public IP attached to its existing droplet.
