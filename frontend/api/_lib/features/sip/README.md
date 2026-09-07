@@ -77,3 +77,17 @@ Queue bridge attempts share the configured `maxWait` ringing budget. The final
 attempt uses only the remainder (including a one-second remainder); an exhausted
 queue proceeds to its fallback without another bridge. Prompt playback and HTTP
 callback time are additional to this ringing budget, not a wall-clock guarantee.
+
+## SIP and relay renewal
+
+The credentials response expiry describes the complete SIP/ICE configuration and
+is capped at the earliest TURN REST deadline. Clients renew before that deadline;
+the stored Digest credential retains its seven-day validity so deferred renewal
+during an active call does not invalidate registration. Relay configuration is
+validated before replacing the device credential, so an invalid TURN deployment
+cannot rotate away a working password on a failed request.
+
+CDR timestamps must fit JavaScript's supported date range. Invalid microsecond
+values fall back to valid seconds; records without a valid start are unreadable,
+and invalid end timestamps fall back to the start instead of throwing a retryable
+server error. These boundaries are covered by the credentials-route and CDR tests.

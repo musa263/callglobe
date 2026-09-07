@@ -62,12 +62,15 @@ function decode(value: string) {
   }
 }
 
+function millisecondsToIso(milliseconds: number) {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return '';
+  const date = new Date(milliseconds);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+
 function epochToIso(variables: Record<string, unknown>, microsName: string, secondsName: string) {
-  const micros = Number(text(variables, microsName));
-  if (Number.isFinite(micros) && micros > 0) return new Date(Math.round(micros / 1000)).toISOString();
-  const seconds = Number(text(variables, secondsName));
-  if (Number.isFinite(seconds) && seconds > 0) return new Date(seconds * 1000).toISOString();
-  return '';
+  return millisecondsToIso(Math.round(Number(text(variables, microsName)) / 1000))
+    || millisecondsToIso(Number(text(variables, secondsName)) * 1000);
 }
 
 /** A number is what a phone dials; a SIP username is not. */
@@ -106,8 +109,8 @@ export function parseKamailioCdr(body: unknown): KamailioCdrEvent | null {
   if (!record || record.source !== 'kamailio') return null;
   const event = kamailioText(record.event);
   const callId = kamailioText(record.callId);
-  const at = Number(kamailioText(record.at));
-  if (!['invite', 'answered', 'bye', 'cancel', 'failed'].includes(event) || !callId || !Number.isFinite(at) || at <= 0) return null;
+  const at = millisecondsToIso(Number(kamailioText(record.at)) * 1000);
+  if (!['invite', 'answered', 'bye', 'cancel', 'failed'].includes(event) || !callId || !at) return null;
   return {
     event: event as KamailioCdrEvent['event'],
     callId: callId.slice(0, 200),
@@ -118,7 +121,7 @@ export function parseKamailioCdr(body: unknown): KamailioCdrEvent | null {
     routeToken: kamailioText(record.routeToken).slice(0, 2000),
     destinationExtension: kamailioText(record.destinationExtension).slice(0, 16),
     destinationName: kamailioText(record.destinationName).slice(0, 80),
-    at: new Date(at * 1000).toISOString(),
+    at,
   };
 }
 

@@ -11,69 +11,79 @@ import { accessForSession } from '../../organizations/saas-access.js';
 import { sessionOrganizationId } from '../../organizations/tenancy.js';
 import { sipDomain, sipRealm, sipWsUri, voiceEdge, voiceIceServers } from '../../calling/voice-provider.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (allowMobile(req, res)) return;
-  if (!['POST', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['POST', 'DELETE']);
-  try {
-    const session = await requireSession(req);
-    if (!session.extensionId || session.sub === 'vocivo-owner') return res.status(403).json({ error: 'A calling extension is required.' });
-    const config = await readPbxConfig();
-    const extension = await getExtension(session.extensionId);
-    if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
-    if (!extension.sipUsername) return res.status(409).json({ error: 'This extension has no SIP username.' });
-    const sessionId = sipCredentialSession(session);
-    const requestedDeviceId = req.method === 'DELETE' ? req.query.deviceId : req.body?.deviceId;
-    if (requestedDeviceId !== undefined && !validSipDeviceId(requestedDeviceId)) return res.status(400).json({ error: 'Invalid calling device identifier.' });
-    if (req.method === 'DELETE') {
-      if (!validSipDeviceId(requestedDeviceId) || !validSipDeviceId(req.query.credentialId)) return res.status(400).json({ error: 'Calling device and credential identifiers are required.' });
-      await revokeSipCredential(extension.sipUsername, { deviceId: requestedDeviceId, sessionId, credentialId: req.query.credentialId });
-      return res.status(200).json({ revoked: true });
+export function createSipCredentialsHandler(deps = { requireSession, readPbxConfig, getExtension, accessForSession, saveSipCredential, revokeSipCredential }) {
+  return async function handler(req: VercelRequest, res: VercelResponse) {
+    if (allowMobile(req, res)) return;
+    if (!['POST', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['POST', 'DELETE']);
+    try {
+      const session = await deps.requireSession(req);
+      if (!session.extensionId || session.sub === 'vocivo-owner') return res.status(403).json({ error: 'A calling extension is required.' });
+      const config = await deps.readPbxConfig();
+      const extension = await deps.getExtension(session.extensionId);
+      if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
+      if (!extension.sipUsername) return res.status(409).json({ error: 'This extension has no SIP username.' });
+      const sessionId = sipCredentialSession(session);
+      const requestedDeviceId = req.method === 'DELETE' ? req.query.deviceId : req.body?.deviceId;
+      if (requestedDeviceId !== undefined && !validSipDeviceId(requestedDeviceId)) return res.status(400).json({ error: 'Invalid calling device identifier.' });
+      if (req.method === 'DELETE') {
+        if (!validSipDeviceId(requestedDeviceId) || !validSipDeviceId(req.query.credentialId)) return res.status(400).json({ error: 'Calling device and credential identifiers are required.' });
+        await deps.revokeSipCredential(extension.sipUsername, { deviceId: requestedDeviceId, sessionId, credentialId: req.query.credentialId });
+        return res.status(200).json({ revoked: true });
+      }
+      if (extension.status !== 'active') return res.status(403).json({ error: 'This calling account is inactive.' });
+      const access = await deps.accessForSession(session, config);
+      if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) {
+        return res.status(403).json({ error: 'Calling is not enabled for this account.' });
+      }
+      const deviceId = requestedDeviceId || randomUUID();
+      const credentialId = randomUUID();
+      const realm = sipRealm();
+      const password = newSipPassword();
+      // A phone registers once and then re-registers with the same password for
+      // as long as the app is open. At an hour, the password died under a
+      // running phone: the next re-registration was refused, the registrar
+      // dropped the contact, and calls stopped arriving with nothing on screen
+      // to say so. A week outlives any session, and the client asks for a fresh
+      // one well before it runs out.
+      const expiresIn = 7 * 24 * 60 * 60;
+      const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+      // Validate relay configuration before replacing this device's working password.
+      const iceServers = voiceIceServers(`${extension.organizationId}:${extension.id}`);
+      const relayExpiries = iceServers.flatMap(server => /^\d+:/.test(server.username || '')
+        ? [Number(server.username!.split(':')[0]) * 1000] : []);
+      const configExpiresAt = Math.min(Date.parse(expiresAt), ...relayExpiries);
+      await deps.saveSipCredential({
+        username: extension.sipUsername,
+        extensionId: extension.id,
+        organizationId: extension.organizationId,
+        realm,
+        ha1: digestHa1(extension.sipUsername, realm, password),
+        expiresAt,
+        client: sipCredentialClient(req),
+        deviceId, sessionId, credentialId,
+        issuedAt: new Date().toISOString(),
+        sessionIssuedAt: session.iat,
+        accountId: session.accountId,
+      });
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      return res.status(200).json({
+        username: extension.sipUsername,
+        password,
+        realm,
+        domain: sipDomain(),
+        wsUri: sipWsUri(),
+        // Clients cache and renew the complete SIP + ICE configuration together.
+        expiresAt: new Date(configExpiresAt).toISOString(),
+        expires_in: Math.max(1, Math.floor((configExpiresAt - Date.now()) / 1000)),
+        deviceId, credentialId,
+        ice_servers: iceServers,
+        voice_edge: voiceEdge(config),
+      });
+    } catch (error) {
+      if (writeAuthError(res, error)) return;
+      return res.status(500).json({ error: publicError(error) });
     }
-    if (extension.status !== 'active') return res.status(403).json({ error: 'This calling account is inactive.' });
-    const access = await accessForSession(session, config);
-    if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) {
-      return res.status(403).json({ error: 'Calling is not enabled for this account.' });
-    }
-    const deviceId = requestedDeviceId || randomUUID();
-    const credentialId = randomUUID();
-    const realm = sipRealm();
-    const password = newSipPassword();
-    // A phone registers once and then re-registers with the same password for
-    // as long as the app is open. At an hour, the password died under a
-    // running phone: the next re-registration was refused, the registrar
-    // dropped the contact, and calls stopped arriving with nothing on screen
-    // to say so. A week outlives any session, and the client asks for a fresh
-    // one well before it runs out.
-    const expiresIn = 7 * 24 * 60 * 60;
-    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
-    await saveSipCredential({
-      username: extension.sipUsername,
-      extensionId: extension.id,
-      organizationId: extension.organizationId,
-      realm,
-      ha1: digestHa1(extension.sipUsername, realm, password),
-      expiresAt,
-      client: sipCredentialClient(req),
-      deviceId, sessionId, credentialId,
-      issuedAt: new Date().toISOString(),
-      sessionIssuedAt: session.iat,
-      accountId: session.accountId,
-    });
-    res.setHeader('Cache-Control', 'no-store, max-age=0');
-    return res.status(200).json({
-      username: extension.sipUsername,
-      password,
-      realm,
-      domain: sipDomain(),
-      wsUri: sipWsUri(),
-      expiresAt,
-      expires_in: expiresIn,
-      deviceId, credentialId,
-      ice_servers: voiceIceServers(`${extension.organizationId}:${extension.id}`),
-      voice_edge: voiceEdge(config),
-    });
-  } catch (error) {
-    if (writeAuthError(res, error)) return;
-    return res.status(500).json({ error: publicError(error) });
-  }
+  };
 }
+
+export default createSipCredentialsHandler();

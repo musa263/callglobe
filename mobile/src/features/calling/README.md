@@ -25,6 +25,12 @@ stack events to the feature bus; `sipCallEngine` exposes voice call objects.
 `sipRegistrationKeeper` handles signaling retries. `callUi::bindCallUi` mirrors
 native calls and queues Answer until the INVITE exists, with explicit deadlines.
 
+Cached SIP configuration is also bounded by numeric TURN REST username deadlines.
+This applies to legacy caches whose stored expiry exceeded the relay grant: an
+expired relay grant triggers bootstrap renewal, and a live grant caps the remaining
+lifetime returned to the registration coordinator. Bootstrap integration tests
+cover both migration paths. Shipping this cache migration requires a mobile release.
+
 ## State and Media
 
 `state/callLifecycle` protects termination/renegotiation operations. `media/`
