@@ -45,3 +45,11 @@ does not provision the SIP edge. Authentication is explicitly unconfirmed until
 the administrator selects the provider's method; the account reference is separate.
 Browser acceptance covers create, reopen, edit and retention of independent
 number destinations. Carrier call acceptance remains a separate gate.
+
+`CarrierTrunkDetails.jsx` displays every saved company carrier entry with General,
+Options and a complete DID table directly on the SIP trunks page. No edit dialog
+is needed to see account/server/authentication, public IP, capacity, call directions,
+or per-number caller IDs and destinations. `Add SIP trunk` opens the company
+carrier form; the separate external connection action is `Add PBX registration`.
+The scoped stylesheet keeps number rows readable on narrow screens. Confirm the
+saved entry remains visible after a fresh page load, including unassigned DIDs.

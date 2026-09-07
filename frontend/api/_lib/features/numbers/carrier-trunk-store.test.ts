@@ -53,6 +53,23 @@ test('encrypted carrier records are tenant-scoped and fail closed if moved or co
   await assert.rejects(store.list(''));
 });
 
+test('main number and trunk options persist without assigning DID destinations or activating calls', async () => {
+  const { store } = memoryStore();
+  const input = { ...draft(), mainNumber: '0123456789', outboundProxy: 'proxy.example.com', outboundProxyPort: 5070, channelLimit: 5, inboundEnabled: true, outboundEnabled: false };
+  await store.save('tenant-a', input);
+  const [saved] = await store.list('tenant-a');
+  for (const key of ['mainNumber', 'outboundProxy', 'outboundProxyPort', 'channelLimit', 'inboundEnabled', 'outboundEnabled'] as const) assert.equal(saved[key], input[key]);
+  assert.equal(saved.status, 'draft');
+  assert.equal(saved.numbers[0].destinationType, 'unassigned');
+  const emptyOptions = normalizeCarrierTrunk(draft(), 'tenant-a');
+  assert.equal(emptyOptions.channelLimit, null);
+  assert.equal(emptyOptions.inboundEnabled, null, 'missing legacy fields must not imply active call permissions');
+  assert.equal(emptyOptions.mainNumber, '');
+  for (const patch of [{ mainNumber: '999999999' }, { outboundProxy: 'sip://user:secret@example.com' }, { outboundProxyPort: -1 }, { channelLimit: 0 }, { channelLimit: 1.5 }, { inboundEnabled: 'true' }, { outboundEnabled: 1 }]) {
+    assert.throws(() => normalizeCarrierTrunk({ ...input, ...patch }, 'tenant-a'));
+  }
+});
+
 test('carrier edits use revisions, preserve parallel creates and tolerate create retries', async () => {
   const { store } = memoryStore();
   const input = draft();

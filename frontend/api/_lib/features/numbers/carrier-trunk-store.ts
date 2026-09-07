@@ -10,6 +10,8 @@ export type CarrierTrunk = {
   name: string; provider: string; accountReference: string; server: string; port: number;
   transport: 'UDP' | 'TCP' | 'TLS'; publicIp: string; hostingProvider: string;
   authentication: 'unconfirmed' | 'ip' | 'registration'; username: string;
+  mainNumber?: string; outboundProxy?: string; outboundProxyPort?: number;
+  channelLimit?: number | null; inboundEnabled?: boolean | null; outboundEnabled?: boolean | null;
   numbers: CarrierNumber[]; notes: string; updatedAt: string;
 };
 type State = { version: 1; organizationId: string; trunks: CarrierTrunk[] };
@@ -22,11 +24,19 @@ function text(value: unknown, field: string, max = 200, required = false) {
   if (typeof value !== 'string' || value.length > max || /[\r\n\0]/.test(value) || required && !value.trim()) throw new CarrierTrunkError(400, `Invalid ${field}.`);
   return value.trim();
 }
+function validHost(value: string) {
+  return isIP(value) === 4 || /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$/.test(value);
+}
+function optionalDirection(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'boolean') throw new CarrierTrunkError(400, 'Invalid call direction.');
+  return value;
+}
 export function normalizeCarrierTrunk(input: Record<string, unknown>, organizationId: string): Omit<CarrierTrunk, 'revision' | 'updatedAt'> {
   const id = text(input.id, 'trunk ID', 36, true);
   if (!idPattern.test(id)) throw new CarrierTrunkError(400, 'Invalid trunk ID.');
   const server = text(input.server, 'SIP server', 253, true);
-  if (isIP(server) !== 4 && !/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$/.test(server)) throw new CarrierTrunkError(400, 'Enter an IPv4 address or hostname for the SIP server.');
+  if (!validHost(server)) throw new CarrierTrunkError(400, 'Enter an IPv4 address or hostname for the SIP server.');
   const publicIp = text(input.publicIp, 'public IP', 15, true);
   if (isIP(publicIp) !== 4) throw new CarrierTrunkError(400, 'Enter a valid public IPv4 address.');
   const port = Number(input.port);
@@ -46,7 +56,15 @@ export function normalizeCarrierTrunk(input: Record<string, unknown>, organizati
     return { inboundNumber, callerId: `+${callerId}`, destinationType: destinationType as CarrierNumber['destinationType'], destinationId };
   });
   if (new Set(numbers.map(item => item.inboundNumber)).size !== numbers.length || new Set(numbers.map(item => item.callerId)).size !== numbers.length) throw new CarrierTrunkError(400, 'Each number must appear only once.');
-  return { id, organizationId, status: 'draft', name: text(input.name, 'trunk name', 100, true), provider: text(input.provider, 'provider', 100, true), accountReference: text(input.accountReference, 'account reference', 100), server, port, transport: input.transport as CarrierTrunk['transport'], publicIp, hostingProvider: text(input.hostingProvider, 'hosting provider', 100), authentication: input.authentication as CarrierTrunk['authentication'], username: text(input.username, 'SIP username', 100), numbers, notes: text(input.notes, 'notes', 500) };
+  const mainNumber = text(input.mainNumber, 'main trunk number', 16).replace(/^\+/, '');
+  if (mainNumber && !numbers.some(item => item.inboundNumber === mainNumber)) throw new CarrierTrunkError(400, 'The main trunk number must be in the DID list.');
+  const outboundProxy = text(input.outboundProxy, 'outbound proxy', 253);
+  if (outboundProxy && !validHost(outboundProxy)) throw new CarrierTrunkError(400, 'Enter an IPv4 address or hostname for the outbound proxy.');
+  const outboundProxyPort = input.outboundProxyPort === undefined ? 5060 : Number(input.outboundProxyPort);
+  if (!Number.isInteger(outboundProxyPort) || outboundProxyPort < 1 || outboundProxyPort > 65535) throw new CarrierTrunkError(400, 'Invalid outbound proxy port.');
+  const channelLimit = input.channelLimit === undefined || input.channelLimit === null || input.channelLimit === '' ? null : Number(input.channelLimit);
+  if (channelLimit !== null && (!Number.isInteger(channelLimit) || channelLimit < 1 || channelLimit > 10000)) throw new CarrierTrunkError(400, 'Enter a simultaneous call limit from 1 to 10000.');
+  return { id, organizationId, status: 'draft', name: text(input.name, 'trunk name', 100, true), provider: text(input.provider, 'provider', 100, true), accountReference: text(input.accountReference, 'account reference', 100), server, port, transport: input.transport as CarrierTrunk['transport'], publicIp, hostingProvider: text(input.hostingProvider, 'hosting provider', 100), authentication: input.authentication as CarrierTrunk['authentication'], username: text(input.username, 'SIP username', 100), mainNumber, outboundProxy, outboundProxyPort, channelLimit, inboundEnabled: optionalDirection(input.inboundEnabled), outboundEnabled: optionalDirection(input.outboundEnabled), numbers, notes: text(input.notes, 'notes', 500) };
 }
 
 type Storage = {
