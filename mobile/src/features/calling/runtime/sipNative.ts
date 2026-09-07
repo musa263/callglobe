@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { api } from '../../../shared/api';
 import type { SipStackConfig } from '../engine/sipStack';
 import { bindCallUi, type CallUiEventSource, type NativeCallUi } from '../engine/callUi';
-import { SipEventBus, SipStackBridge } from '../engine/sipBridge';
+import { SipEventBus, SipStackBridge, SipRegistrationDeferredError } from '../engine/sipBridge';
 import { SipVoiceClient } from '../engine/sipCallEngine';
 
 /**
@@ -104,9 +104,12 @@ export function ensureSipRegistration(forceRenew = false): Promise<number> {
       await SecureStore.deleteItemAsync(sipSessionKey);
       throw new Error('Calling session changed.');
     }
-    await registerVocivoSip(cached.config);
+    const applied = await registerVocivoSip(cached.config);
     if (epoch !== registrationEpoch) throw new Error('Calling session changed.');
-    return Math.max(0, (cached.expiresAt - Date.now()) / 1000);
+    const lifetime = Math.max(0, (cached.expiresAt - Date.now()) / 1000);
+    // Keep the issued generation cached, but retry its application soon once
+    // calls end instead of treating its full lifetime as already installed.
+    return applied ? lifetime : Math.min(30, lifetime);
   })().finally(() => { registrationRequest = null; });
   return registrationRequest;
 }
@@ -150,10 +153,21 @@ export async function registerVocivoSip(config: {
 }) {
   if (registeredConfig && registeredConfig.username === config.username && registeredConfig.password === config.password && registeredConfig.domain === config.domain) {
     await ensureBridge().bridge.refresh();
-    return;
+    return true;
   }
-  await ensureBridge().bridge.register(config);
+  const sipBridge = ensureBridge().bridge;
+  try {
+    await sipBridge.register(config);
+  } catch (error) {
+    if (!(error instanceof SipRegistrationDeferredError)) throw error;
+    // The server has replaced this device's password already. Renew auth on
+    // the existing engine, retaining its dialog/media until full replacement
+    // (including any new ICE settings) is safe after the call ends.
+    await sipBridge.updateCredentials(config);
+    return false;
+  }
   registeredConfig = config;
+  return true;
 }
 
 export async function unregisterVocivoSip() {

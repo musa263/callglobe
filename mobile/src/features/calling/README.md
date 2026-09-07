@@ -121,3 +121,12 @@ The pinned React Native 0.81.5 patch preserves the `nativeviewconfig` header
 subdirectory for static CocoaPods builds. The Telnyx compatibility patch declares
 stored ICE servers after the completed `useTrickleIce` expression; clean dependency
 installation must apply these patches before producing a native bundle.
+
+Credential replacement is checked again inside `SipStackBridge.register`, after
+any pending HTTP lookup. A call arriving during renewal prevents engine teardown.
+The existing SIP.js user agent receives the new password for subsequent Digest
+requests; a late rejection from an older password generation remains recoverable.
+Identity and WebSocket destination cannot change in place. New ICE settings stay
+cached until calls end, with a short application retry. Explicit sign-out still
+terminates calls. Bootstrap race tests and a real installed-SIP.js Digest test
+cover this path; handset acceptance requires the updated mobile build.

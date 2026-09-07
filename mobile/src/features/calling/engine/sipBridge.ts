@@ -104,6 +104,14 @@ export type SipStackBridgeOptions = {
   events: SipEventBus;
 };
 
+/** A late credential response must not dispose a call that started meanwhile. */
+export class SipRegistrationDeferredError extends Error {
+  constructor() {
+    super('SIP credential replacement is deferred until current calls end.');
+    this.name = 'SipRegistrationDeferredError';
+  }
+}
+
 export class SipStackBridge implements NativeSipBridge {
   private readonly createStack: SipStackFactory;
   private readonly events: SipEventBus;
@@ -118,6 +126,11 @@ export class SipStackBridge implements NativeSipBridge {
   }
 
   async register(config: SipStackConfig) {
+    // Check at the mutation boundary, after any caller's asynchronous fetch.
+    // Foreground-only checks cannot protect calls arriving during that fetch.
+    if ([...this.sessions.values()].some(session => !session.terminal)) {
+      throw new SipRegistrationDeferredError();
+    }
     const generation = ++this.registrationGeneration;
     // Tear down without announcing a disconnection: re-registering must not
     // flash the UI through "signed out" on its way to "connected".
@@ -173,6 +186,12 @@ export class SipStackBridge implements NativeSipBridge {
       console.warn('Vocivo SIP refresh failed', describe(error));
       throw error;
     }
+  }
+
+  async updateCredentials(config: SipStackConfig) {
+    const stack = this.requireStack();
+    if (!stack.updateCredentials) throw new Error('Live SIP credential renewal is unavailable.');
+    await stack.updateCredentials(config);
   }
 
   private async teardown() {
