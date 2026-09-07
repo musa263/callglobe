@@ -219,5 +219,11 @@ permissions or PBX routes. No response can mean carrier filtering or lack of
 OPTIONS support; a response does not prove authorized calls or two-way media.
 An expected IP in the portal cannot change the network source IP of another host.
 
+Set `customer_ssh_via_edge=true` when customer SSH is restricted to the existing
+Vocivo edge. The runner uses that edge as an SSH jump host; its private operations
+key stays on the runner and SSH agent forwarding is not enabled. A reachable
+host can still reject that identity. Provisioning access or changing a firewall
+requires separate authorization; the diagnostic workflow does neither.
+
 Run `python3 -m unittest discover -s services/sip/tests -p test_carrier_connectivity.py`
 for the bounded-probe tests; those tests use socket fixtures.

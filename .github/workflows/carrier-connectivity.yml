@@ -15,6 +15,10 @@ on:
         description: Customer public IPv4 address expected by the carrier
         required: true
         type: string
+      customer_ssh_via_edge:
+        description: Reach the customer SSH host through the existing Vocivo edge
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -34,6 +38,7 @@ jobs:
           CARRIER_IP: ${{ inputs.carrier_ip }}
           CARRIER_PORT: ${{ inputs.carrier_port }}
           EXPECTED_IP: ${{ inputs.expected_public_ip }}
+          VIA_EDGE: ${{ inputs.customer_ssh_via_edge }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -54,8 +59,17 @@ jobs:
           ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$HOST" \
             python3 - "$CARRIER_IP" "$CARRIER_PORT" "$EXPECTED_IP" < services/sip/tests/carrier_connectivity.py
           echo 'Checking access to the customer public-IP host (no configuration changes)'
-          if ssh-keyscan -T 10 -H "$EXPECTED_IP" >> ~/.ssh/known_hosts 2>/dev/null; then
-            ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$EXPECTED_IP" \
+          proxy_args=()
+          if [ "$VIA_EDGE" = 'true' ]; then
+            # The private operations key stays on the runner; no agent forwarding.
+            proxy_args=(-o "ProxyCommand=ssh -i $HOME/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 -W %h:%p $SSH_USER@$HOST")
+            ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$HOST" \
+              "ssh-keyscan -T 10 -H '$EXPECTED_IP'" >> ~/.ssh/known_hosts 2>/dev/null || true
+          else
+            ssh-keyscan -T 10 -H "$EXPECTED_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          if ssh-keygen -F "$EXPECTED_IP" >/dev/null; then
+            ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 "${proxy_args[@]}" "$SSH_USER@$EXPECTED_IP" \
               python3 - "$CARRIER_IP" "$CARRIER_PORT" "$EXPECTED_IP" < services/sip/tests/carrier_connectivity.py \
               || echo 'Customer host is not accessible with the configured operations identity.'
           else
