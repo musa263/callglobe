@@ -1,0 +1,27 @@
+name: SIP connectivity diagnostics
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ops-droplet-sip
+  cancel-in-progress: false
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect SIP connectivity
+        env:
+          OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
+          HOST: ${{ secrets.SIP_EDGE_HOST }}
+          SSH_USER: ${{ vars.OPS_SSH_USER || 'root' }}
+        run: |
+          set -euo pipefail
+          test -n "$OPS_SSH_KEY" && test -n "$HOST"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OPS_SSH_KEY" > ~/.ssh/ops_key
+          chmod 600 ~/.ssh/ops_key
+          ssh-keyscan -T 10 -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" python3 - < services/sip/tests/connectivity_report.py
