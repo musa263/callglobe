@@ -36,3 +36,12 @@ Regression: `node --import tsx scripts/test-admin-workspaces.mjs` from `frontend
 with `VOCIVO_TEST_ORIGIN` set to the local Vite URL and `PLAYWRIGHT_MODULE` set if
 Playwright is installed outside this project. All APIs are intercepted. This
 tests two real console tabs, not production carrier calls or production storage.
+
+`numbers/CarrierTrunksPanel.jsx` adds editable company carrier configuration to
+SIP trunks. It uses the captured workspace API and remounts when the company
+changes. Each number has its own destination selector and can remain unassigned.
+The panel labels saved configuration **Pending activation** because this form
+does not provision the SIP edge. Authentication is explicitly unconfirmed until
+the administrator selects the provider's method; the account reference is separate.
+Browser acceptance covers create, reopen, edit and retention of independent
+number destinations. Carrier call acceptance remains a separate gate.
