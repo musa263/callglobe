@@ -30,6 +30,10 @@ def main():
     print("Container state")
     for name in ["sip-freeswitch-1", "sip-rtpengine-1", "vocivo-receptionist", "vocivo-tts"]:
         print(name, run(["docker", "inspect", "--format", "{{.Config.Image}} {{.Created}} {{.State.Status}}", name]).strip())
+    print("RTP engine runtime ports")
+    args = run(["docker", "inspect", "--format", "{{json .Args}}", "sip-rtpengine-1"])
+    for flag in re.findall(r"--(?:port-min|port-max|interface|timeout|silent-timeout)=[^\s\",]+", args):
+        print(flag)
     print("Receptionist stages (last 2 hours; silence polling excluded)")
     logs = run(["docker", "logs", "--since", "2h", "--tail", "20000", "vocivo-receptionist"])
     lines = [line for line in logs.splitlines() if call[:8] in line and "nothing yet" not in line]
@@ -41,15 +45,13 @@ def main():
     paths = set()
     for line in selected:
         paths.update(re.findall(r"/var/lib/vocivo-receptionist/prompts/[a-f0-9]{32,64}\.wav", line))
-        if re.search(r"playback|Audio|RTP|rtp|Codec|codec|SDP|socket|Hangup|New Channel|xml_curl|File|ERR\]|CRIT\]|displace", line) and not re.search(r"Authorization|secret|sip_auth|api_key|execute-app-arg.*text", line, re.I):
+        if re.search(r"playback|Audio|RTP|rtp|Codec|codec|SDP|socket|Hangup|New Channel|xml_curl|File|ERR\]|CRIT\]|displace", line) and not re.search(r"Authorization|secret|sip_auth|api_key|execute-app-arg.*text|Raw Codec Activated|Push codec|Restore previous codec", line, re.I):
             print(redact(line))
     print("SDP media fields from this channel (keys/identities excluded)")
-    in_sdp = False
-    for line in fs.splitlines():
-        if re.match(r"^[a-f0-9]{8}-", line):
-            in_sdp = call in line and "SDP" in line
-        elif in_sdp and re.match(r"^(c=|m=|a=rtpmap:|a=sendrecv|a=sendonly|a=recvonly|a=inactive)", line.strip()):
-            print(line.strip())
+    for line in selected:
+        content = line.removeprefix(call).strip()
+        if re.match(r"^(c=|m=|a=rtpmap:|a=sendrecv|a=sendonly|a=recvonly|a=inactive)", content):
+            print(content)
     print("Playback asset checks (PCM statistics only)")
     # Read the exact files referenced by this call, within the shared prompt
     # volume. Never read arbitrary paths or output caller audio/transcripts.

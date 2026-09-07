@@ -191,3 +191,13 @@ responses return SIP 503, without minting another nonce or advertising a passwor
 challenge. Only a valid HTTP 403 / `ok:false` response reaches Digest recovery.
 The loopback auth phase of `validate_edge.py` exercises these production routes,
 including timeout/recovery, stale nonce, and malformed or inconsistent responses.
+
+## Inbound audio diagnostics
+
+The `Inbound audio diagnostics` workflow accepts a FreeSWITCH channel UUID.
+It reads the retained call log, receptionist stages, runtime RTP port range,
+selected SDP media fields and PCM statistics for the exact greeting files used.
+It does not place calls, restart services, alter routing or export caller audio.
+Missing retained logs are reported as missing evidence. File energy and playback
+commands do not establish that RTP reached the caller; confirm with a handset
+and, where necessary, live media counters or a scoped capture.
