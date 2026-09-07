@@ -160,3 +160,13 @@ test('a cancelled or unanswered relayed call is a missed call, and junk is ignor
   assert.equal(parseKamailioCdr({ source: 'kamailio', event: 'bye', callId: 'c', at: 'soon' }), null);
   assert.equal(parseKamailioCdr({ variables: { uuid: 'x' } }), null, 'a FreeSWITCH record is not a Kamailio one');
 });
+
+test('out-of-range CDR timestamps are unreadable records, not endlessly retried exceptions', () => {
+  for (const at of ['1e100', '8640000000001', 'Infinity']) {
+    assert.equal(parseKamailioCdr({ source: 'kamailio', event: 'invite', callId: 'bad-time', at }), null);
+    assert.equal(parseSipCdr(record({ uuid: 'bad-time', start_epoch: at })), null);
+  }
+  const fallback = parseSipCdr(record({ uuid: 'fallback', start_uepoch: '1e100', start_epoch: '1756900000', end_epoch: '1e100' }));
+  assert.equal(fallback?.startedAt, '2025-09-03T11:46:40.000Z');
+  assert.equal(fallback?.endedAt, fallback?.startedAt);
+});

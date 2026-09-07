@@ -87,3 +87,21 @@ test.each(['ios', 'android'])('%s registration persists its installation identit
   expect(secureValues.has('vocivo.secure.sip-session.v1')).toBe(false);
   expect(secureValues.get('vocivo.secure.sip-device.v1')).toBe(device.deviceId);
 });
+
+test('an old week-long SIP cache with expired TURN is renewed before bootstrap', async () => {
+  const expiredIce = [{ urls: 'turn:relay.example:3478', username: `${Math.floor(Date.now() / 1000) - 1}:employee`, credential: 'old-turn' }];
+  cache({ sessionToken: 'signed-session-a', config: { ...config, iceServers: expiredIce }, expiresAt: Date.now() + 7 * 86400_000 });
+  await ensureSipRegistration();
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(createSipJsStack).toHaveBeenCalledWith(expect.objectContaining({ iceServers: config.iceServers }), expect.anything());
+});
+
+test('cached TURN expiry bounds the next scheduled configuration refresh', async () => {
+  const expiry = Math.floor(Date.now() / 1000) + 120;
+  const iceServers = [{ urls: 'turn:relay.example:3478', username: `${expiry}:employee`, credential: 'turn' }];
+  cache({ sessionToken: 'signed-session-a', config: { ...config, iceServers }, expiresAt: Date.now() + 7 * 86400_000 });
+  const lifetime = await ensureSipRegistration();
+  expect(api.post).not.toHaveBeenCalled();
+  expect(lifetime).toBeLessThanOrEqual(120);
+  expect(lifetime).toBeGreaterThan(100);
+});

@@ -59,6 +59,16 @@ export function ensureSipRegistration(forceRenew = false): Promise<number> {
     let cached: CachedSipSession | null = null;
     try { cached = raw ? JSON.parse(raw) : null; }
     catch { console.warn('[Vocivo SIP] Ignoring invalid secure session cache'); }
+    // Older releases cached a seven-day SIP password with a one-hour TURN grant.
+    // Honor the embedded coturn REST deadline even for those existing caches.
+    if (cached && Number.isFinite(cached.expiresAt)) {
+      for (const server of cached.config?.iceServers || []) {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        if (urls.some(url => /^turns?:/i.test(url)) && /^\d+:/.test(server.username || '')) {
+          cached.expiresAt = Math.min(cached.expiresAt, Number(server.username!.split(':')[0]) * 1000);
+        }
+      }
+    }
     if (forceRenew || cached?.sessionToken !== sessionToken || !cached?.deviceId || !cached?.credentialId || !cached?.config?.password || !Number.isFinite(cached?.expiresAt) || Date.now() >= cached!.expiresAt - 30_000) cached = null;
     if (!cached) {
       const deviceId = await SecureStore.getItemAsync(sipDeviceKey);
