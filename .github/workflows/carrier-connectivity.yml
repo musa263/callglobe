@@ -1,0 +1,63 @@
+name: Carrier connectivity diagnostics
+on:
+  workflow_dispatch:
+    inputs:
+      carrier_ip:
+        description: Carrier SIP IPv4 address
+        required: true
+        type: string
+      carrier_port:
+        description: Carrier SIP UDP port
+        required: true
+        default: '5060'
+        type: string
+      expected_public_ip:
+        description: Customer public IPv4 address expected by the carrier
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: ops-droplet-sip
+  cancel-in-progress: false
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe without placing calls or modifying services
+        env:
+          OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
+          HOST: ${{ secrets.SIP_EDGE_HOST }}
+          SSH_USER: ${{ vars.OPS_SSH_USER || 'root' }}
+          CARRIER_IP: ${{ inputs.carrier_ip }}
+          CARRIER_PORT: ${{ inputs.carrier_port }}
+          EXPECTED_IP: ${{ inputs.expected_public_ip }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import ipaddress, os
+          for name in ['CARRIER_IP', 'EXPECTED_IP']:
+              value = os.environ[name]
+              assert str(ipaddress.IPv4Address(value)) == value
+              assert ipaddress.IPv4Address(value).is_global
+          assert os.environ['CARRIER_PORT'].isdigit()
+          assert 1 <= int(os.environ['CARRIER_PORT']) <= 65535
+          PY
+          test -n "$OPS_SSH_KEY" && test -n "$HOST"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OPS_SSH_KEY" > ~/.ssh/ops_key
+          chmod 600 ~/.ssh/ops_key
+          ssh-keyscan -T 10 -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo 'Testing from the current Vocivo SIP server'
+          ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$HOST" \
+            python3 - "$CARRIER_IP" "$CARRIER_PORT" "$EXPECTED_IP" < services/sip/tests/carrier_connectivity.py
+          echo 'Checking access to the customer public-IP host (no configuration changes)'
+          if ssh-keyscan -T 10 -H "$EXPECTED_IP" >> ~/.ssh/known_hosts 2>/dev/null; then
+            ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$EXPECTED_IP" \
+              python3 - "$CARRIER_IP" "$CARRIER_PORT" "$EXPECTED_IP" < services/sip/tests/carrier_connectivity.py \
+              || echo 'Customer host is not accessible with the configured operations identity.'
+          else
+            echo 'Customer host SSH port did not return a host key.'
+          fi
