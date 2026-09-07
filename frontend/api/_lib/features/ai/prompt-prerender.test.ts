@@ -73,3 +73,8 @@ test('sentences are split the way the receptionist speaks them', () => {
   assert.equal(parts.length, 8);
   assert.ok(parts[parts.length - 1].endsWith('Sentence number 19 is here.'));
 });
+
+test('prewarming preserves titles and numbered sentences like the Python runtime', () => {
+  assert.deepEqual(splitSpokenSentences('Please speak to Dr. Samantha Jones. She is available.'), ['Please speak to Dr. Samantha Jones.', 'She is available.']);
+  assert.deepEqual(splitSpokenSentences('Choose option 1. Then wait here.'), ['Choose option 1. Then wait here.']);
+});

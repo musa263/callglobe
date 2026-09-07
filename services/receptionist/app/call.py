@@ -32,6 +32,24 @@ class CallHandler:
         self._filler_index = 0
 
     async def handle(self, connection: EslConnection) -> None:
+        try:
+            await self._handle(connection)
+        except asyncio.CancelledError:
+            await self._release(connection)
+            raise
+        except Exception:
+            log.exception("call setup or finalization failed")
+            await self._release(connection)
+        finally:
+            await connection.close()
+
+    async def _release(self, connection: EslConnection) -> None:
+        try:
+            await asyncio.wait_for(connection.hangup(), timeout=3)
+        except Exception:
+            log.warning("call release failed; closing Event Socket")
+
+    async def _handle(self, connection: EslConnection) -> None:
         channel = await connection.connect()
         call_id = connection.uuid
         caller = channel_variable(channel, "Caller-Caller-ID-Number", "caller_id_number", "sip_from_user")
@@ -41,16 +59,8 @@ class CallHandler:
         assistant = await self._api.assistant_for(dialled, caller)
         if assistant is None:
             log.warning("call %s has no receptionist; releasing the call", call_id[:8])
-            try:
-                await connection.hangup("NO_ROUTE_DESTINATION")
-            finally:
-                await connection.close()
+            await connection.hangup("NO_ROUTE_DESTINATION")
             return
-
-        # Everything this receptionist may say besides the greeting and the
-        # model's answers is rendered now, in the background, so none of it is
-        # a cold render later in the call.
-        prerender = asyncio.create_task(self._voice.prerender([*CANNED.values(), *FILLERS], assistant.voice))
 
         if channel_variable(channel, "Answer-State").lower() != "answered":
             await connection.execute("answer")
@@ -82,6 +92,11 @@ class CallHandler:
         outcome = "completed"
         transferred_to = ""
         notes: list[str] = []
+
+        # Everything this receptionist may say besides the greeting and the
+        # model's answers is rendered now, in the background, so none of it is
+        # a cold render later in the call.
+        prerender = asyncio.create_task(self._voice.prerender([*CANNED.values(), *FILLERS], assistant.voice))
 
         pending_audio = b""
         try:
@@ -222,12 +237,16 @@ class CallHandler:
                     await connection.hangup()
             else:
                 await connection.hangup()
+        except asyncio.CancelledError:
+            outcome = "caller_hung_up" if connection.hungup.is_set() else "error"
+            raise
         except EslProtocolError as error:
-            # The socket went away under us: FreeSWITCH dropped the channel
-            # because the caller hung up (the hangup event can lose the race
-            # with the command in flight). Not a failure of ours.
-            log.info("call %s: the caller hung up mid-turn (%s)", call_id[:8], error)
-            outcome = "caller_hung_up"
+            if connection.hungup.is_set():
+                outcome = "caller_hung_up"
+            else:
+                log.warning("call %s ESL command failed", call_id[:8])
+                outcome = "error"
+                await self._release(connection)
         except Exception as error:  # noqa: BLE001 - never leave a caller on a dead line
             log.exception("call %s failed: %s", call_id[:8], error)
             outcome = "error"
@@ -250,8 +269,8 @@ class CallHandler:
                     "transcript": conversation.transcript(),
                     "note": "\n".join(notes),
                 })
-            finally:
-                await connection.close()
+            except Exception:
+                log.exception("call %s transcript could not be filed", call_id[:8])
 
     # -- the two halves of a turn ---------------------------------------
 
@@ -373,7 +392,17 @@ class CallHandler:
         # Disable FreeSWITCH's file pre-buffer so the reader sees short frames.
         await connection.set("enable_file_write_buffering", "false")
         await connection.set("RECORD_STEREO", "false")
-        await connection.execute("record_session", f"{path} 120", timeout=5)
+        try:
+            await connection.execute("record_session", f"{path} 120", timeout=5)
+        except EslProtocolError:
+            self._discard(path)
+            if connection.hungup.is_set():
+                return None, b""
+            log.warning("call %s cannot start interruption capture; using sequential playback", connection.uuid[:8])
+            return await respond(), b""
+        except BaseException:
+            self._discard(path)
+            raise
         incoming = IncomingSpeech(path, self._settings, connection.hungup)
         capture = asyncio.create_task(incoming.capture())
         onset = asyncio.create_task(incoming.started.wait())
