@@ -16,6 +16,7 @@ import {
   type SessionDescriptionHandlerOptions as WebSessionDescriptionHandlerOptions,
 } from 'sip.js/lib/platform/web';
 import { createRegistrationKeeper } from './sipRegistrationKeeper';
+import { rotateSipPassword } from './sipCredentialRotation';
 import { terminationDeadline } from '../state/terminationDeadline';
 import type {
   SipDisposition,
@@ -321,6 +322,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     },
   });
 
+  let credentialVersion = 0;
   const registerer = new Registerer(userAgent, { expires: 600 });
   const registrationListener = (state: RegistererState) => {
     if (state === RegistererState.Registered) keeper.onRegistered();
@@ -339,13 +341,20 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     isPending: (error) => error instanceof RequestPendingError,
     notify: (state, reason) => onRegistration?.(state, reason),
     schedule: options.schedule,
-    register: () => registerer.register({
-      requestDelegate: {
-        onReject: (response) => {
-          keeper.onRejected(response.message.statusCode ?? 503, response.message.reasonPhrase || 'Registration rejected');
+    register: () => {
+      const version = credentialVersion;
+      return registerer.register({
+        requestDelegate: {
+          onReject: (response) => {
+            if (version !== credentialVersion) {
+              keeper.onRejected(503, 'Retrying registration with renewed credentials');
+              return;
+            }
+            keeper.onRejected(response.message.statusCode ?? 503, response.message.reasonPhrase || 'Registration rejected');
+          },
         },
-      },
-    }).then(() => undefined),
+      }).then(() => undefined);
+    },
   });
 
   return {
@@ -372,6 +381,11 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     },
 
     refresh: () => keeper.refresh(),
+
+    updateCredentials: async (next) => {
+      if (rotateSipPassword(userAgent, config, next)) credentialVersion += 1;
+      await keeper.refresh();
+    },
 
     invite: async (target, headers) => {
       const targetUri = UserAgent.makeURI(target.includes('@') ? `sip:${target.replace(/^sip:/, '')}` : `sip:${target}@${config.domain}`);

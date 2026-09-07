@@ -17,12 +17,12 @@ const device = { deviceId: 'iphone-installation-1234', credentialId: 'credential
 const response = { ...config, ...device, expires_in: 3600, ice_servers: config.iceServers };
 const secureValues = new Map<string, string>();
 function cache(value: object) { secureValues.set('vocivo.secure.sip-session.v1', JSON.stringify({ ...device, ...value })); }
-let stack: { start: jest.Mock; stop: jest.Mock; refresh: jest.Mock; onRegistrationChange: jest.Mock; onInvitation: jest.Mock };
+let stack: { updateCredentials: jest.Mock; start: jest.Mock; stop: jest.Mock; refresh: jest.Mock; onRegistrationChange: jest.Mock; onInvitation: jest.Mock };
 
 beforeEach(() => {
   jest.clearAllMocks();
   (Platform as { OS: string }).OS = 'ios';
-  stack = { start: jest.fn(async () => undefined), stop: jest.fn(async () => undefined), refresh: jest.fn(async () => undefined), onRegistrationChange: jest.fn(), onInvitation: jest.fn() };
+  stack = { updateCredentials: jest.fn(async () => undefined), start: jest.fn(async () => undefined), stop: jest.fn(async () => undefined), refresh: jest.fn(async () => undefined), onRegistrationChange: jest.fn(), onInvitation: jest.fn() };
   (api.getSessionToken as jest.Mock).mockResolvedValue('signed-session-a');
   (api.post as jest.Mock).mockResolvedValue(response);
   secureValues.clear();
@@ -119,5 +119,41 @@ test('a forced network renewal is not lost behind cached foreground bootstrap', 
   const repeated = ensureSipRegistration(true);
   finish();
   await Promise.all([boot,renewal,repeated]);
+  expect(api.post).toHaveBeenCalledTimes(1);
+});
+
+test('a credential response arriving after an incoming call cannot replace its live stack', async () => {
+  cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
+  await ensureSipRegistration();
+  let finish!: (value: typeof response) => void;
+  (api.post as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const renewal = ensureSipRegistration(true);
+  while (!finish) await Promise.resolve();
+
+  let stateChanged!: (state: string) => void;
+  const dispose = jest.fn(async () => undefined);
+  const handle = {
+    id: 'incoming-during-renewal', incoming: true, headers: [],
+    remoteDisplayName: 'Colleague', remoteUser: '2000', remoteTarget: 'sip:2000@sip.example',
+    onStateChange: (listener: typeof stateChanged) => { stateChanged = listener; },
+    onProgress: jest.fn(), disposition: () => ({}), peerConnection: () => undefined,
+    accept: jest.fn(), terminate: jest.fn(), dispose,
+  };
+  stack.onInvitation.mock.calls[0][0](handle);
+  stateChanged('Established');
+  finish({ ...response, password: 'rotated-password', credentialId: 'new-generation' });
+  const retryLifetime = await renewal;
+
+  expect(dispose).not.toHaveBeenCalled();
+  expect(stack.stop).not.toHaveBeenCalled();
+  expect(createSipJsStack).toHaveBeenCalledTimes(1);
+  expect(stack.updateCredentials).toHaveBeenCalledWith(expect.objectContaining({ password: 'rotated-password' }));
+  expect(retryLifetime).toBeGreaterThan(0);
+  expect(retryLifetime).toBeLessThanOrEqual(30);
+
+  stateChanged('Terminated');
+  await ensureSipRegistration();
+  expect(createSipJsStack).toHaveBeenCalledTimes(2);
+  expect(createSipJsStack).toHaveBeenLastCalledWith(expect.objectContaining({ password: 'rotated-password' }), expect.anything());
   expect(api.post).toHaveBeenCalledTimes(1);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SipEventBus, SipStackBridge, sessionStateToVoiceState } from './sipBridge';
+import { SipEventBus, SipStackBridge, SipRegistrationDeferredError, sessionStateToVoiceState } from './sipBridge';
 import type { SipDisposition, SipSessionHandle, SipSessionState, SipStack, SipStackConfig } from './sipStack';
 import type { SipEventMap, SipEventName, VoiceInviteHeader } from './voiceEngine';
 import { bindCallUi, type NativeCallUi, type CallUiEventSource } from './callUi';
@@ -415,3 +415,23 @@ test('refresh reaches the stack while registered and is a no-op after sign-out',
   await bridge.refresh();
   assert.equal(state.refreshed, 1, 'a signed-out phone is not brought back');
 });
+
+for (const phase of ['ringing', 'active', 'held'] as const) {
+  test(`credential replacement preserves a ${phase} call and remains possible after hangup`, async () => {
+    const { bridge, fake } = harness();
+    await bridge.register(credentials);
+    const call = new FakeSession('renewal-protected', true);
+    fake.ring(call);
+    if (phase !== 'ringing') call.move('Established');
+    if (phase === 'held') await bridge.hold(call.id, true);
+    const priorActions = [...call.actions];
+    await assert.rejects(bridge.register({ ...credentials, password: 'next' }), SipRegistrationDeferredError);
+    assert.deepEqual(call.actions, priorActions);
+    assert.equal(fake.state.stopped, false);
+    await bridge.hangup(call.id);
+    call.move('Terminated');
+    await bridge.register({ ...credentials, password: 'next' });
+    assert.equal(fake.state.stopped, true);
+    await bridge.unregister();
+  });
+}

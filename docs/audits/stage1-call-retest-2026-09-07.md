@@ -142,3 +142,72 @@ ignored Xcode environment using the canonical entry-file path.
 The additional internal-route wire gate passed in run 34129054266. Final server
 source merge 3d297c7 preserves inbound diagnostics from concurrent commits
 0c6f4b9/a4a4cae. Physical iPhone acceptance remains the next gate.
+
+## Build 61 physical retest — 14:24–14:28 UTC
+
+Build 61 was installed and its version verified with CoreDevice. Production
+`vocivo.app` resolved to Ready deployment `dpl_7VbU5hKhaeN1sNGHWem8muiUCpHM`.
+
+- Foreground call `d5mg8uo5ub1rj9ep7b24`, route `vc_mtrc0549_zbqf5qk4`:
+  initiated 14:24:15, answered 14:24:32, deliberately ended from the browser
+  at 14:26:10. The user confirmed two-way speech and normal handset UI closure.
+  Connected duration was 98 seconds. Initiation-to-answer includes human delay
+  and does not measure the first audible ring.
+- Locked-screen call `d5mg8uccdi9miu60dqqi`, route `vc_mtrc3nne_jymre0tt`:
+  initiated 14:26:59, answered 14:27:15, ended at 14:27:48. The user confirmed
+  prompt ringing, lock-screen answer and two-way audio, but explicitly confirmed
+  that the call disconnected by itself after 33 connected seconds.
+
+Trace run 34133161983 shows browser-side ACK ingress at 14:27:15.681 and
+14:27:16.436, followed by BYE ingress from the handset transport at
+14:27:48.319. An ACK reaching Kamailio does not establish that it reached the
+phone. The approximately 32-second interval is consistent with an ACK timeout,
+but the exact native/transport cause is not yet proven. No timer or security
+check has been disabled on this hypothesis.
+
+Stage 1 physical acceptance remains FAILED. The terminated-state retest has not
+been attempted on build 61. The next step is a private handset-console capture
+and a bounded locked-screen reproduction; CoreDevice cannot launch logging
+until the user unlocks the phone. Android physical acceptance remains unavailable.
+
+## Additional build 61 calls and credential-renewal race
+
+The logged retry `6rs7fe8qb3r8i7nv8m2g` (route `vc_mtrcnr02_pan3nj0g`)
+answered at 14:42:49 and was deliberately ended at 14:46:13 UTC: 204 seconds.
+The user confirmed two-way audio. Its successor `6rs7faffs5gackidt4j0`
+(route `vc_mtrcyw98_526cetnb`) answered at 14:51:26 and ended at 14:52:05,
+after 39 seconds; the user again confirmed an unexpected disconnect. Trace
+34135463209 shows ACK ingress and handset-side BYE. Variable duration weakens
+the initial fixed ACK-timeout hypothesis; ingress ACK alone remains insufficient.
+
+A further call `6rs7fj1bd3nugebu3lkn` (route `vc_mtrdcrs8_w3fu4wm6`)
+answered at 15:02:25 and was deliberately ended at 15:07:02: 277 seconds.
+Browser signaling stayed established; the separate audio-confirmation question
+was still unanswered when this record was written. The physical iPhone Console
+stream showed SIP transport unavailable/internal 503 at 15:02:11, before answer.
+Earlier Console observations came from a similarly named simulator and must
+not be treated as physical-device evidence. Device selection was corrected to
+`iPhone`, matching CoreDevice's verified name, before the final call.
+
+A controlled bootstrap regression reproduced a distinct call-disposal race:
+start a credential HTTP request while idle, accept an incoming call before the
+response completes, then deliver the new password. The original code disposes
+the live session and stops its engine. Checking call state only before the
+HTTP request is insufficient.
+
+The bridge now rejects engine replacement while ringing, active, or held calls
+exist. The runtime updates authentication on the existing SIP.js user agent,
+since the server has already replaced the device's old password, and retains
+the full new configuration for application after calls end. It returns a short
+retry lifetime. A rejection from an older in-flight password generation remains
+recoverable; a rejection using the current generation retains normal denial
+handling. Sign-out still disposes calls. Identity/transport changes are refused
+by in-place password rotation.
+
+The new race test failed before the fix and passed afterward. An installed
+SIP.js test verifies old/new Digest responses and unchanged core/transport.
+The full gate passed: 412 backend/web, 147 mobile unit, 55 mobile integration
+(614 total), typechecks and web build. Release iPhone build 62 compiled and
+passed deep/strict signature verification. This fixes a reproduced code defect;
+it is not yet proof of the cause or resolution of every physical hangup.
+Build 62 installation and repeat-call acceptance remain required.
