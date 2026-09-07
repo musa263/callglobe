@@ -45,18 +45,17 @@ UDP, TCP and WebSocket probes cover valid requests, missing required headers,
 CSeq errors, exhausted hop counts and the WebSocket Content-Length exception.
 The temporary container is removed on success or failure. Ports must be free.
 
-The ingress probes do not exercise authentication, downstream routing, media,
-or native client behavior.
-It needs no production credentials and does not deploy anything.
+The delivery phase also exercises registrar and transaction routing with local
+SIP peers, including delayed registration, answer/ACK/BYE, cancellation, and
+expiry. It replaces admission and media with fixtures; it does not prove live
+authentication, RTP, carrier routing, or native behavior. It needs no production
+credentials and does not deploy anything.
 
-The gate also runs the production extension-delivery routes on loopback UDP
-port 15061, with local test peers and admission/media replaced by fixtures.
-It reproduces the previous suspended-transaction failure, then checks 180
-Ringing, 200/ACK/BYE, receivers registering after 9/20/40 seconds, a late second
-device, duplicate registration, concurrent callers, CANCEL, and expiry.
-These signaling tests do not prove WebRTC audio or native push delivery.
+The gate reproduces the previous suspended-transaction failure before testing
+180 Ringing, 200/ACK/BYE, registration after 9/20/40 seconds, late second-device
+delivery, duplicate registration, concurrent callers, CANCEL, and expiry.
 
-### Extension ringback and answer delivery
+## Extension ringback and answer delivery
 
 An already-registered receiver is relayed immediately. Only calls with no
 contact are suspended while push wakes a device. REGISTER drains the AOR's
@@ -75,6 +74,7 @@ context, which would delete the already-created media offer.
 WebRTC offers/answers use `rtcp-mux-offer rtcp-mux-require` and
 `UDP/TLS/RTP/SAVPF`. The old `RTCP-MUX` flag was rejected by the running
 rtpengine and did not enforce the requested multiplexing behavior.
+
 
 ## Clients
 
