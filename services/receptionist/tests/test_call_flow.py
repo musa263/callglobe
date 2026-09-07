@@ -249,6 +249,16 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(api.filed[0]["note"], "Call back about the invoice.\nUrgent.")
         self.assertEqual(api.filed[0]["outcome"], "message_taken")
 
+    async def test_persistent_asr_failure_transfers_to_the_tenant_fallback(self):
+        switch, _, api = await self._run(assistant=RECEPTION, turns=['one', 'two', 'three'], decisions=[], transcription_failures=3)
+        self.assertEqual(api.filed[0]['outcome'], 'transferred')
+        self.assertEqual(api.filed[0]['transferredTo'], '1001')
+
+    async def test_idle_watchdog_ends_a_stalled_listening_turn(self):
+        switch, _, api = await self._run(assistant=RECEPTION, turns=[], decisions=[], idle_hangup_seconds=0.03)
+        self.assertEqual(api.filed[0]['outcome'], 'caller_went_quiet')
+        self.assertEqual([app for app, _ in switch.applications].count('hangup'), 1)
+
     async def _run(self, *, assistant: Assistant | None, turns: list[str], decisions: list[Decision], answered: bool = False, model_delay: float = 0.0, transcription_failures: int = 0, idle_hangup_seconds: int = 0, hang_up_when_said: str = ""):
         with TemporaryDirectory() as directory:
             settings = Settings(
@@ -314,7 +324,10 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         # by the time the first was due, so they went to FreeSWITCH as one
         # gapless file_string playback rather than two.
         self.assertGreaterEqual(len(playbacks), 2, "greeting, then the answer")
-        self.assertTrue(any(arg.startswith("file_string://") and arg.count("!") == 1 for _, arg in freeswitch.applications if _ == "playback"), "consecutive ready sentences play as one stream")
+        # The streamed opening now plays before the full decision is ready;
+        # it must not be replayed as part of the final answer.
+        opening = str(voice._dir / f"{voice.said.index('We close at five.') + 1}.wav")
+        self.assertEqual(playbacks.count(opening), 1)
 
         filed = api.filed[0]
         self.assertEqual(filed["outcome"], "completed")
@@ -450,7 +463,8 @@ class CallFlow(unittest.IsolatedAsyncioTestCase):
         records = [app for app, _ in freeswitch.applications if app == "record"]
         self.assertGreaterEqual(len(records), 3, "kept listening through the quiet")
         self.assertNotIn("Sorry, I didn't catch that.", voice.said)
-        self.assertIn("It is. Goodbye.", voice.said)
+        self.assertIn("It is.", voice.said)
+        self.assertIn("Goodbye.", voice.said)
 
 
 if __name__ == "__main__":

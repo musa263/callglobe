@@ -55,8 +55,9 @@ pipelines_lock = threading.Lock()
 synth_lock = threading.Lock()
 # One render per prompt even when several calls ask for the same unseen text
 # at once: the second waits for the first and then reads the cached file.
-render_locks: dict[str, threading.Lock] = {}
-render_locks_guard = threading.Lock()
+# Stable striped locks bound memory without evicting a lock another request
+# has obtained but has not acquired yet. Hash collisions only serialize work.
+render_locks = tuple(threading.Lock() for _ in range(512))
 
 ready = threading.Event()
 warm_error = ""
@@ -206,15 +207,7 @@ def is_cached(request: SpeechRequest) -> bool:
 
 
 def _render_lock(key: str) -> threading.Lock:
-    with render_locks_guard:
-        lock = render_locks.get(key)
-        if lock is None:
-            lock = render_locks[key] = threading.Lock()
-            # Keep the table small: locks are only needed while a render is in flight.
-            if len(render_locks) > 512:
-                for stale in [name for name, held in render_locks.items() if not held.locked()][:256]:
-                    render_locks.pop(stale, None)
-        return lock
+    return render_locks[int(key, 16) % len(render_locks)]
 
 
 def render_to_cache(request: SpeechRequest) -> Path:
@@ -240,7 +233,7 @@ def render_to_cache(request: SpeechRequest) -> Path:
 
 # -- background rendering ------------------------------------------------
 
-prerender_queue: queue.Queue[SpeechRequest] = queue.Queue()
+prerender_queue: queue.Queue[SpeechRequest] = queue.Queue(maxsize=256)
 prerender_pending: set[str] = set()
 prerender_guard = threading.Lock()
 
@@ -253,7 +246,7 @@ def _prerender_worker() -> None:
             if not is_cached(request):
                 render_to_cache(request)
         except Exception as error:  # noqa: BLE001 - a prompt that cannot be pre-rendered is rendered at call time instead
-            log.warning("could not pre-render %r as %s: %s", request.input[:60], request.voice, error)
+            log.warning("could not pre-render %d characters as %s (%s)", len(request.input), request.voice, type(error).__name__)
         finally:
             with prerender_guard:
                 prerender_pending.discard(key)
@@ -339,8 +332,12 @@ def prerender(request: PrerenderRequest, _: None = Depends(authorize)) -> dict:
         with prerender_guard:
             if key in prerender_pending:
                 continue
+            try:
+                prerender_queue.put_nowait(item)
+            except queue.Full:
+                # Prewarming is optional; live requests can still render.
+                continue
             prerender_pending.add(key)
-        prerender_queue.put(item)
         queued += 1
     return {"queued": queued, "cached": cached}
 

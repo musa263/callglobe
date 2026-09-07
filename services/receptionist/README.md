@@ -6,8 +6,9 @@ Every part of a call is handled here except one. FreeSWITCH carries the audio,
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) hears what the
 caller said, and the Kokoro service on the same droplet says the reply. Only
 the language-model turn leaves the machine, as one HTTPS request carrying the
-conversation. Nothing is sent to a carrier, nothing is billed per minute, and
-the recordings and transcripts stay on infrastructure Vocivo controls.
+conversation. Nothing is sent to a carrier, nothing is billed per minute, and temporary caller recordings stay on infrastructure Vocivo controls. The
+conversation text and tenant brief are sent to the configured language-model provider;
+transcripts are also filed to the Vocivo API.
 
 ## How a call runs
 
@@ -67,8 +68,9 @@ FreeSWITCH would otherwise delete. Turns cap at `listen_seconds` (12 s) and end
 sits above a mobile caller's background noise.
 
 **Hallucinated transcripts are dropped.** `drop_hallucinated_transcript`
-discards a transcript that is only the greeting, the business name, a transfer
-target's name or one of Whisper's silence fillers ("Thank you.").
+discards an exact long greeting echo or distinctive video-caption fillers.
+Names, short answers, "Thank you" and "Bye" are retained: text matching alone
+cannot establish that these were hallucinated.
 
 **A transfer nobody answers comes back here.** `_transfer` sets
 `vocivo_from_receptionist=1`; the API's dialplan returns the call with
@@ -80,7 +82,10 @@ conversation lasts as long as the caller needs; the model's `wrap_up` tool says
 goodbye and leaves the line open for the caller to put down. Silence is met
 with two gentle prompts and then patience. The one exception is a line nobody
 has spoken on for `idle_hangup_seconds` (90 s) — a caller who walked away —
-which is released with a goodbye so it does not sit open for an hour.
+which triggers cancellation even during stalled AI work. A best-effort goodbye
+has a three-second budget, following a two-second playback-break budget, and
+hangup has a three-second command budget. These are teardown grace periods,
+not a guarantee of physical release at exactly 90 seconds.
 
 **Answers play without stops.** `_speak` sends every sentence to the voice
 engine at once (two at a time) and, whenever the next sentence is already
@@ -154,3 +159,39 @@ python3 -m unittest discover -s tests
 They cover the Event Socket framing (including a hangup arriving in the middle
 of another command, which must not be lost), the decision the model's response
 maps to, and the guards around transfers.
+
+## AI failure and quality contracts
+
+The model request has a 20-second total deadline, including streamed events.
+Explicit stream errors, missing `message_stop`, and malformed tool JSON enter
+recovery. One transient failure asks the caller to repeat; a second uses the
+allowed open-office fallback. Without one, subsequent caller utterances are
+saved as messages without another model request. The full transcript is retained
+for filing; model context uses at most 40 recent turns, 24,000 characters total,
+and 6,000 per turn. Missing history must be clarified rather than invented.
+
+Text openings play while the model is still generating, and are removed from
+remaining playback without removing them from the transcript. Tool announcements
+wait for decision validation. A TTS failure no longer silently skips required
+speech: it transfers to the authorized fallback or releases the call. Three
+consecutive ASR failures follow the same fallback/release policy.
+
+ASR permits one native inference at a time, with five seconds to acquire a slot
+and a 20-second response deadline. Cancelled inference retains its slot until
+the worker actually exits; its input is owned bytes so recording deletion cannot
+race decoding. This bounds native work; it does not prove hardware capacity.
+
+The idle watchdog resets on accepted caller audio or transcription, including
+barge-in, and never on the assistant's playback. Environment values are clamped
+to 1–90 seconds. VAD false positives remain a handset acceptance concern.
+
+Logs contain call correlation and stage timings, not ordinary transcript text,
+caller numbers or provider response bodies. The first-sentence metric starts at
+the model request; it is not end-to-end first-word latency. Playback timing and
+MOS still require real audio measurements. See
+[the AI quality audit](../../docs/audits/ai-quality-2026-09-07.md).
+
+Use Python 3.11 (the container runtime) or newer for service validation. Tests
+also run without downloading Whisper models; inference and carrier behavior
+are mocked. The new `tests/test_ai_quality.py` covers stream failures, short
+answers, cancellation, context-independent message capture, and early playback.

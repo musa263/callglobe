@@ -25,3 +25,10 @@ what "sounds fake" was.
 
 Run frontend tests, then receptionist/TTS service suites when modifying speech
 flow. Test real playback/transfer separately; a successful JSON reply is not audio.
+
+
+`caller_went_quiet` is a recognized receptionist outcome, not a service error.
+The pre-render phrase list matches the Python canned prompts and fillers.
+Opening-hours descriptions only compress consecutive closed days into ranges.
+The voice quality field is a static catalog grade, not a measured MOS score;
+Spanish, Italian and Portuguese currently have no B- or better catalog fallback.

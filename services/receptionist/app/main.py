@@ -12,6 +12,8 @@ from .esl import EslConnection
 from .speech import Ears, Voice
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# HTTP client info logs include query strings containing caller numbers.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("vocivo.receptionist")
 
 

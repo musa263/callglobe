@@ -311,7 +311,7 @@ function bridgeActions(input: SipDialplanInput, legs: string[], timeoutSeconds: 
     set('hangup_after_bridge', 'true'),
     set('continue_on_fail', 'true'),
     set('ignore_early_media', 'true'),
-    set('call_timeout', String(Math.min(900, Math.max(5, Math.round(timeoutSeconds))))),
+    set('call_timeout', String(Math.min(900, Math.max(1, Math.round(timeoutSeconds))))),
     set('hold_music', holdMusic),
     set('ringback', holdMusic),
     set('transfer_ringback', holdMusic),
@@ -443,10 +443,12 @@ function groupActions(input: SipDialplanInput, kind: GroupKind, id: string, atte
   }
   const maxWait = Math.min(900, Math.max(15, 'maxWait' in group ? group.maxWait || 180 : 180));
   const attempts = Math.max(1, Math.ceil(maxWait / queueAttemptSeconds));
+  const remaining = maxWait - attempt * queueAttemptSeconds;
+  if (remaining <= 0) return transferToStage('after-group', { arg: `${kind}:${id}` });
   const nextAttempt = attempt + 1;
   const actions: Action[] = [];
   if (attempt === 0) actions.push(playback(input, input.business.waitingMessage), set('vocivo_waiting', '1'));
-  actions.push(...bridgeActions(input, members.map(contact), Math.min(queueAttemptSeconds, maxWait), { announceWaiting: false }));
+  actions.push(...bridgeActions(input, members.map(contact), Math.min(queueAttemptSeconds, remaining), { announceWaiting: false }));
   if (nextAttempt < attempts) {
     actions.push(playback(input, input.business.waitingMessage), ...transferToStage('queue', { arg: `${kind}:${id}`, attempt: nextAttempt }));
   } else {

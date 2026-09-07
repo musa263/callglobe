@@ -38,3 +38,10 @@ All but the last require `Authorization: Bearer $TTS_SERVICE_SECRET`.
 ## Tests
 
 `python3 -m unittest discover -s tests` runs against a stub pipeline when Kokoro is not installed, so the HTTP contract and the cache can be checked anywhere.
+
+
+Pre-render admission is capped at 256 queued prompts. When full, optional warmup
+items are skipped and live requests still render on demand. The `queued` count
+reports admitted items. A fixed table of 512 striped locks preserves single
+render ownership even during cache churn; hash collisions serialize work.
+The service tests use a stub voice, not perceptual or MOS validation.

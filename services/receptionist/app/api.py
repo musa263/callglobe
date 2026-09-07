@@ -45,7 +45,7 @@ class VocivoApi:
                 return None
             response.raise_for_status()
         except httpx.HTTPError as error:
-            log.error("could not load the receptionist for %s: %s", number, error)
+            log.error("could not load receptionist (%s)", type(error).__name__)
             return None
         payload: dict[str, Any] = response.json()
         if not payload.get("enabled", True):
@@ -62,4 +62,4 @@ class VocivoApi:
             )
             response.raise_for_status()
         except httpx.HTTPError as error:
-            log.warning("could not file the conversation for %s: %s", payload.get("callId"), error)
+            log.warning("could not file conversation %s (%s)", str(payload.get("callId", ""))[:8], type(error).__name__)

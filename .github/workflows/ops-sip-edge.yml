@@ -59,7 +59,7 @@ on:
         required: false
         type: string
       since:
-        description: logs only — how far back to read (e.g. 30m, 2h; default 30m). Scanner noise is counted, not printed.
+        description: logs/call-trace — how far back to read (e.g. 30m, 2h; defaults 30m for logs, 2h for call-trace). Scanner noise is counted, not printed.
         required: false
         type: string
       rtp_range:
@@ -327,8 +327,8 @@ jobs:
               docker compose exec -T freeswitch sh -c "ls -la /opt/vocivo-fs/sounds/ 2>&1" 2>/dev/null || true
               echo "--- kamailio: call signalling ---"
               docker compose logs -t --since "'"$since"'" --no-color kamailio 2>&1 \
-                | { grep -E "INVITE|BYE|CANCEL|inbound DID|RELAY FS|refusing|reject|sip-cdr|Not here|481|advertis" || echo "(nothing)"; } \
-                | grep -vE "reject (untrusted internal|unauthenticated E.164) INVITE from (?!192\.76\.120\.|64\.16\.250\.|127\.0\.0\.1)|malformed|tcpconn|msg_send" \
+                | { grep -E "INVITE|ACK|BYE|CANCEL|UPDATE|PRACK|inbound DID|RELAY FS|refusing|reject|sip-cdr|Not here|481|advertis" || echo "(nothing)"; } \
+                | awk "!/malformed|tcpconn|msg_send/ && (!/reject (untrusted internal|unauthenticated E.164) INVITE from / || /from (192[.]76[.]120[.]|64[.]16[.]250[.]|127[.]0[.]0[.]1)/)" \
                 | sed -E "s/^([^ ]+) +\| ([0-9T:.-]+)Z? (.*)$/\2 \3/" | cut -c1-240 | tail -60
               echo "--- rtpengine: last errors ---"
               docker compose logs -t --since "'"$since"'" --no-color rtpengine 2>&1 | { grep -iE "error|timeout|closing|deleting" || echo "(nothing)"; } | cut -c1-200 | tail -20
