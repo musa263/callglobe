@@ -133,6 +133,23 @@ class Sweep(unittest.IsolatedAsyncioTestCase):
         finally:
             await connection.close()
 
+    async def test_stalled_esl_writer_is_bounded_and_cannot_be_reused(self):
+        from app.esl import EslProtocolError
+        writer = Mock()
+        writer.drain = AsyncMock(side_effect=asyncio.Event().wait)
+        writer.wait_closed = AsyncMock()
+        connection = EslConnection(asyncio.StreamReader(), writer, reply_timeout=0.01)
+        try:
+            with self.assertRaises(EslProtocolError):
+                await connection.api('status')
+            self.assertTrue(connection.hungup.is_set())
+            with self.assertRaises(EslProtocolError):
+                await connection.api('status')
+            self.assertEqual(writer.write.call_count, 1)
+            writer.close.assert_called()
+        finally:
+            await connection.close()
+
     async def test_optional_capture_rejection_keeps_response_and_removes_partial_file(self):
         from app.esl import EslProtocolError
         with TemporaryDirectory() as directory:
