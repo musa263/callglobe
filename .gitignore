@@ -35,7 +35,6 @@ Thumbs.db
 
 # Logs
 *.log
-backend/supabase/.temp/
 .vercel
 
 # Python bytecode from the self-hosted services

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import bcrypt from 'bcryptjs';
 import { createSession, createTenantAdminSession, setSessionCookies } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, requiredEnv } from '../../../shared/http.js';
-import { readPasswordHash } from '../../numbers/number-config.js';
+import { readPasswordHash } from '../owner-password.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { authenticateTenantAdmin, effectiveEntitlements, readTenantSaasState } from '../../organizations/saas-store.js';
 import { checkLoginRateLimit, clearAccountLoginFailures, recordLoginFailure, requestIp } from '../auth-rate-limit.js';
@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     const expectedEmail = requiredEnv('APP_ADMIN_EMAIL').trim().toLowerCase();
     if (email === expectedEmail) {
-      const passwordHash = await readPasswordHash().catch(() => requiredEnv('APP_PASSWORD_HASH'));
+      const passwordHash = await readPasswordHash();
       const valid = await bcrypt.compare(password, passwordHash);
       if (!valid) return reject();
       await clearAccountLoginFailures(email, ip);

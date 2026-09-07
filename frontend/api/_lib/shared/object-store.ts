@@ -97,7 +97,7 @@ function database() {
     // connection per serverless instance unless a pooled database is configured.
     max: poolSize,
     prepare: false,
-    connect_timeout: 3,
+    connect_timeout: Math.min(30, Math.max(3, Number(process.env.DATABASE_CONNECT_TIMEOUT_SECONDS) || 3)),
     idle_timeout: 5,
     max_lifetime: 60,
   });

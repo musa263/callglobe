@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession, createTenantAdminSession, createSession, invalidateOwnerSessions, setSessionCookies } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
-import { changePassword } from '../../numbers/number-config.js';
+import { changePassword } from '../owner-password.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { activeTenantAdmin, changeTenantAdminPassword } from '../../organizations/saas-store.js';
 

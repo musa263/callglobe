@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { requiredEnv } from '../../shared/http.js';
-import { readObject, transactObject } from '../../shared/object-store.js';
+import { put, readObject, transactObject, type PutOptions } from '../../shared/object-store.js';
 
 /**
  * The platform owner's password hash, encrypted in Vocivo's own store.
@@ -11,8 +11,8 @@ import { readObject, transactObject } from '../../shared/object-store.js';
  * rewrite through the numbers screen. Reading it offered the hash for offline
  * cracking; rewriting it set the owner's password to one of their choosing.
  *
- * The tag is still read, once, for an installation written before this store
- * existed, and the next password change moves it here for good.
+ * Legacy installations must migrate their existing hash before deploying the
+ * carrier-independent login. The runtime never reads carrier password tags.
  */
 
 const pathname = 'vocivo/auth/owner.bin';
@@ -37,14 +37,17 @@ function decrypt(value: Buffer): StoredCredential | null {
     const decoded = JSON.parse(Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')) as StoredCredential;
     return typeof decoded?.hash === 'string' && decoded.hash ? decoded : null;
   } catch {
-    return null;
+    throw new Error('Stored owner credential could not be decrypted.');
   }
 }
 
 /** The stored hash, or null when the owner's password has never been changed here. */
-export async function readStoredOwnerPasswordHash() {
-  const stored = await readObject(pathname).catch(() => null);
-  return stored ? decrypt(stored)?.hash || null : null;
+export async function readStoredOwnerPasswordHash(read: (pathname: string) => Promise<Buffer | null> = readObject) {
+  const stored = await read(pathname);
+  if (!stored) return null;
+  const hash = decrypt(stored)?.hash;
+  if (!hash) throw new Error('Stored owner credential is invalid.');
+  return hash;
 }
 
 export async function writeOwnerPasswordHash(hash: string) {
@@ -52,5 +55,13 @@ export async function writeOwnerPasswordHash(hash: string) {
   await transactObject(pathname, () => encrypt({ hash, updatedAt: new Date().toISOString() }), {
     access: 'private',
     contentType: 'application/octet-stream',
+  });
+}
+
+/** One-time import: never replace a password already changed in the new store. */
+export async function initializeOwnerPasswordHash(hash: string, create: (pathname: string, body: Buffer, options: PutOptions) => Promise<unknown> = put) {
+  if (!/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(hash)) throw new Error('A valid bcrypt hash is required.');
+  await create(pathname, encrypt({ hash, updatedAt: new Date().toISOString() }), {
+    access: 'private', contentType: 'application/octet-stream', allowOverwrite: false,
   });
 }

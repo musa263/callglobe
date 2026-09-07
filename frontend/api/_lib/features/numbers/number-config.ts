@@ -1,8 +1,6 @@
-import bcrypt from 'bcryptjs';
 import { requiredEnv } from '../../shared/http.js';
 import { inboundConnectionId, telnyx } from '../../shared/telnyx.js';
 import { legacyPrimaryOrganizationId, readPbxConfig, savePbxConfig, type PbxConfig } from '../organizations/pbx-config-store.js';
-import { readStoredOwnerPasswordHash, writeOwnerPasswordHash } from '../auth/owner-credential-store.js';
 import { numberOrganizationId } from '../organizations/tenancy.js';
 
 export type BusinessVoiceConfig = {
@@ -192,41 +190,4 @@ export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig
       .map((item) => telnyx(`/phone_numbers/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ connection_id: inboundConnection }) })));
   }
   return config;
-}
-
-/**
- * The platform owner's password hash.
- *
- * Vocivo's own encrypted store first. The carrier tag is read only for an
- * installation whose password was last changed before that store existed —
- * it is where this credential used to live, which meant the hash that signs in
- * to the whole platform sat in a phone-number tag that tenant administrators
- * could read from the numbers screen and write from the same screen. The next
- * password change moves it, and takes the tag away with it.
- */
-export async function readPasswordHash() {
-  const stored = await readStoredOwnerPasswordHash();
-  if (stored) return stored;
-  const tags = await readTags();
-  const current = tags.find((tag) => tag.startsWith(passwordPrefix));
-  const encoded = current?.slice(passwordPrefix.length);
-  return encoded ? Buffer.from(encoded, 'base64url').toString('utf8') : requiredEnv('APP_PASSWORD_HASH');
-}
-
-export async function changePassword(currentPassword: string, newPassword: string) {
-  const currentHash = await readPasswordHash();
-  if (!await bcrypt.compare(currentPassword, currentHash)) return false;
-  await writeOwnerPasswordHash(await bcrypt.hash(newPassword, 12));
-  // Best effort, and after the new hash is safely stored: a carrier that is
-  // unreachable must not stop the owner changing their password. What is left
-  // behind is only ever a stale hash the store now takes precedence over.
-  try {
-    const tags = await readTags();
-    if (tags.some((tag) => tag.startsWith(passwordPrefix))) {
-      await writeTags(tags.filter((tag) => !tag.startsWith(passwordPrefix)));
-    }
-  } catch (error) {
-    console.error('Could not remove the legacy password tag from the carrier number.', error);
-  }
-  return true;
 }
