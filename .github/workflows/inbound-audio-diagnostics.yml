@@ -1,0 +1,34 @@
+name: Inbound audio diagnostics
+on:
+  workflow_dispatch:
+    inputs:
+      call_uuid:
+        description: FreeSWITCH channel UUID to inspect (no calls are placed)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: ops-droplet-sip
+  cancel-in-progress: false
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect inbound audio
+        env:
+          OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
+          HOST: ${{ secrets.SIP_EDGE_HOST }}
+          SSH_USER: ${{ vars.OPS_SSH_USER || 'root' }}
+          CALL_UUID: ${{ inputs.call_uuid }}
+        run: |
+          set -euo pipefail
+          [[ "$CALL_UUID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]
+          test -n "$OPS_SSH_KEY" && test -n "$HOST"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OPS_SSH_KEY" > ~/.ssh/ops_key
+          chmod 600 ~/.ssh/ops_key
+          ssh-keyscan -T 10 -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$HOST" python3 - "$CALL_UUID" < services/sip/tests/inbound_audio_report.py
