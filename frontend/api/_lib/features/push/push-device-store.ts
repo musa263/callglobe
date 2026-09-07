@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, list, put, readObjects } from '../../shared/object-store.js';
+import { createOwnedPushStore, type PushStorage } from './push-ownership-store.js';
 import { requiredEnv } from '../../shared/http.js';
 import { tenantStorageKey } from '../../shared/tenant-storage.js';
 
@@ -47,26 +47,16 @@ function pathname(device: Pick<PushDevice, 'organizationId' | 'extensionId' | 'i
   return `${prefix(device.organizationId, device.extensionId)}${safeId(device.id)}.bin`;
 }
 
-export async function savePushDevice(device: PushDevice) {
-  await put(pathname(device), encrypt(device), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
+export function createPushDeviceStore(deps?: PushStorage) {
+  return createOwnedPushStore<PushDevice>({
+    root: 'vocivo/push-devices/v1/', scope: prefix, pathname, encrypt, decrypt,
+    destination: device => JSON.stringify(device.platform === 'ios'
+      ? ['ios', device.environment, (device.bundleId || 'app.vocivo.mobile').replace(/\.voip$/i, ''), device.token.toLowerCase()]
+      : ['android', device.token]),
+  }, deps);
 }
 
-export async function deletePushDevice(input: Pick<PushDevice, 'organizationId' | 'extensionId' | 'id'>) {
-  await del(pathname(input));
-}
-
-export async function listPushDevices(organizationId: string, extensionId: string) {
-  const result = await list({ prefix: prefix(organizationId, extensionId), limit: 100 });
-  const objects = await readObjects(result.blobs.map((blob) => blob.pathname));
-  const staleBefore = Date.now() - 45 * 24 * 60 * 60 * 1000;
-  const devices = result.blobs.flatMap((blob) => {
-    try {
-      const value = objects.get(blob.pathname);
-      const device = value ? decrypt(value) : null;
-      return device && new Date(device.updatedAt).getTime() >= staleBefore ? [device] : [];
-    } catch {
-      return [];
-    }
-  });
-  return [...new Map(devices.map((device) => [`${device.platform}:${device.token}`, device])).values()];
-}
+const devices = createPushDeviceStore();
+export const savePushDevice = devices.save;
+export const listPushDevices = devices.list;
+export const deletePushDevice = devices.remove;
