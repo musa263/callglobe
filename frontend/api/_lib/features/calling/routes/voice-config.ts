@@ -27,6 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       provider,
       voice_edge: edge,
+      extension_authority: extension.sipProvider === 'vocivo' ? 'vocivo' : 'telnyx',
       pbx_engine: provider,
       authentication: edge === 'sip' ? 'digest' : 'token',
       token_endpoint: '/api/telnyx/token',

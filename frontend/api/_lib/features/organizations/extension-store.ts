@@ -3,12 +3,7 @@ import { del, put, readObject, transactObject } from '../../shared/object-store.
 import { requiredEnv } from '../../shared/http.js';
 import type { ExtensionUser } from './pbx.js';
 
-type StoredExtensionDirectory = {
-  version: 1 | 2;
-  revision?: number;
-  syncedAt: string;
-  extensions: ExtensionUser[];
-};
+import { adoptVocivoExtensions, decodeExtensionDirectory, type ExtensionAuthority, type ExtensionDirectory } from './extension-directory.js';
 
 export type StoredExtensionCredential = {
   version: 1 | 2 | 3;
@@ -46,47 +41,62 @@ function credentialPath(id: string) {
   return `vocivo/pbx/extensions/v1/credentials/${key}.bin`;
 }
 
+export async function readExtensionDirectoryState(read: (pathname: string) => Promise<Buffer | null> = readObject) {
+  const value = await read(directoryPath);
+  return value ? decodeExtensionDirectory(decrypt<unknown>(value)) : null;
+}
+
 export async function readExtensionDirectory() {
-  const value = await readObject(directoryPath);
-  if (!value) return null;
-  try {
-    const stored = decrypt<StoredExtensionDirectory>(value);
-    return [1, 2].includes(stored.version) && Array.isArray(stored.extensions) ? stored.extensions : null;
-  } catch {
-    return null;
-  }
+  return (await readExtensionDirectoryState())?.extensions ?? null;
+}
+
+/** Explicit, atomic adoption. No carrier reads, password rotation or identity remapping. */
+export async function adoptExtensionDirectory(options: { initializeEmpty?: boolean; expectedRevision?: number } = {}, transaction = transactObject) {
+  const result = await transaction(directoryPath, async (current) => {
+    if (!current && !options.initializeEmpty) throw new Error('Extension directory is missing; import existing accounts before migration.');
+    const stored = current ? decodeExtensionDirectory(decrypt<unknown>(current)) : null;
+    if (stored?.authority === 'vocivo') return current!;
+    if (options.expectedRevision !== undefined && Number(stored?.revision || 0) !== options.expectedRevision) {
+      throw new Error('Extension directory changed during migration; run the check again.');
+    }
+    const next: ExtensionDirectory = {
+      version: 3, authority: 'vocivo', revision: Number(stored?.revision || 0) + 1,
+      syncedAt: new Date().toISOString(), extensions: adoptVocivoExtensions(stored?.extensions || []),
+    };
+    return encrypt(next);
+  }, { access: 'private', contentType: 'application/octet-stream' });
+  return decodeExtensionDirectory(decrypt<unknown>(result.body));
 }
 
 export async function saveExtensionDirectory(extensions: ExtensionUser[]) {
   // Seed-only write: never overwrite a directory that concurrent writers already populated.
-  return updateExtensionDirectory((current) => (current.length ? current : extensions));
+  return updateExtensionDirectory((current) => (current.length ? current : extensions), undefined, 'telnyx');
 }
 
-export async function updateExtensionDirectory(update: (extensions: ExtensionUser[]) => ExtensionUser[] | Promise<ExtensionUser[]>) {
-  const result = await transactObject(directoryPath, async (current) => {
+export async function updateExtensionDirectory(update: (extensions: ExtensionUser[]) => ExtensionUser[] | Promise<ExtensionUser[]>, transaction: typeof transactObject = transactObject, expectedAuthority?: ExtensionAuthority) {
+  const result = await transaction(directoryPath, async (current) => {
     let extensions: ExtensionUser[] = [];
     let revision = 0;
+    let authority: ExtensionAuthority = 'telnyx';
     if (current) {
-      try {
-        const stored = decrypt<StoredExtensionDirectory>(current);
-        if ([1, 2].includes(stored.version) && Array.isArray(stored.extensions)) {
-          extensions = stored.extensions;
-          revision = Number(stored.revision || 0);
-        }
-      } catch {
-        extensions = [];
-      }
+      const stored = decodeExtensionDirectory(decrypt<unknown>(current));
+      authority = stored.authority || 'telnyx';
+      extensions = stored.extensions;
+      revision = Number(stored.revision || 0);
     }
-    const next: StoredExtensionDirectory = {
-      version: 2,
+    if (expectedAuthority && authority !== expectedAuthority) throw new Error('Extension authority changed; reload before saving.');
+    const next: ExtensionDirectory = {
+      version: authority === 'vocivo' ? 3 : 2,
+      ...(authority === 'vocivo' ? { authority } : {}),
       revision: revision + 1,
       syncedAt: new Date().toISOString(),
       extensions: (await update(extensions)).map((extension) => ({ ...extension })),
     };
+    decodeExtensionDirectory(next);
     return encrypt(next);
   }, { access: 'private', contentType: 'application/octet-stream' });
-  const stored = decrypt<StoredExtensionDirectory>(result.body);
-  if (stored.version !== 2 || !stored.revision) throw new Error('Extension directory compare-and-swap failed.');
+  const stored = decodeExtensionDirectory(decrypt<unknown>(result.body));
+  if (!stored.revision) throw new Error('Extension directory compare-and-swap failed.');
   return stored.extensions;
 }
 

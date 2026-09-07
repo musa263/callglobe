@@ -6,7 +6,7 @@ import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { accessForSession } from '../../organizations/saas-access.js';
 import { telnyx } from '../../../shared/telnyx.js';
 import { sessionOrganizationId } from '../../organizations/tenancy.js';
-import { voiceIceServers } from '../voice-provider.js';
+import { voiceEdge, voiceIceServers } from '../voice-provider.js';
 
 function normalizeToken(raw: string) {
   const value = raw.trim();
@@ -48,6 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) {
       return res.status(403).json({ error: 'Calling is not enabled for this account.' });
     }
+    if (voiceEdge() === 'sip') return res.status(409).json({ error: 'Use Vocivo SIP device credentials for this calling engine.' });
     const extension = await getExtension(session.extensionId);
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
     const credential = await getExtensionCredentials(session.extensionId, sessionOrganizationId(session, config));
