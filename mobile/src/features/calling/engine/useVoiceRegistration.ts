@@ -5,7 +5,7 @@ import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons
 import { api } from '../../../shared/api';
 import { applyIncomingRingtone, loadIncomingRingtone } from '../media/ringtone';
 import { getVoicePushToken, persistVoiceSession, voipClient } from '../runtime/voipClient';
-import { ensureSipRegistration, refreshVocivoSip, unregisterVocivoSip } from '../runtime/sipNative';
+import { ensureSipRegistration, onSipRegistration, refreshVocivoSip, unregisterVocivoSip } from '../runtime/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../media/voiceRecovery';
@@ -54,6 +54,11 @@ export function useVoiceRegistration({
     let activeRegistrationTimer: ReturnType<typeof setTimeout> | undefined;
     let networkRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     let sipCredentialTimer: ReturnType<typeof setTimeout> | undefined;
+    let sipAuthTimer: ReturnType<typeof setTimeout> | undefined;
+    let sipAuthSubscription: { remove: () => void } | undefined;
+    let sipAuthAttempts = 0;
+    let sipRecoveryAttempts = 0;
+    let sipRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
     let startupRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let appStateSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
     let networkSubscription: (() => void) | undefined;
@@ -140,9 +145,41 @@ export function useVoiceRegistration({
           }
         };
 
+        const recoverSip = async (renew = false) => {
+          if (canceled) return;
+          if (sipRecoveryTimer) clearTimeout(sipRecoveryTimer);
+          try {
+            // A new stack would dispose an active/incoming call. Preserve it
+            // and let signaling/media recovery run on the existing stack.
+            if (activeCallRef.current || (voice.currentCalls?.length ?? 0) > 0) await refreshVocivoSip();
+            else await registerOnSipEdge(renew);
+            sipRecoveryAttempts = 0;
+          } catch (failure) {
+            reportVoiceError('recover SIP registration', failure);
+            if (!canceled) sipRecoveryTimer = setTimeout(() => { void recoverSip(renew); }, Math.min(60_000, 5000 * 2 ** Math.min(sipRecoveryAttempts++, 4)));
+          }
+        };
+
         if (onSipEdge) {
           const engine = sipEngine();
           voice.use(engine.name, engine.client, engine.platform);
+          sipAuthSubscription?.remove();
+          sipAuthSubscription = onSipRegistration((state, reason) => {
+            if (canceled) return;
+            if (state === 'ok') {
+              setError(current => current === 'Calling service is reconnecting. Please try again in a moment.' ? null : current);
+              sipAuthAttempts = 0;
+              if (sipAuthTimer) clearTimeout(sipAuthTimer);
+              sipAuthTimer = undefined;
+            } else if (/^40[13]\b/.test(reason || '') && !sipAuthTimer) {
+              // Final rejection only: SIP.js has already handled normal Digest
+              // challenges. Repeating the rejected password cannot recover it.
+              sipAuthTimer = setTimeout(() => {
+                sipAuthTimer = undefined;
+                void recoverSip(true);
+              }, Math.min(300_000, 3000 * 2 ** Math.min(sipAuthAttempts++, 7)));
+            }
+          });
           await registerOnSipEdge();
         } else {
           const engine = telnyxEngine();
@@ -270,7 +307,7 @@ export function useVoiceRegistration({
               // The socket to Vocivo's edge rarely survives a spell in the
               // background; make sure the phone is registered again before
               // the person tries to dial.
-              refreshVocivoSip().catch((failure) => reportVoiceError('foreground SIP refresh', failure));
+              void recoverSip(false);
               registerLatestDevice().catch((failure) => reportVoiceError('foreground SIP push token refresh', failure));
               return;
             }
@@ -286,13 +323,15 @@ export function useVoiceRegistration({
           let lastNetworkKey = '';
           networkSubscription = NetInfo.addEventListener((netState) => {
             if (canceled) return;
-            const key = `${netState.type}:${netState.isConnected === true}`;
+            const address = netState.details && 'ipAddress' in netState.details ? netState.details.ipAddress : '';
+            const reachable = netState.isConnected === true && netState.isInternetReachable !== false;
+            const key = `${netState.type}:${reachable}:${address}`;
             if (!lastNetworkKey) { lastNetworkKey = key; return; }
-            if (key === lastNetworkKey || netState.isConnected !== true) { lastNetworkKey = key; return; }
+            if (key === lastNetworkKey || !reachable) { lastNetworkKey = key; return; }
             lastNetworkKey = key;
             if (networkRefreshTimer) clearTimeout(networkRefreshTimer);
             networkRefreshTimer = setTimeout(() => {
-              refreshVocivoSip().catch((failure) => reportVoiceError('network change SIP refresh', failure));
+              void recoverSip(true);
             }, 1_000);
           });
         }
@@ -314,6 +353,9 @@ export function useVoiceRegistration({
       if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
       if (networkRefreshTimer) clearTimeout(networkRefreshTimer);
       if (sipCredentialTimer) clearTimeout(sipCredentialTimer);
+      if (sipRecoveryTimer) clearTimeout(sipRecoveryTimer);
+      if (sipAuthTimer) clearTimeout(sipAuthTimer);
+      sipAuthSubscription?.remove();
       if (startupRetryTimer) clearTimeout(startupRetryTimer);
       appStateSubscription?.remove();
       networkSubscription?.();

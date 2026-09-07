@@ -25,3 +25,15 @@ test('call trace keeps ACK and trusted-source failures without scanner noise or 
     'reject untrusted internal INVITE from 127.0.0.1',
   ]);
 });
+
+
+test('empty filtered service logs do not abort the remaining call trace', () => {
+  const workflow = readFileSync(new URL('../../../../../.github/workflows/ops-sip-edge.yml', import.meta.url), 'utf8');
+  const trace = workflow.slice(workflow.indexOf('            call-trace)'), workflow.indexOf('            deploy)'));
+  const pipeline = trace.split('\n').find(line => line.includes('docker logs --since'))!;
+  assert.ok(pipeline);
+  const command = pipeline.slice(pipeline.indexOf('docker logs'));
+  const result = spawnSync('bash', ['-c', 'set -euo pipefail; docker() { echo "vocivo.call warming"; }; ' + command + '; echo NEXT_SERVICE'], {encoding:'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /NEXT_SERVICE/);
+});

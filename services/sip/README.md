@@ -171,3 +171,13 @@ challenge retry. It resets challenge variables for each request and rejects
 missing/malformed nonce responses with 503. Replay, identity, and current-access
 checks remain enforced. This is local code coverage until the changed config has
 passed the pinned Kamailio parser and a REGISTER/401/REGISTER/200 wire test.
+
+## WSS connectivity diagnostics
+
+Run `gh workflow run sip-connectivity.yml` for read-only proxy directives,
+listener/firewall status and aggregate Nginx/Kamailio error categories. It excludes
+credentials and raw SIP packets. Transport correlation uses the last REGISTER on
+each worker and is diagnostic evidence, not proof of client identity. DigitalOcean
+cloud firewall rules need separate access. `call-trace` continues past empty or
+unavailable service logs and labels those sections, rather than aborting before
+Kamailio output. An empty section must not be read as a healthy service.

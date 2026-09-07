@@ -9,7 +9,7 @@ def run(args):
         result = subprocess.run(args, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         print(f"unavailable: {args[0]} {args[1]}")
-        return '' 
+        return ''
     if result.returncode:
         print(f"unavailable: {args[0]} {args[1]} (exit {result.returncode})")
     return result.stdout + result.stderr
@@ -34,11 +34,22 @@ def main():
     print('Kamailio counters, last 2 hours (not unique clients)')
     logs = run(['docker', 'logs', '--since', '2h', '--tail', '30000', 'sip-kamailio-1'])
     counts = collections.Counter()
+    by_transport = collections.Counter()
+    worker_transport = {}
     for line in logs.splitlines():
+        worker = re.search(r'(\d+\(\d+\))', line)
+        registration = re.search(r'REGISTER \S+ proto=(\w+)', line)
+        if worker and registration:
+            worker_transport[worker[1]] = registration[1]
+        reason = re.search(r'"reason":"([a-z_]+)"', line)
+        if worker and reason:
+            by_transport[f"{worker_transport.get(worker[1], 'unknown')}:{reason[1]}"] += 1
         for key in ['REGISTER ok', 'REGISTER auth failed', 'sip-auth unreachable', 'sip-nonce unreachable', 'stale_nonce', 'replayed_digest', 'registration_identity_mismatch', 'tcpconn_do_send', 'Too Many Requests', 'websocket handshake failed']:
             if key in line:
                 counts[key] += 1
     print(dict(counts))
+    print('Rejections by last REGISTER transport on each worker (best-effort correlation)')
+    print(dict(by_transport))
     print('Nginx error categories, last 5000 lines (no client identifiers)')
     errors = run(['tail', '-n', '5000', '/var/log/nginx/error.log'])
     print({key: errors.count(key) for key in ['upstream timed out', 'connect() failed', 'worker_connections are not enough', 'too many open files', 'limiting requests', 'SSL_do_handshake() failed']})

@@ -115,6 +115,9 @@ export function createRegistrationKeeper(deps) {
       clearRetry();
     },
     refresh: async () => {
+      // Local Connected/Registered flags can survive an OS network migration.
+      // An explicit refresh must validate the contact with the registrar.
+      needsRegistration = true;
       clearRetry();
       await recover('refresh');
     },

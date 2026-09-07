@@ -105,3 +105,19 @@ test('cached TURN expiry bounds the next scheduled configuration refresh', async
   expect(lifetime).toBeLessThanOrEqual(120);
   expect(lifetime).toBeGreaterThan(100);
 });
+
+
+test('a forced network renewal is not lost behind cached foreground bootstrap', async () => {
+  cache({sessionToken:'signed-session-a',config,expiresAt:Date.now()+3600_000});
+  let started!: () => void;
+  const starting = new Promise<void>(resolve => { started = resolve; });
+  let finish!: () => void;
+  stack.start.mockImplementationOnce(() => { started(); return new Promise<void>(resolve => { finish = resolve; }); });
+  const boot = ensureSipRegistration();
+  await starting;
+  const renewal = ensureSipRegistration(true);
+  const repeated = ensureSipRegistration(true);
+  finish();
+  await Promise.all([boot,renewal,repeated]);
+  expect(api.post).toHaveBeenCalledTimes(1);
+});

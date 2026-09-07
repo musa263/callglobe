@@ -24,6 +24,7 @@ jest.mock('../../src/features/calling/runtime/voipClient', () => ({
   voipClient: { loginWithToken: jest.fn() },
 }));
 jest.mock('../../src/features/calling/runtime/sipNative', () => ({
+  onSipRegistration: jest.fn(() => ({ remove: jest.fn() })),
   refreshVocivoSip: jest.fn(async () => undefined),
   ensureSipRegistration: jest.fn(async () => 3600),
 }));

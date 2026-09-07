@@ -135,7 +135,7 @@ test('refresh reconnects immediately when the socket is down and re-registers wh
 
   const before = h.log.length;
   await h.keeper.refresh();
-  assert.equal(h.log.length, before, 'connected and registered: nothing to do');
+  assert.equal(h.log.length, before + 1, 'explicit refresh checks the server even when local flags look live');
 });
 
 test('refresh that cannot reconnect reports it and falls back to the timer', async () => {
@@ -211,4 +211,13 @@ test('stop removes a pending retry and invalidates an already queued callback', 
   late();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(h.log.filter((line) => line === 'reconnect').length, 0);
+});
+
+
+test('explicit foreground refresh validates a supposedly live registration', async () => {
+  const h = harness();
+  await h.keeper.start();
+  await h.keeper.refresh();
+  assert.equal(h.log.filter(line => line === 'register').length, 2,
+    'OS migration can leave both local state flags true while the server contact is dead');
 });

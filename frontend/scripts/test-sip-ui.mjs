@@ -66,7 +66,9 @@ try {
           play(){this.playing=true;return Promise.resolve()}
           pause(){this.playing=false}
         };
+        window.credentialRequests = 0;
         window.fetch = async (path) => {
+          if (path === '/api/voice/sip-credentials') window.credentialRequests++;
           if (path === '/api/voice/route' && window.holdRoute) await new Promise(resolve=>window.finishRoute=resolve);
           return {ok:true,json:async()=>path==='/api/voice/sip-credentials'
             ? {username:'user',password:'test',domain:'test.invalid',wsUri:'wss://test.invalid',expires_in:3600}
@@ -152,6 +154,15 @@ try {
   await page.evaluate(() => window.sipInput.onTransport(true));
   assert.equal(await page.evaluate(() => !!window.voice.call), false);
   console.log('PASS: dropped signaling clears the live call UI, timer source and media without awaiting BYE');
+  const credentialRequests = await page.evaluate(() => window.credentialRequests);
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('online'));
+    window.dispatchEvent(new Event('online'));
+  });
+  await page.waitForFunction(count => window.credentialRequests > count, credentialRequests);
+  assert.equal(await page.evaluate(() => window.credentialRequests), credentialRequests + 1);
+  await page.waitForFunction(() => window.voice.ready);
+  console.log('PASS: online recovery renews idle SIP credentials once for an event burst');
   await page.screenshot({ path: process.env.VOCIVO_TEST_SCREENSHOT || '/tmp/vocivo-sip-ui-qa.png' });
   await page.evaluate(() => window.root.unmount());
   assert.deepEqual(errors, []);
