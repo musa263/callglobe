@@ -134,7 +134,7 @@ class Settings:
             barge_in_silence_ms=max(100, number("RECEPTIONIST_BARGE_IN_SILENCE_MS", cls.barge_in_silence_ms)),
             patience_seconds=number("RECEPTIONIST_PATIENCE_SECONDS", cls.patience_seconds),
             max_turns=number("RECEPTIONIST_MAX_TURNS", cls.max_turns),
-            idle_hangup_seconds=number("RECEPTIONIST_IDLE_HANGUP_SECONDS", cls.idle_hangup_seconds),
+            idle_hangup_seconds=max(1, min(90, number("RECEPTIONIST_IDLE_HANGUP_SECONDS", cls.idle_hangup_seconds))),
         )
 
     def missing(self) -> list[str]:

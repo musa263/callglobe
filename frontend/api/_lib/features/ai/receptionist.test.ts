@@ -204,3 +204,15 @@ test('the receptionist knows the company from its website when the knowledge box
   assert.match(shippedCompanyKnowledge('GHSL'), /info@ghsl\.us/);
   assert.equal(shippedCompanyKnowledge('Acme Dental'), '');
 });
+
+test('idle release remains a distinct successful service outcome', () => {
+  assert.equal(parseConversation({ callId: 'idle-call', outcome: 'caller_went_quiet' })?.outcome, 'caller_went_quiet');
+});
+
+test('nonconsecutive closed days do not claim that open days are closed', async () => {
+  const { describeOfficeHours } = await import('./receptionist.js');
+  const weekdays = Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => [day, {
+    enabled: !['Monday', 'Wednesday', 'Friday'].includes(day), start: '09:00', end: '17:00',
+  }]));
+  assert.match(describeOfficeHours({ timezone: 'UTC', holidays: [], weekdays }), /Closed Monday and Wednesday and Friday\./);
+});
