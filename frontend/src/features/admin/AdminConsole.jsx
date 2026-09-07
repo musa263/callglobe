@@ -30,7 +30,7 @@ import { FeatureAccessPage } from "./platform/FeatureAccessPage.jsx";
 export default function AdminConsole({ profile }) {
   const isSuperadmin = ['superadmin', 'owner'].includes(profile?.role || '');
   const [section, setSection] = useState(isSuperadmin ? 'platform-dashboard' : 'dashboard'), [overview, setOverview] = useState(null), [extensions, setExtensions] = useState([]), [trunks, setTrunks] = useState(null), [numberData, setNumberData] = useState({ numbers: [], orders: [], messagingProfiles: [] }), [voiceData, setVoiceData] = useState(null), [platformKeys, setPlatformKeys] = useState([]), [revealedToken, setRevealedToken] = useState(''), [events, setEvents] = useState([]), [saas, setSaas] = useState(null), [walletData, setWalletData] = useState(null);
-  const [business, setBusiness] = useState({ enabled: false, companyName: 'Global Heritage', greeting: '', waitingMessage: '', departments: ['Sales', 'Operations'], voice: 'AWS.Polly.Joanna-Neural', backgroundImageUrl: '' });
+  const [business, setBusiness] = useState({ enabled: false, companyName: '', greeting: '', waitingMessage: '', departments: ['Sales', 'Operations'], voice: 'AWS.Polly.Joanna-Neural', backgroundImageUrl: '' });
   const [config, setConfig] = useState(null), [userDraft, setUserDraft] = useState(null), [userProfile, setUserProfile] = useState(defaultProfile), [trunkDraft, setTrunkDraft] = useState(null), [enrollment, setEnrollment] = useState(null), [passwordDraft, setPasswordDraft] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const workspaceRef = useRef(''), loadGeneration = useRef(0);
   const organizationId = config?.activeOrganizationId || '';

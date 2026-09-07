@@ -20,6 +20,14 @@ but are no longer read by the local lifecycle after adoption.
 
 ## Stage 1 contracts
 
+Ownership is platform-wide: Vocivo superadmin operates the deployment, directory
+authority and SIP infrastructure. Global Heritage is a business tenant, not a
+platform owner. Its admins manage only their assigned company resources and
+cannot change directory authority, platform engine selection, another tenant's
+settings, subscription capacity or platform access. The test extensions 2000 and
+2003 are tenant calling identities, not superadmin identities. See the
+[platform/tenant ownership audit](../audits/stage1-platform-ownership-2026-09-08.md).
+
 - Encrypted directory version 3 records `authority: vocivo`. Default deployments
   with legacy directories retain their existing managed behavior until adoption.
 - Adoption preserves extension IDs, tenant IDs, extension numbers, SIP usernames,
