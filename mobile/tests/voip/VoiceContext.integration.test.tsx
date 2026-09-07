@@ -120,8 +120,10 @@ jest.mock('../../src/features/calling/runtime/voipClient', () => {
 import { TelnyxConnectionState, TelnyxVoipClient, VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
 import NetInfo from '@react-native-community/netinfo';
 import { VoiceProvider, VoiceRoot, useVoice } from '../../src/features/calling/VoiceContext';
-import { loadVoiceSession, persistVoiceSession, voipClient } from '../../src/features/calling/runtime/voipClient';
+import { getVoicePushToken, loadVoiceSession, persistVoiceSession, voipClient } from '../../src/features/calling/runtime/voipClient';
 import { voice } from '../../src/features/calling/engine/voiceClientFacade';
+import * as sipNative from '../../src/features/calling/runtime/sipNative';
+import { api } from '../../src/shared/api';
 import { SipEventBus, SipStackBridge } from '../../src/features/calling/engine/sipBridge';
 import { SipVoiceClient } from '../../src/features/calling/engine/sipCallEngine';
 import { routeCancellations } from '../../src/features/calling/runtime/routeCancellation';
@@ -362,32 +364,54 @@ test('SIP registration recovery preserves media then expires once after repeated
   }
 });
 
-test('killed-state native push bootstraps a fresh secure voice session before HTTP auth completes', async () => {
+test('an unresolved app session cannot bootstrap a cached Telnyx push session', async () => {
   const authState = (require('../../src/features/auth/AuthContext') as any).__authState;
   authState.loading = true;
   authState.isAuthenticated = false;
-  const freshSession = {
-    token: 'cached-push-token',
-    expiresAt: Date.now() + 10 * 60_000,
-    iceServers: [{ urls: 'turns:turn.example.test:443', username: 'ephemeral', credential: 'ephemeral' }],
-  };
-  (TelnyxVoipClient.isLaunchedFromPushNotification as jest.Mock).mockResolvedValueOnce(true);
-  (loadVoiceSession as jest.Mock).mockResolvedValueOnce(freshSession);
+  jest.clearAllMocks();
+  (TelnyxVoipClient.isLaunchedFromPushNotification as jest.Mock).mockResolvedValue(true);
+  (loadVoiceSession as jest.Mock).mockResolvedValue({ token: 'stale-provider-token', expiresAt: Date.now() + 600000 });
+  let tree: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await act(async () => { tree = TestRenderer.create(<VoiceRoot><React.Fragment /></VoiceRoot>); });
+    expect(TelnyxVoipClient.isLaunchedFromPushNotification).not.toHaveBeenCalled();
+    expect(loadVoiceSession).not.toHaveBeenCalled();
+    expect(persistVoiceSession).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => tree?.unmount());
+    authState.loading = false;
+    authState.isAuthenticated = false;
+  }
+});
 
-  let tree: TestRenderer.ReactTestRenderer;
-  await act(async () => {
-    tree = TestRenderer.create(<VoiceRoot><React.Fragment /></VoiceRoot>);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
 
-  expect(loadVoiceSession).toHaveBeenCalled();
-  expect(persistVoiceSession).toHaveBeenCalledWith(expect.objectContaining({
-    token: freshSession.token,
-    iceServers: freshSession.iceServers,
-  }));
-
-  await act(async () => tree!.unmount());
-  authState.loading = false;
-  authState.isAuthenticated = false;
+test.each([false, true])('SIP incoming refresh uses Vocivo only (registration failure: %s)', async (fails) => {
+  const auth = (require('../../src/features/auth/AuthContext') as any).__authState;
+  auth.loading = true; // Isolate the explicit refresh from the startup hook.
+  const renew = jest.spyOn(sipNative, 'ensureSipRegistration');
+  if (fails) renew.mockRejectedValueOnce(new Error('SIP registration failed'));
+  else renew.mockResolvedValueOnce(3600);
+  jest.mocked(getVoicePushToken).mockResolvedValue('native-push-token');
+  jest.mocked(api.post).mockClear();
+  jest.mocked(persistVoiceSession).mockClear();
+  voice.use('sip', voipClient as any, { toggleSpeaker: async () => false, endNativeCall: async () => {}, hideIncomingCallUi: async () => {} });
+  let current: ReturnType<typeof useVoice> | undefined;
+  function Probe() { current = useVoice(); return null; }
+  let tree: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await act(async () => { tree = TestRenderer.create(<VoiceProvider><Probe /></VoiceProvider>); });
+    await act(async () => {
+      if (fails) await expect(current!.refreshIncomingCalls()).rejects.toThrow('SIP registration failed');
+      else await current!.refreshIncomingCalls();
+    });
+    expect(renew).toHaveBeenCalledWith(true);
+    expect(current!.pushRegistration).toBe(fails ? 'unavailable' : 'registered');
+    if (!fails) expect(api.post).toHaveBeenCalledWith('/api/voice/devices', expect.objectContaining({ token: 'native-push-token' }));
+    expect(api.post).not.toHaveBeenCalledWith('/api/telnyx/token', expect.anything());
+    expect(persistVoiceSession).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => tree?.unmount());
+    voice.detach(); renew.mockRestore(); auth.loading = false;
+    jest.mocked(getVoicePushToken).mockResolvedValue(undefined);
+  }
 });

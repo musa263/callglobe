@@ -67,3 +67,23 @@ user profiles. The returned `workspaceVersion` guards the form's loaded revision
 the store's transactional `expectedUpdatedAt` guards changes during the request.
 AI and business voice use their dedicated routes and are not overwritten by a
 general PBX form. Workspace selection never changes global `activeOrganizationId`.
+
+## Platform ownership and legacy tenant settings
+
+Stage 1's directory authority is a platform storage contract, owned by Vocivo;
+it is not a company PBX setting. A tenant named Global Heritage, including its
+company owner, has the same scoped capabilities as any other tenant. Only the
+verified `vocivo-owner` platform session grants superadmin access. The adoption
+script is a deployment operation; no tenant endpoint exposes that mutation.
+
+New PBX/receptionist defaults use neutral company text. Stored company names,
+greetings and identities remain unchanged. `mergePbxConfig` pins the historical
+owner of top-level legacy settings when reading old records, before mutations
+can reorder the company list. The next normal save persists that pin. A broken
+explicit pin fails instead of assigning private settings to the next company.
+This pin denotes a tenant's historical settings, never platform ownership.
+
+Regressions: `pbx-tenancy.test.ts`, `routes/admin-pbx.test.ts`,
+`request-organization.test.ts`, and `vocivo-extensions.test.ts` cover tenant
+defaults, stable legacy ownership, denied platform/foreign-tenant mutations,
+explicit workspace scope and the shared Vocivo directory lifecycle.

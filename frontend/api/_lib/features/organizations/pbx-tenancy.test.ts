@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { defaultPbxConfig, legacyPrimaryOrganizationId, organizationSettingsFrom, pbxForOrganization } from './pbx-config-store.js';
+import { defaultPbxConfig, legacyPrimaryOrganizationId, mergePbxConfig, organizationSettingsFrom, pbxForOrganization } from './pbx-config-store.js';
 
 test('keeps company PBX routing and AI settings isolated', () => {
   const config = defaultPbxConfig();
+  config.company.name = 'Global Heritage';
+  config.organizations[0].name = 'Global Heritage';
   config.organizations.push({
     id: 'second-company', name: 'Second Company', slug: 'second-company', accountType: 'business',
     ownerDisplayName: 'Second Company', ownerEmail: 'owner@example.com', extensionStart: 3000,
@@ -75,7 +77,36 @@ test('an explicit pin decides which organization owns the legacy settings', () =
   assert.equal(pbxForOrganization(config, 'second-company').ai.assistantId, 'asst_legacy');
   assert.equal(pbxForOrganization(config, 'primary').ai.assistantId, '');
   config.legacyPrimaryOrganizationId = 'no-such-organization';
-  assert.equal(legacyPrimaryOrganizationId(config), 'primary', 'a pin at nothing falls back to the first organization');
+  assert.throws(() => legacyPrimaryOrganizationId(config), /owner is missing/, 'a broken pin must never assign another tenant the legacy settings');
+});
+
+test('new tenant defaults contain no Global Heritage branding', () => {
+  const config = defaultPbxConfig();
+  assert.doesNotMatch(JSON.stringify(config), /global[ -]heritage/i);
+  config.organizations.push({ ...config.organizations[0], id: 'customer-b', name: 'Customer B' });
+  config.company.name = 'Global Heritage';
+  config.ai.greeting = 'Welcome to Global Heritage';
+  config.ai.knowledge = 'Private tenant information';
+  const other = organizationSettingsFrom(pbxForOrganization(config, 'customer-b'));
+  assert.equal(other.company.name, 'Customer B');
+  assert.doesNotMatch(JSON.stringify(other), /Global Heritage|Private tenant information/);
+});
+
+test('normalizing legacy data preserves the tenant and pins ownership before company reordering', () => {
+  const stored = defaultPbxConfig();
+  stored.company.name = 'Global Heritage';
+  stored.organizations[0].name = 'Global Heritage';
+  stored.ai.greeting = 'Saved Global Heritage greeting';
+  stored.ai.assistantId = 'saved-tenant-assistant';
+  stored.organizations.push({ ...stored.organizations[0], id: 'customer-b', name: 'Customer B' });
+  const current = mergePbxConfig(stored);
+  assert.equal(current.legacyPrimaryOrganizationId, 'primary');
+  const saved = mergePbxConfig({ ...current, organizations: [...current.organizations].reverse() });
+  assert.equal(legacyPrimaryOrganizationId(saved), 'primary');
+  assert.equal(pbxForOrganization(saved, 'primary').company.name, 'Global Heritage');
+  assert.equal(pbxForOrganization(saved, 'primary').ai.greeting, stored.ai.greeting);
+  assert.equal(pbxForOrganization(saved, 'customer-b').ai.assistantId, '');
+  assert.doesNotMatch(pbxForOrganization(saved, 'customer-b').ai.greeting, /Global Heritage/);
 });
 
 test('does not let a new tenant inherit the primary AI receptionist', () => {

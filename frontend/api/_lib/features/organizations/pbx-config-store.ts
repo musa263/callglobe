@@ -9,8 +9,8 @@ export type PbxConfig = {
   company: { name: string; timezone: string; defaultCallerId: string; emergencyAddress: string };
   activeOrganizationId: string;
   // Pins which organization owns the legacy Telnyx-tag-based settings that
-  // predate multi-tenancy (see number-config.ts). Optional: when unset, the
-  // historical organizations[0] fallback applies unchanged.
+  // predate multi-tenancy (see number-config.ts). Old records are pinned during
+  // normalization, before any company reorder or update can change ownership.
   legacyPrimaryOrganizationId?: string;
   organizations: Array<{
     id: string; name: string; slug: string; extensionStart: number; extensionEnd: number;
@@ -72,9 +72,9 @@ function defaultWeekdays() {
 export function defaultPbxConfig(): PbxConfig {
   return {
     version: 2,
-    company: { name: 'Global Heritage', timezone: 'Asia/Riyadh', defaultCallerId: '', emergencyAddress: '' },
+    company: { name: 'Company', timezone: 'Asia/Riyadh', defaultCallerId: '', emergencyAddress: '' },
     activeOrganizationId: 'primary',
-    organizations: [{ id: 'primary', name: 'Global Heritage', slug: 'global-heritage', accountType: 'business', ownerDisplayName: 'Global Heritage', ownerEmail: '', extensionStart: 2000, extensionEnd: 2019, internalCallingEnabled: true, status: 'active' }],
+    organizations: [{ id: 'primary', name: 'Company', slug: 'company', accountType: 'business', ownerDisplayName: 'Company owner', ownerEmail: '', extensionStart: 2000, extensionEnd: 2019, internalCallingEnabled: true, status: 'active' }],
     numberAssignments: {},
     businessVoiceConfigs: {},
     organizationSettings: {},
@@ -83,7 +83,7 @@ export function defaultPbxConfig(): PbxConfig {
     outboundRules: [{ id: 'international', name: 'International calling', prefix: '+', extensionRange: '', numberLength: '', department: 'All', routes: ['Vocivo Managed'], enabled: true }],
     officeHours: { timezone: 'Asia/Riyadh', weekdays: defaultWeekdays(), holidays: [] },
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
-    ai: { enabled: false, assistantId: '', name: 'Global Heritage Receptionist', greeting: 'Welcome to Global Heritage. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '2000', transferEnabled: true, summariesEnabled: true },
+    ai: { enabled: false, assistantId: '', name: 'Company Receptionist', greeting: 'Welcome. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '2000', transferEnabled: true, summariesEnabled: true },
     system: { recordingEnabled: false, retentionDays: 30, emergencyCallingEnabled: false },
     platform: { controlPlane: 'vocivo', voiceProvider: 'telnyx', pstnProvider: 'telnyx', sipDomain: 'sip.telnyx.com', ttsProvider: 'vocivo', carrierFallbackEnabled: true },
     updatedAt: new Date().toISOString(),
@@ -112,11 +112,12 @@ function decrypt(value: Buffer) {
   }
 }
 
-function mergeConfig(stored?: Partial<PbxConfig>): PbxConfig {
+export function mergePbxConfig(stored?: Partial<PbxConfig>): PbxConfig {
   const base = defaultPbxConfig();
   if (!stored) return base;
   return {
     ...base, ...stored,
+    legacyPrimaryOrganizationId: stored.legacyPrimaryOrganizationId || stored.organizations?.[0]?.id || base.organizations[0].id,
     company: { ...base.company, ...(stored.company || {}) },
     officeHours: { ...base.officeHours, ...(stored.officeHours || {}), weekdays: { ...base.officeHours.weekdays, ...(stored.officeHours?.weekdays || {}) } },
     callHandling: { ...base.callHandling, ...(stored.callHandling || {}) },
@@ -170,10 +171,10 @@ export function organizationSettingsFrom(config: PbxConfig): OrganizationPbxSett
  * assumption applies, which is what number-config.ts has always used.
  */
 export function legacyPrimaryOrganizationId(config: PbxConfig) {
-  const pinned = config.legacyPrimaryOrganizationId
-    && config.organizations.some((item) => item.id === config.legacyPrimaryOrganizationId)
-    ? config.legacyPrimaryOrganizationId
-    : undefined;
+  const pinned = config.legacyPrimaryOrganizationId;
+  if (pinned && !config.organizations.some((item) => item.id === pinned)) {
+    throw new Error('Legacy PBX settings owner is missing. Restore its tenant mapping before continuing.');
+  }
   return pinned || config.organizations[0]?.id || 'primary';
 }
 
@@ -290,7 +291,7 @@ export async function readPbxConfig() {
   if (cachedConfig?.expiresAt && cachedConfig.expiresAt > Date.now()) return structuredClone(cachedConfig.value);
   configRequest ||= (async () => {
     const value = await readStoredObject(pathname);
-    const config = value ? mergeConfig(decrypt(value)) : defaultPbxConfig();
+    const config = mergePbxConfig(value ? decrypt(value) : defaultPbxConfig());
     cachedConfig = { expiresAt: Date.now() + cacheTtlMs, value: config };
     return config;
   })().finally(() => { configRequest = null; });
@@ -317,10 +318,10 @@ type PbxConfigUpdate = Partial<PbxConfig> | ((current: PbxConfig) => Partial<Pbx
 export async function savePbxConfig(input: PbxConfigUpdate, options: { expectedUpdatedAt?: string } = {}): Promise<PbxConfig> {
   let next: PbxConfig | null = null;
   await transactObject(pathname, (stored) => {
-    const current = stored ? mergeConfig(decrypt(stored)) : defaultPbxConfig();
+    const current = mergePbxConfig(stored ? decrypt(stored) : defaultPbxConfig());
     if (options.expectedUpdatedAt && current.updatedAt !== options.expectedUpdatedAt) throw new PbxConfigConflictError();
     const update = typeof input === 'function' ? input(structuredClone(current)) : input;
-    next = mergeConfig({ ...current, ...update, updatedAt: new Date().toISOString() });
+    next = mergePbxConfig({ ...current, ...update, updatedAt: new Date().toISOString() });
     validatePbxConfig(next);
     return encrypt(next);
   }, { access: 'private', contentType: 'application/octet-stream' });

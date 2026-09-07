@@ -130,3 +130,45 @@ Identity and WebSocket destination cannot change in place. New ICE settings stay
 cached until calls end, with a short application retry. Explicit sign-out still
 terminates calls. Bootstrap race tests and a real installed-SIP.js Digest test
 cover this path; handset acceptance requires the updated mobile build.
+
+Successful re-REGISTER responses also notify the app through
+`sipRegistrationRequestDelegate`. SIP.js 0.21.2 retains its Registered state
+across transport loss and does not repeat that state-change event on recovery.
+The final acceptance callback clears the app's recovery deadline only while
+registration is wanted, the credential generation is current, the transport is
+connected, and SIP.js has validated the registration. Sending a request alone
+does not establish recovery. A regression using the installed Registerer covers
+the missing repeat event and an unusable Contact; guard tests reject late or
+superseded callbacks. Real-device stability still requires a new mobile build.
+
+## Stage 2: managed runtime isolation and native identity controls
+
+`runtime/managedVoiceRuntime.tsx` is the only runtime SDK loader. The managed
+client is created lazily after an authenticated, explicit Telnyx selection;
+SIP startup, push refresh and sign-out do not create it. `VoiceRoot` keeps its
+provider mounted while conditionally mounting the managed runtime alongside it.
+Managed push startup validates and persists its cached session before mounting.
+Missing engine configuration fails closed. SIP registration runs independently
+of ringtone preparation and push-token persistence; those failures retry without
+restarting signaling. Existing Stage 1 recovery and profile-derived APNs remain.
+
+`VocivoSip.setVoiceSignedIn` owns the native push sign-in flag on iOS and Android.
+`voipPushToken` reads Vocivo's iOS token; `firebasePushToken` obtains Android's
+FCM token directly, preserving the existing token cache. Shared JS calls use
+these Vocivo methods and fail explicitly on old binaries missing the contract.
+This requires build 64 or later; a JavaScript-only update is insufficient.
+Managed cleanup runs only for an already initialized managed client.
+
+The native Telnyx dependency is still present: shared PushKit/FCM dispatch,
+Android activity/notification integration, resource installation and Android
+ringtone compatibility remain migration work. Managed call UI controls still
+belong to its adapter; SIP speaker/end-call controls use Vocivo's existing bridge.
+This slice does not alter tenant identity or platform engine configuration.
+
+Run `bash verify.sh`; the ManagedRuntimeIsolation, VoiceRegistration and
+VoiceContext suites cover startup ordering, missing native capabilities,
+sign-out isolation, push persistence failure and preserved recovery deadlines.
+Regenerate native projects with `npx expo prebuild --no-install --platform all`,
+compare copied sources, and compile both platforms. Build 64 compiled and passed
+signature verification; Android debug compiled. Physical ringing, locked/killed
+answer, two-way speech and sustained calls are still release gates.

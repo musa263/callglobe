@@ -6,6 +6,8 @@ import { defaultPbxConfig, organizationSettingsFrom, pbxForOrganization, PbxConf
 
 function fixture(companyAdmin = false) {
   let config = defaultPbxConfig();
+  config.company.name = 'Global Heritage';
+  config.organizations[0].name = 'Global Heritage';
   config.organizations.push({ ...config.organizations[0], id: 'second', name: 'Second Company' });
   config.organizationSettings.second = organizationSettingsFrom(pbxForOrganization(config, 'second'));
   let writes = 0;
@@ -74,6 +76,26 @@ test('company administrator cannot select another customer and receives a scoped
   assert.equal(own.body.config.organizationSettings, undefined);
   assert.equal(own.body.config.platform, undefined);
   assert.equal(f.writes, 0);
+});
+
+test('Global Heritage admin cannot overwrite platform authority or another tenant through PBX settings', async () => {
+  const f = fixture(true);
+  const own = (await f.request('GET')).body.config;
+  const platform = structuredClone(f.config.platform);
+  const other = structuredClone(f.config.organizations[1]);
+  own.platform = { controlPlane: 'global-heritage', voiceProvider: 'custom' };
+  own.legacyPrimaryOrganizationId = 'second';
+  own.extension_authority = 'telnyx';
+  own.authority = 'global-heritage';
+  own.organizations.push({ ...other, name: 'Unauthorized rename' });
+  own.organizations[0].extensionEnd = 99999;
+  assert.equal((await f.request('PUT', 'primary', own)).status, 200);
+  assert.deepEqual(f.config.platform, platform);
+  assert.deepEqual(f.config.organizations[1], other);
+  assert.equal(f.config.organizations[0].extensionEnd, 2019);
+  assert.equal(f.config.legacyPrimaryOrganizationId, undefined);
+  assert.equal('authority' in f.config, false);
+  assert.equal('extension_authority' in f.config, false);
 });
 
 test('non-default workspace routing still validates extension ownership', async () => {
