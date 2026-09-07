@@ -56,8 +56,28 @@ These report diagnostic execution, not carrier acceptance.
   second setting; the test allows five session starts per second while keeping
   at most two concurrent sessions. The corrected wire test passed.
 
-No carrier INVITE, paid call, REGISTER or agent-initiated 3CX restart has yet
-been performed. The standalone test does not close portal activation gates.
+The standalone test does not close portal activation gates.
+
+## Carrier outbound attempt
+
+The pinned harness was staged on the authenticated host and started on the
+spare SIP port 5062 with RTP 9900–9919. 3CX retained 5060 throughout. One
+explicitly authorized outbound attempt reached the carrier and ended with SIP
+486 / `USER_BUSY` after about 15 seconds, with no answer and zero media packets.
+The owner then explained that the handset was roaming. This does not establish
+the reason for the busy response, and it is not an audio acceptance pass.
+The container and its isolated daemon were stopped after the test; private
+diagnostic files remain in `/opt/vocivo-carrier-test`. No 3CX configuration,
+public IP, DNS, cloud firewall rule or SIP service was changed. No inbound
+cutover or carrier REGISTER was performed.
+
+The owner requested a web test instead. The live web phone offered only the
+existing managed main line; Go remained a draft. The requested web attempt
+failed with the reconnect-session banner. No Go audio acceptance follows from
+that attempt. The owner subsequently directed removal of the old managed line,
+prohibited number purchases and clarified that tenants must bring their own
+trunks and DIDs. Those inventory/routing changes are the next implementation
+scope; do not mark the saved Go draft active from the above probe alone.
 
 ## Remaining acceptance gates
 
