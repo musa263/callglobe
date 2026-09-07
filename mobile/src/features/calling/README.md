@@ -130,3 +130,13 @@ Identity and WebSocket destination cannot change in place. New ICE settings stay
 cached until calls end, with a short application retry. Explicit sign-out still
 terminates calls. Bootstrap race tests and a real installed-SIP.js Digest test
 cover this path; handset acceptance requires the updated mobile build.
+
+Successful re-REGISTER responses also notify the app through
+`sipRegistrationRequestDelegate`. SIP.js 0.21.2 retains its Registered state
+across transport loss and does not repeat that state-change event on recovery.
+The final acceptance callback clears the app's recovery deadline only while
+registration is wanted, the credential generation is current, the transport is
+connected, and SIP.js has validated the registration. Sending a request alone
+does not establish recovery. A regression using the installed Registerer covers
+the missing repeat event and an unusable Contact; guard tests reject late or
+superseded callbacks. Real-device stability still requires a new mobile build.

@@ -17,6 +17,7 @@ import {
 } from 'sip.js/lib/platform/web';
 import { createRegistrationKeeper } from './sipRegistrationKeeper';
 import { rotateSipPassword } from './sipCredentialRotation';
+import { sipRegistrationRequestDelegate } from './sipRegistrationRequest';
 import { terminationDeadline } from '../state/terminationDeadline';
 import type {
   SipDisposition,
@@ -344,15 +345,16 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     register: () => {
       const version = credentialVersion;
       return registerer.register({
-        requestDelegate: {
-          onReject: (response) => {
-            if (version !== credentialVersion) {
-              keeper.onRejected(503, 'Retrying registration with renewed credentials');
-              return;
-            }
-            keeper.onRejected(response.message.statusCode ?? 503, response.message.reasonPhrase || 'Registration rejected');
+        requestDelegate: sipRegistrationRequestDelegate({
+          wanted: () => keeper.wanted,
+          current: () => version === credentialVersion,
+          ready: () => userAgent.isConnected() && registerer.state === RegistererState.Registered,
+          registered: () => {
+            keeper.onRegistered();
+            onRegistration?.('Registered');
           },
-        },
+          rejected: (status, reason) => keeper.onRejected(status, reason),
+        }),
       }).then(() => undefined);
     },
   });

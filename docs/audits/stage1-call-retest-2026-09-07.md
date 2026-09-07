@@ -211,3 +211,27 @@ The full gate passed: 412 backend/web, 147 mobile unit, 55 mobile integration
 passed deep/strict signature verification. This fixes a reproduced code defect;
 it is not yet proof of the cause or resolution of every physical hangup.
 Build 62 installation and repeat-call acceptance remain required.
+
+## Build 62 physical failure and registration acknowledgment fix
+
+Build 62 was installed, its version verified, and launched on the physical iPhone.
+Call `c4kjjvdlhka7hrlqe9cj`, route `vc_mtrfa1dy_j58mrrcc`, started at
+15:55:56 UTC, answered at 15:56:09, and ended at 15:56:43. The user confirmed
+prompt connection, two-way speech, no return to the dial pad, and explicitly
+confirmed that they left it connected and it disconnected by itself.
+Trace 34140894270 records ACK ingress at 15:56:09.270 and handset-side BYE
+at 15:56:43.719. Physical iPhone Console recorded a WebSocket error at
+15:55:58.549: approximately 45 seconds before hangup, matching the recovery
+deadline rather than a fixed connected-call duration.
+
+A regression using the installed SIP.js 0.21.2 Registerer reproduced a missing
+recovery acknowledgment. Transport loss leaves its local state Registered, so
+a successful re-REGISTER does not emit another Registered state change. The
+app could therefore remain Reconnecting and end a healthy call at its deadline.
+The test failed before the fix (actual Reconnecting, expected Registered).
+The adapter now acknowledges the validated final REGISTER acceptance, guarded
+by current credentials, wanted registration, live transport, and Registered
+state. Failed or unusable registrations cannot establish recovery. The deadline
+and denial handling remain intact. This is a reproduced defect with strong live
+timing correlation; physical build 63 acceptance is still required to establish
+that it resolves the observed disconnects.
