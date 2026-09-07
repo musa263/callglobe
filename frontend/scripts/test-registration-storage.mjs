@@ -43,7 +43,7 @@ try {
   }
   await assert.rejects(readTenantSaasState('missing', undefined, { initialize: false }), /subscription data is unavailable/);
   // Create the ledger through its normal maintenance path, then use the same
-  // no-DDL/no-cleanup path as REGISTER for concurrency and expiry checks.
+  // no-DDL path as REGISTER; disable probabilistic cleanup for deterministic tests.
   await claimReplayKey('test:ledger:initialize', new Date(Date.now()+60_000));
   const options = { initialize: false, cleanup: false };
   const key = 'test:concurrent:replay';

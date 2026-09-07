@@ -8,9 +8,9 @@ import { claimReplayKey as claimStoredReplayKey } from '../../../shared/object-s
 import { ownsSipRegistration, sipDigestReplayKey } from '../sip-registration-auth.js';
 import { sipRegistrationAllowed } from '../sip-registration-access.js';
 
-// The deployed schema is required. Keep schema setup and opportunistic expiry
-// cleanup off the REGISTER deadline; other ledger users retain maintenance.
-const claimReplayKey = (key: string, expiresAt: Date) => claimStoredReplayKey(key, expiresAt, { initialize: false, cleanup: false });
+// The deployed schema is required. Keep schema setup off the REGISTER deadline
+// while retaining the ledger's occasional expiry cleanup on SIP-only systems.
+const claimReplayKey = (key: string, expiresAt: Date) => claimStoredReplayKey(key, expiresAt, { initialize: false });
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
