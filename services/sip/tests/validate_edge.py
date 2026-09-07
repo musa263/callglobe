@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from delivery import PORT as DELIVERY_PORT, Peer, delivery_config, run_delivery_probes
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -183,6 +184,36 @@ def main():
         finally:
             subprocess.run(['docker', 'logs', name], check=False)
             subprocess.run(['docker', 'rm', '-f', name], check=False)
+    # Unlike ingress checks, these exchanges exercise actual TM/TSILO contact
+    # delivery and answers. First prove the old suspended algorithm loses 180.
+    for baseline in [True, False]:
+        with tempfile.TemporaryDirectory(prefix='sip-delivery-') as directory:
+            config = Path(directory) / 'delivery.cfg'
+            config.write_text(delivery_config((ROOT / 'kamailio/kamailio.cfg').read_text(),
+                                              suspended_baseline=baseline))
+            name = 'sip-delivery-' + uuid.uuid4().hex[:12]
+            try:
+                docker('run', '-d', '--name', name, '--network', 'host',
+                       '-e', 'VOCIVO_SIP_REALM=check',
+                       '-v', f'{config}:/etc/kamailio/delivery.cfg:ro',
+                       '--entrypoint', 'kamailio', image, '-DD', '-E',
+                       '-f', '/etc/kamailio/delivery.cfg')
+                for attempt in range(20):
+                    probe = Peer()
+                    try:
+                        probe.request('OPTIONS', f'sip:check@127.0.0.1:{DELIVERY_PORT}')
+                        probe.response('OPTIONS', 200, timeout=0.25)
+                        break
+                    except (OSError, AssertionError):
+                        time.sleep(0.25)
+                    finally:
+                        probe.close()
+                else:
+                    raise RuntimeError('Isolated delivery listener did not become ready')
+                run_delivery_probes(suspended_baseline=baseline)
+            finally:
+                subprocess.run(['docker', 'logs', name], check=False)
+                subprocess.run(['docker', 'rm', '-f', name], check=False)
 
 
 if __name__ == '__main__':

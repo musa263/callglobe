@@ -45,9 +45,32 @@ UDP, TCP and WebSocket probes cover valid requests, missing required headers,
 CSeq errors, exhausted hop counts and the WebSocket Content-Length exception.
 The temporary container is removed on success or failure. Ports must be free.
 
-This gate does not exercise authentication, registration, downstream call
-routing, media, transaction retransmission timers or native client behavior.
-It needs no production credentials and does not deploy anything.
+The delivery phase also exercises registrar and transaction routing with local
+SIP peers, including delayed registration, answer/ACK/BYE, cancellation, and
+expiry. It replaces admission and media with fixtures; it does not prove live
+authentication, RTP, carrier routing, or native behavior. It needs no production
+credentials and does not deploy anything.
+
+## Extension ringback and answer delivery
+
+An already-registered receiver is relayed immediately. Only calls with no
+contact are suspended while push wakes a device. REGISTER drains the AOR's
+bounded pending-transaction queue and calls `t_continue` before forwarding the
+invitation; active transactions use TSILO for additional device contacts.
+The AOR lock covers contact lookup through transaction storage, so registration
+cannot fall between them. Each waiting entry has its own 45-second deadline;
+the queue expires independently and retains simultaneous callers.
+
+Never append receiver branches to a transaction left in `t_suspend`:
+Kamailio 5.8.4 discards responses while `T_ASYNC_SUSPENDED` remains set. That
+loses both the 180 that starts web/mobile caller ringback and the receiver's
+200 answer. The resumed route must not rerun `rtpengine_manage` in its failure
+context, which would delete the already-created media offer.
+
+WebRTC offers/answers use `rtcp-mux-offer rtcp-mux-require` and
+`UDP/TLS/RTP/SAVPF`. The old `RTCP-MUX` flag was rejected by the running
+rtpengine and did not enforce the requested multiplexing behavior.
+
 
 ## Clients
 

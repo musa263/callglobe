@@ -19,10 +19,22 @@ test('late REGISTER appends to a bounded transaction, never an eight-second poll
   const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
   assert.match(config, /ts_append_by_contact\("location", "\$tu"\)/);
   const delivery = config.slice(config.indexOf('route[DELIVER_EXTENSION]'), config.indexOf('route[CDR_ENQUEUE]'));
-  assert.ok(delivery.indexOf('ts_store(') < delivery.indexOf('ts_append('));
   assert.match(delivery, /t_set_max_lifetime\(45000, 45000\)/);
-  assert.match(delivery, /if \(!t_suspend\(\)\) \{\s*rtpengine_delete\(\);/);
+  assert.match(delivery, /if \(lookup\("location"\)\) \{\s*route\(DELIVER_REGISTERED\);/);
+  assert.match(delivery, /t_continue\("\$var\(resume_index\)", "\$var\(resume_label\)", "DELIVER_WAKE"\)/);
+  assert.ok(config.indexOf('route(RESUME_WAKE);') < config.indexOf('ts_append_by_contact('));
+  const resumed = delivery.slice(delivery.indexOf('route[DELIVER_WAKE]'), delivery.indexOf('route[DELIVER_REGISTERED]'));
+  assert.match(resumed, /if \(t_is_canceled\(\)\) exit;/);
+  assert.doesNotMatch(resumed, /rtpengine_manage\(/);
   assert.doesNotMatch(config, /WAIT_REGISTER|async_route\("WAKEUP",\s*"8"\)/);
+});
+
+test('WebRTC media uses supported RTCP multiplexing flags on offers and answers', () => {
+  const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
+  assert.doesNotMatch(config, /RTCP-MUX/);
+  const webRtcRules = config.split('\n').filter(line => line.includes('ICE=force'));
+  assert.equal(webRtcRules.length, 3);
+  for (const rule of webRtcRules) assert.match(rule, /rtcp-mux-offer rtcp-mux-require UDP\/TLS\/RTP\/SAVPF/);
 });
 
 test('known dialog routing precedes initial INVITE and conferences fail closed', () => {
