@@ -489,7 +489,9 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         // Media does not depend on it, so a call in progress stays up; only
         // if the edge has not come back within the grace period is the call
         // treated as lost.
-        if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
+        // Repeated registration failures must not extend the first recovery
+        // deadline indefinitely. A successful registration clears it above.
+        if (transportLossTimerRef.current) return;
         transportLossTimerRef.current = setTimeout(() => {
           transportLossTimerRef.current = null;
           if (voice.currentConnectionState !== ConnectionState.CONNECTED) emergencyTransportCleanup(ConnectionState.DISCONNECTED);

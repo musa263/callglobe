@@ -91,3 +91,9 @@ CDR timestamps must fit JavaScript's supported date range. Invalid microsecond
 values fall back to valid seconds; records without a valid start are unreadable,
 and invalid end timestamps fall back to the start instead of throwing a retryable
 server error. These boundaries are covered by the credentials-route and CDR tests.
+
+REGISTER access reads the admin, subscription, and plan from one tenant snapshot.
+It uses the existing schema without running SaaS bootstrap/DDL and fails closed
+if persisted subscription data is missing. Current identity and uncached session
+revocation checks remain mandatory. Slow auth requests (at least 1500 ms) log
+phase durations and status only, without Digest material or user identifiers.

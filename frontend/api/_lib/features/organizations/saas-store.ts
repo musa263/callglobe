@@ -332,7 +332,12 @@ export async function readTenantSaasState(organizationId: string, config?: PbxCo
   }
   if (options.initialize !== false) await ensureSaasRows(config);
   const tenantConfig = config ? { ...config, organizations: config.organizations.filter((organization) => organization.id === organizationId) } : undefined;
-  return stateFromRows(await readTenantSaasRows(organizationId, options), tenantConfig);
+  const rows = await readTenantSaasRows(organizationId, options);
+  // Authentication cannot use the display/bootstrap defaults in mergeState.
+  if (options.initialize === false && (!rows.plans.length || !rows.tenants.some(row => row.organization_id === organizationId))) {
+    throw new Error('Calling subscription data is unavailable.');
+  }
+  return stateFromRows(rows, tenantConfig);
 }
 
 export async function saveSaasSubscription(organizationId: string, subscription: SaasSubscription, config: PbxConfig) {

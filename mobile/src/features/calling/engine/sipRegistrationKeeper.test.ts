@@ -223,3 +223,37 @@ test('explicit foreground refresh validates a supposedly live registration', asy
   assert.equal(h.log.filter(line => line === 'register').length, 2,
     'OS migration can leave both local state flags true while the server contact is dead');
 });
+
+test('temporary REGISTER rejection after Unregistered preserves a call through recovery', async () => {
+  const h = harness();
+  await h.keeper.start();
+  h.state.registered = false;
+  h.keeper.onUnregistered(); // SIP.js emits this before onReject, even with WSS up.
+  h.keeper.onRejected(503, 'Authentication service unavailable');
+  assert.equal(h.log.some(line => line.startsWith('Unregistered:')), false);
+  assert.equal(h.log.at(-1), 'Reconnecting: 503 Authentication service unavailable');
+  assert.equal(h.timers.length, 1);
+  h.fire();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.state.registered, true);
+  assert.equal(h.timers.length, 0);
+});
+
+for (const status of [401, 403]) test(`final ${status} still reports refusal after the provisional recovery state`, async () => {
+  const h = harness();
+  await h.keeper.start();
+  h.state.registered = false;
+  h.keeper.onUnregistered();
+  h.keeper.onRejected(status, 'Forbidden');
+  assert.equal(h.log.at(-1), `Unregistered: ${status} Forbidden`);
+});
+
+test('late registration callbacks after stop cannot restart recovery or notify the UI', async () => {
+  const h = harness();
+  await h.keeper.start();
+  h.keeper.stop();
+  h.keeper.onUnregistered();
+  h.keeper.onRejected(503, 'Unavailable');
+  assert.deepEqual(h.log, ['register']);
+  assert.equal(h.timers.length, 0);
+});

@@ -181,3 +181,13 @@ each worker and is diagnostic evidence, not proof of client identity. DigitalOce
 cloud firewall rules need separate access. `call-trace` continues past empty or
 unavailable service logs and labels those sections, rather than aborting before
 Kamailio output. An empty section must not be read as a healthy service.
+
+## Authentication service failures
+
+AUTH and CHALLENGE require the expected HTTP status and valid decision/nonce
+JSON. Kamailio's HTTP client can return a positive libcurl error (28 for a
+timeout); it is not an HTTP success or a wrong password. Unavailable or invalid
+responses return SIP 503, without minting another nonce or advertising a password
+challenge. Only a valid HTTP 403 / `ok:false` response reaches Digest recovery.
+The loopback auth phase of `validate_edge.py` exercises these production routes,
+including timeout/recovery, stale nonce, and malformed or inconsistent responses.

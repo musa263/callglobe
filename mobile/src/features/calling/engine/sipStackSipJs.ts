@@ -324,13 +324,8 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
   const registerer = new Registerer(userAgent, { expires: 600 });
   const registrationListener = (state: RegistererState) => {
     if (state === RegistererState.Registered) keeper.onRegistered();
-    if (state === RegistererState.Unregistered) keeper.onUnregistered();
-    // A REGISTER that failed because the socket was down comes back as a
-    // synthetic 503 and an Unregistered state. While the keeper is bringing
-    // the socket back that is "reconnecting", not "signed out": the UI keeps
-    // any call up instead of closing it over a blip.
-    if (state === RegistererState.Unregistered && keeper.wanted && !userAgent.isConnected()) {
-      onRegistration?.('Reconnecting', 'registration lapsed while the connection was down');
+    if (state === RegistererState.Unregistered && keeper.wanted) {
+      keeper.onUnregistered();
       return;
     }
     onRegistration?.(toSipRegistererState(state));
@@ -347,9 +342,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     register: () => registerer.register({
       requestDelegate: {
         onReject: (response) => {
-          keeper.onUnregistered();
-          if (!userAgent.isConnected()) return; // the state listener has already said "reconnecting"
-          onRegistration?.('Unregistered', `${response.message.statusCode} ${response.message.reasonPhrase}`);
+          keeper.onRejected(response.message.statusCode ?? 503, response.message.reasonPhrase || 'Registration rejected');
         },
       },
     }).then(() => undefined),

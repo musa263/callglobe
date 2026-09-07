@@ -97,3 +97,11 @@ configuration have different lifetimes; use the API's configuration expiry.
 Run the keeper unit tests, mobile SipRecovery/SipBootstrap integration suites,
 `bash verify.sh`, and the browser SIP harness. These prove controlled recovery,
 not physical Wi-Fi/5G handoff, killed-state operation, or two-way carrier audio.
+
+A Registerer `Unregistered` event precedes SIP.js's rejection callback and also
+occurs for expiry and server failures. While registration is wanted it starts
+recovery; a final 401/403 still reports refusal. Temporary 408/429/5xx responses
+keep established media alive during the existing 45-second recovery grace.
+Repeated failures cannot extend that deadline; successful registration clears
+it. Keeper tests cover callback ordering and mounted-provider tests cover media
+survival, recovery and bounded cleanup. These changes require a mobile build.
