@@ -13,7 +13,10 @@ HTTP_PORT = 18081
 def auth_config(source):
     start = source.index('route[CHALLENGE] {')
     end = source.index('# What the edge decides', start)
-    routes = source[start:end].replace('127.0.0.1:8081', f'127.0.0.1:{HTTP_PORT}')
+    routes = source[start:end]
+    routes += source[source.index('route[READ_ROUTE] {'):source.index('# A call between two extensions')]
+    routes += source[source.index('route[ROUTE_CHECK] {'):source.index('route[INVITE] {')]
+    routes = routes.replace('127.0.0.1:8081', f'127.0.0.1:{HTTP_PORT}')
     return '\n'.join([
         '#!KAMAILIO', 'debug=2', 'children=1', f'listen=udp:127.0.0.1:{PORT}',
         *[f'loadmodule "{name}.so"' for name in ['sl', 'pv', 'xlog', 'textops', 'siputils', 'jansson', 'http_client']],
@@ -21,12 +24,15 @@ def auth_config(source):
         '''route {
             if (is_method("OPTIONS")) { send_reply("200", "OK"); exit; }
             $var(auth_stale) = 0;
-            $var(rtok) = "";
+            $var(rtok) = "fixture";
+            if (is_method("INVITE")) {
+                if (!route(ROUTE_CHECK)) { send_reply("403", "Forbidden"); exit; }
+                send_reply("200", "OK"); exit;
+            }
             if (!is_present_hf("Authorization")) { route(CHALLENGE); exit; }
             if (!route(AUTH)) { route(CHALLENGE); exit; }
             send_reply("200", "OK");
         }
-        route[READ_ROUTE] { return; }
         ''', routes,
     ])
 
@@ -114,4 +120,21 @@ def run_auth_probes(state):
         reply = exchange(authorized=False)
         assert reply.startswith(f'SIP/2.0 {expected} '), (label, reply)
         assert ('WWW-Authenticate:' in reply) == (expected == 401), (label, reply)
+        print(f'PASS auth {label}: {expected}', flush=True)
+
+    # No calls are routed: the isolated listener returns only an admission
+    # result. A prior valid decision must never survive a later HTTP failure.
+    for label, status, body, delay, expected in [
+        ('valid internal route', 200, '{"ok":false,"routeId":"abcdefghijklmnop"}', 0, 200),
+        ('internal route timeout after success', 200, '', 1.5, 503),
+        ('internal route denied', 403, '{"ok":false}', 0, 403),
+        ('internal route malformed', 200, '{broken', 0, 503),
+        ('internal route missing decision', 200, '{}', 0, 503),
+        ('internal route server error', 500, '{"routeId":"abcdefghijklmnop"}', 0, 503),
+        ('internal route recovery', 200, '{"routeId":"abcdefghijklmnop"}', 0, 200),
+    ]:
+        state.update(status=status, body=body, delay=delay)
+        reply = exchange('INVITE')
+        assert reply.startswith(f'SIP/2.0 {expected} '), (label, reply)
+        assert 'WWW-Authenticate:' not in reply, (label, reply)
         print(f'PASS auth {label}: {expected}', flush=True)

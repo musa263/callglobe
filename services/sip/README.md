@@ -191,3 +191,9 @@ responses return SIP 503, without minting another nonce or advertising a passwor
 challenge. Only a valid HTTP 403 / `ok:false` response reaches Digest recovery.
 The loopback auth phase of `validate_edge.py` exercises these production routes,
 including timeout/recovery, stale nonce, and malformed or inconsistent responses.
+
+Internal route authorization also clears response state and requires HTTP 200
+before reading route fields. HTTP 403 denies admission; HTTP failures or missing
+route decisions return 503. A previous worker request's route can never authorize
+a later request whose HTTP lookup failed. The loopback gate covers timeout after
+success, denial, malformed responses, server failure, and recovery.
