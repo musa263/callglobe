@@ -207,3 +207,17 @@ It does not place calls, restart services, alter routing or export caller audio.
 Missing retained logs are reported as missing evidence. File energy and playback
 commands do not establish that RTP reached the caller; confirm with a handset
 and, where necessary, live media counters or a scoped capture.
+
+## Shared carrier IP connectivity
+
+`Carrier connectivity diagnostics` accepts the carrier IPv4/UDP port and the
+customer's expected public IPv4. It sends at most two SIP OPTIONS requests per
+target from the deployed edge, reports the socket source address and matching
+SIP response code, then checks whether the configured operations SSH identity can
+access the customer host. It places no calls and changes no services, DNS, trunk
+permissions or PBX routes. No response can mean carrier filtering or lack of
+OPTIONS support; a response does not prove authorized calls or two-way media.
+An expected IP in the portal cannot change the network source IP of another host.
+
+Run `python3 -m unittest discover -s services/sip/tests -p test_carrier_connectivity.py`
+for the bounded-probe tests; those tests use socket fixtures.
