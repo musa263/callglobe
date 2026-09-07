@@ -87,6 +87,23 @@ function actions(xml: string) {
   return [...xml.matchAll(/<action application="([^"]+)"(?: data="([^"]*)")?\/>/g)].map((match) => ({ app: match[1], data: (match[2] || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'") }));
 }
 
+test('queue retries spend only the configured ringing budget and stop at exhaustion', () => {
+  for (const maxWait of [15, 46, 100, 181]) {
+    const config = pbx();
+    config.callHandling.queues[0].maxWait = maxWait;
+    const attempts = Math.ceil(maxWait / 45);
+    let total = 0;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const list = actions(renderSipDialplan(input({ pbx: config, request: request({ stage: 'queue', arg: 'queue:q1', attempt }) })));
+      total += Number(list.find((item) => item.data.startsWith('call_timeout='))!.data.split('=')[1]);
+    }
+    assert.equal(total, maxWait, `queue budget ${maxWait}`);
+    const exhausted = actions(renderSipDialplan(input({ pbx: config, request: request({ stage: 'queue', arg: 'queue:q1', attempt: attempts }) })));
+    assert.ok(exhausted.some((item) => item.data === 'vocivo_stage=after-group'));
+    assert.ok(!exhausted.some((item) => item.app === 'bridge'));
+  }
+});
+
 /** The `text` query parameter of the first prompt URL inside an action's data. */
 function promptText(data: string) {
   const match = data.match(/http_cache:\/\/(https?:\/\/\S+)/);

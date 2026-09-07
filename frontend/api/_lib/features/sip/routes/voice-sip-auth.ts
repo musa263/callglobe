@@ -3,7 +3,7 @@ import { allowMobile, methodNotAllowed, publicError } from '../../../shared/http
 import { authorizeSipCall, type SipCallAuthorization } from '../sip-call-authorization.js';
 import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredentials } from '../sip-credential-store.js';
-import { sipEdgeAuthorized, sipNonceIsValid } from '../sip-edge-auth.js';
+import { sipEdgeAuthorized, sipNonceStatus } from '../sip-edge-auth.js';
 import { claimReplayKey } from '../../../shared/object-store.js';
 import { ownsSipRegistration, sipDigestReplayKey } from '../sip-registration-auth.js';
 import { sipRegistrationAllowed } from '../sip-registration-access.js';
@@ -69,7 +69,8 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       })) return res.status(403).json({ ok: false, reason: 'registration_identity_mismatch' });
       // Only an answer to a nonce this API issued, and recently, counts. A
       // digest is otherwise replayable for as long as the password stands.
-      if (!sipNonceIsValid(challenge.nonce, challenge.username)) return res.status(403).json({ ok: false, reason: 'stale_nonce' });
+      const nonceStatus = sipNonceStatus(challenge.nonce, challenge.username);
+      if (nonceStatus === 'invalid') return res.status(403).json({ ok: false, reason: 'invalid_nonce' });
       // One extension is signed in on a browser and a handset at once, and each
       // holds a password of its own. Any of the live ones authenticates.
       const stored = (await deps.readSipCredentials(challenge.username)).filter((credential) => credential.realm === challenge.realm);
@@ -80,6 +81,9 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       const ok = Boolean(matched);
       if (!ok) return res.status(403).json({ ok: false, reason: 'password_mismatch', credentials: stored.length });
       if (!await deps.sipRegistrationAllowed(matched!)) return res.status(403).json({ ok: false, reason: 'calling_access_revoked' });
+      // Tell the edge to advertise stale=true only after the Digest and current
+      // access verify. This never authorizes registration with an expired nonce.
+      if (nonceStatus === 'expired') return res.status(403).json({ ok: false, reason: 'stale_nonce', stale: true });
       if (ok) {
         const replayKey = sipDigestReplayKey(challenge);
         if (!replayKey || !await deps.claimReplayKey(replayKey, new Date(Number(challenge.nonce.split('.')[0]) * 1000))) {

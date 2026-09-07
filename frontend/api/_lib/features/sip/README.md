@@ -61,3 +61,19 @@ revalidated at REGISTER, and registrar contact revocation needs separate work.
 
 Run frontend tests/typecheck. `sip-config.test.ts` is a structural guard, not a
 Kamailio parser or real SIP-wire test; validate staged config in the pinned image.
+
+## Registration recovery and queue budgets
+
+The auth API distinguishes an invalid nonce from an expired, signed nonce. Only
+an otherwise valid Digest from a currently allowed credential receives
+`{ ok: false, reason: 'stale_nonce', stale: true }`. Kamailio turns that into a
+fresh `401` challenge with `stale=true`; the expired request is never registered
+and never consumes replay state. Invalid credentials and replayed Digests do not
+receive the stale hint. Challenge JSON state is reset before each lookup, so a
+missing nonce cannot reuse a previous request's nonce. Deploy the matching edge
+configuration before promoting the API to enable recovery.
+
+Queue bridge attempts share the configured `maxWait` ringing budget. The final
+attempt uses only the remainder (including a one-second remainder); an exhausted
+queue proceeds to its fallback without another bridge. Prompt playback and HTTP
+callback time are additional to this ringing budget, not a wall-clock guarantee.

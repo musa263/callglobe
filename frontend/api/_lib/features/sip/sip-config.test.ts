@@ -37,3 +37,14 @@ test('known dialog routing precedes initial INVITE and conferences fail closed',
   const xml = readFileSync(new URL('../../../../../services/sip/freeswitch/dialplan/public.xml', import.meta.url), 'utf8');
   assert.doesNotMatch(xml, /application="conference"/);
 });
+
+test('REGISTER challenges reset per-request state and carry verified stale recovery', () => {
+  const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
+  const register = config.slice(config.indexOf('route[REGISTER]'), config.indexOf('route[CHALLENGE]'));
+  assert.ok(register.indexOf('$var(auth_stale) = 0;') < register.indexOf('route(AUTH)'));
+  const auth = config.slice(config.indexOf('route[AUTH]'), config.indexOf('route[UNTRUST_ROUTING]'));
+  assert.match(auth, /jansson_get\("stale", "\$var\(res\)", "\$var\(auth_stale\)"\)/);
+  const challenge = config.slice(config.indexOf('route[CHALLENGE]'), config.indexOf('route[AUTH]'));
+  assert.ok(challenge.indexOf('$var(nonce) = "";') < challenge.indexOf('jansson_get("nonce"'));
+  assert.match(challenge, /stale=true/);
+});

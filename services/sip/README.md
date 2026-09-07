@@ -120,3 +120,27 @@ originate a call on the account.
 The list is rendered into `/etc/kamailio/trunk-sources.cfg` at container start
 and included by `kamailio.cfg`, so `docker compose logs kamailio` reports how
 many entries were accepted and names any it could not parse.
+
+## Diagnostic accuracy and expired authentication
+
+Use `gh workflow run ops-sip-edge.yml -f action=call-trace -f host=sip`.
+The default window is two hours; `-f since=30m` changes the container-log window.
+FreeSWITCH file output is a bounded tail and can contain older startup entries.
+The action does not query the database or automatically correlate a SIP Call-ID.
+Its Kamailio filter includes ACK/UPDATE/PRACK and preserves rejections from the
+listed carrier/loopback sources without using unsupported grep lookahead.
+
+For media diagnostics use `docker compose logs --since 10m rtpengine coturn`
+from the deployed SIP directory. RTPEngine performs WebRTC/carrier media
+interoperation; coturn provides STUN/TURN relay connectivity. No matching errors
+is not evidence of two-way RTP. The `internal` FreeSWITCH profile is disabled;
+inspect `sofia status` and trace the active `external` or `trunk` profile for the
+leg under investigation. Packet capture, profile tracing, and two-way audio
+acceptance require a bounded reproduction on the host and actual clients.
+
+The matching auth API reports a verified expired Digest with `stale: true`.
+Kamailio returns a fresh nonce with `stale=true`, allowing SIP.js's bounded stale
+challenge retry. It resets challenge variables for each request and rejects
+missing/malformed nonce responses with 503. Replay, identity, and current-access
+checks remain enforced. This is local code coverage until the changed config has
+passed the pinned Kamailio parser and a REGISTER/401/REGISTER/200 wire test.
