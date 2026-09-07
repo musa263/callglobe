@@ -197,3 +197,13 @@ before reading route fields. HTTP 403 denies admission; HTTP failures or missing
 route decisions return 503. A previous worker request's route can never authorize
 a later request whose HTTP lookup failed. The loopback gate covers timeout after
 success, denial, malformed responses, server failure, and recovery.
+
+## Inbound audio diagnostics
+
+The `Inbound audio diagnostics` workflow accepts a FreeSWITCH channel UUID.
+It reads the retained call log, receptionist stages, runtime RTP port range,
+selected SDP media fields and PCM statistics for the exact greeting files used.
+It does not place calls, restart services, alter routing or export caller audio.
+Missing retained logs are reported as missing evidence. File energy and playback
+commands do not establish that RTP reached the caller; confirm with a handset
+and, where necessary, live media counters or a scoped capture.
