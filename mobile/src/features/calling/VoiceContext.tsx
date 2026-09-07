@@ -1,14 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import NetInfo, { type NetInfoStateType } from '@react-native-community/netinfo';
-import { AppState, Platform } from 'react-native';
-import {
-  createTokenConfig,
-  TelnyxVoipClient,
-  TelnyxVoiceApp,
-} from '@telnyx/react-voice-commons-sdk';
+import { AppState, NativeModules, Platform } from 'react-native';
+import { createManagedTokenConfig as createTokenConfig, ManagedVoiceRuntime } from './runtime/managedVoiceRuntime';
+import type { VoiceEdge } from './runtime/voiceEdge';
+import { ensureSipRegistration } from './runtime/sipNative';
 import { api } from '../../shared/api';
-import { applyIncomingRingtone, loadIncomingRingtone } from './media/ringtone';
-import { loadVoiceSession, persistVoiceSession, voipClient } from './runtime/voipClient';
+import { pushEnvironment } from './runtime/pushEnvironment';
+import { loadIncomingRingtone } from './media/ringtone';
+import { persistVoiceSession, voipClient } from './runtime/voipClient';
 import { CallState, ConnectionState, isTerminalVoiceCallState, type VoiceCall, type VoiceCallState, type VoiceConnectionState } from './engine/voiceEngine';
 import { voice } from './engine/voiceClientFacade';
 import { CallLifecycleRegistry, isSettledLocalHangupError, isTerminalCallState, transactCallWaiting } from './state/callLifecycle';
@@ -44,7 +43,7 @@ const VoiceContext = createContext<VoiceContextValue | null>(null);
  */
 const signallingReconnectGraceMs = 45_000;
 
-export function VoiceProvider({ children, bootstrapSession }: { children: React.ReactNode; bootstrapSession?: VoiceLoginConfig | null }) {
+export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: { children: React.ReactNode; bootstrapSession?: VoiceLoginConfig | null; onEngineSelected?: (edge: VoiceEdge | null) => void }) {
   const { loading, isAuthenticated, addHistory, profile } = useAuth();
   const [connection, setConnection] = useState(voice.currentConnectionState);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -489,8 +488,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
         // Media does not depend on it, so a call in progress stays up; only
         // if the edge has not come back within the grace period is the call
         // treated as lost.
-        // Repeated registration failures must not extend the first recovery
-        // deadline indefinitely. A successful registration clears it above.
+        // Repeated failures cannot extend the original recovery deadline.
         if (transportLossTimerRef.current) return;
         transportLossTimerRef.current = setTimeout(() => {
           transportLossTimerRef.current = null;
@@ -544,6 +542,7 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   }, [isAuthenticated, reportVoiceError]);
 
   useVoiceRegistration({
+    onEngineSelected,
     activeCallRef,
     bootstrapSession,
     isAuthenticated,
@@ -555,30 +554,45 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
   });
 
   const refreshIncomingCalls = useCallback(async () => {
-    setPushRegistration('registering');
-    let data = loginConfigRef.current;
-    if (!isVoiceSessionFresh(data, 60_000)) {
-      const session = await api.post<VoiceTokenResponse>('/api/telnyx/token', {});
-      data = voiceLoginConfig(session, await loadIncomingRingtone());
-    }
-    loginConfigRef.current = data;
-    await persistVoiceSession(data);
-    const pushToken = await waitForVoicePushToken();
-    if (!pushToken) {
-      setPushRegistration('unavailable');
-      throw new Error(`${Platform.OS === 'ios' ? 'iPhone' : 'Android'} did not provide a push token. Allow notifications, then reopen Vocivo and try again.`);
-    }
-    // Only the carrier engine has a token to log in with. On Vocivo's own edge
-    // the phone is already registered with Kamailio and there is nothing to do
-    // here — opening a carrier socket as well would route calls back through it.
-    if (voice.currentEngine !== 'sip') {
+    try {
+      setPushRegistration('registering');
+      if (!voice.currentEngine) throw new Error('The calling service is still starting up.');
+      if (voice.currentEngine === 'sip') {
+        await ensureSipRegistration(true);
+        const pushToken = await waitForVoicePushToken();
+        if (!pushToken) {
+          setPushRegistration('unavailable');
+          throw new Error('The device has not provided a calling push token. Allow notifications and try again.');
+        }
+        await api.post('/api/voice/devices', {
+          platform: Platform.OS === 'ios' ? 'ios' : 'android', token: pushToken,
+          environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
+        });
+        setPushRegistration('registered');
+        return;
+      }
+      let data = loginConfigRef.current;
+      if (!isVoiceSessionFresh(data, 60_000)) {
+        const session = await api.post<VoiceTokenResponse>('/api/telnyx/token', {});
+        data = voiceLoginConfig(session, await loadIncomingRingtone());
+      }
+      loginConfigRef.current = data;
+      await persistVoiceSession(data);
+      const pushToken = await waitForVoicePushToken();
+      if (!pushToken) {
+        setPushRegistration('unavailable');
+        throw new Error(`${Platform.OS === 'ios' ? 'iPhone' : 'Android'} did not provide a push token. Allow notifications, then reopen Vocivo and try again.`);
+      }
       await voipClient.loginWithToken(createTokenConfig(data.token, {
         debug: __DEV__, pushNotificationDeviceToken: pushToken, pushWhenActive: true,
         enableMissedCallNotifications: true, incomingCallRingtone: data.ringtone, useTrickleIce: true,
         ...(data.iceServers ? { iceServers: data.iceServers } : {}),
       }));
+      setPushRegistration('registered');
+    } catch (failure) {
+      setPushRegistration('unavailable');
+      throw failure;
     }
-    setPushRegistration('registered');
   }, []);
 
   const followRoute = useCallback(async (routeId: string, callId: string) => {
@@ -1060,39 +1074,15 @@ export function VoiceProvider({ children, bootstrapSession }: { children: React.
 
 export function VoiceRoot({ children }: { children: React.ReactNode }) {
   const { loading, isAuthenticated } = useAuth();
-  const [bootstrapSession, setBootstrapSession] = useState<VoiceLoginConfig | null>(null);
+  const [selectedEngine, setSelectedEngine] = useState<VoiceEdge | null>(null);
 
-  useEffect(() => {
-    if (!loading && !isAuthenticated) {
-      setBootstrapSession(null);
-      return;
-    }
-    let canceled = false;
-    const prepare = async () => {
-      try {
-        const launchedFromPush = await TelnyxVoipClient.isLaunchedFromPushNotification();
-        if (!launchedFromPush || canceled) return;
-        const ringtone = await loadIncomingRingtone();
-        const storedSession = await loadVoiceSession();
-        const session: VoiceLoginConfig = isVoiceSessionFresh(storedSession, 30_000)
-          ? { ...storedSession, ringtone }
-          : isAuthenticated
-            ? voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone)
-            : (() => { throw new Error('The cached calling token expired before the account session was restored.'); })();
-        await Promise.all([applyIncomingRingtone(ringtone), persistVoiceSession(session)]);
-        if (!canceled) setBootstrapSession(session);
-      } catch (failure) {
-        const normalized = failure instanceof Error ? failure : new Error(String(failure));
-        console.error('[Vocivo Voice] killed-state session bootstrap failed', { message: normalized.message, stack: normalized.stack });
-      }
-    };
-    prepare();
-    return () => { canceled = true; };
-  }, [isAuthenticated, loading]);
+  // The SIP native wake handler is installed by index.js before this UI mounts.
+  // Only an authenticated managed selection may start the carrier JS runtime.
+  return <>
+    <VoiceProvider onEngineSelected={setSelectedEngine}>{children}</VoiceProvider>
+    {!loading && isAuthenticated && selectedEngine === 'telnyx' ? <ManagedVoiceRuntime /> : null}
+  </>;
 
-  // Mount the native Telnyx runtime on the first render. PushKit and Android
-  // Telecom actions must not wait behind the visual account bootstrap.
-  return <TelnyxVoiceApp voipClient={voipClient} enableAutoReconnect debug={__DEV__}><VoiceProvider bootstrapSession={bootstrapSession}>{children}</VoiceProvider></TelnyxVoiceApp>;
 }
 
 export function useVoice() {

@@ -167,4 +167,15 @@ final class VocivoSip: RCTEventEmitter {
   func voipPushToken(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
     resolve(UserDefaults.standard.string(forKey: "vocivo_voip_push_token"))
   }
+
+  @objc(setVoiceSignedIn:resolver:rejecter:)
+  func setVoiceSignedIn(_ signedIn: Bool, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    UserDefaults.standard.set(signedIn, forKey: "vocivo_voice_signed_in")
+    if !signedIn {
+      // Retire legacy persisted actions without initializing a carrier manager.
+      UserDefaults.standard.removeObject(forKey: "pending_voip_push")
+      UserDefaults.standard.removeObject(forKey: "pending_voip_action")
+    }
+    resolve(true)
+  }
 }

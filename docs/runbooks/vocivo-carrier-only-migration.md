@@ -134,6 +134,16 @@ It does not connect to production PostgreSQL or prove device/carrier behavior.
 
 ## Stage 2 first implementation slice
 
+September 8 checkpoint: the draft below was selectively integrated with all
+Stage 1 call-recovery fixes, including credential renewal protection, the bounded
+45-second deadline, successful re-registration acknowledgment and signed-profile
+APNs routing. The app now also uses Vocivo native methods for the push sign-in
+flag and iOS/Android token access. Build 64 is the first binary with that contract.
+The full gate passed 421 backend/web, 151 mobile unit and 70 integration tests
+(642 total). Regenerated iOS/Android sources match the maintained native files;
+iOS Release compiled and passed deep/strict signing verification, and Android
+debug compiled (486 tasks). No physical acceptance is claimed for build 64.
+
 `managedVoiceRuntime.tsx` loads the Telnyx JavaScript SDK lazily. SIP startup,
 shared native controls and sign-out do not create the managed client. VoiceRoot
 mounts its managed runtime only after authenticated configuration explicitly
@@ -147,10 +157,11 @@ Telnyx; errors leave push status unavailable instead of indefinitely registering
 
 This is not removal of the native SDK. `nativeVoiceBridge.ts` still uses the
 existing VoicePnBridge module supplied by the patched Telnyx native integration.
-Push-token access, ringtone preferences and some platform controls must move to
-Vocivo-owned native modules before removing that package/plugin. Next: implement
-and compile those native contracts on both platforms, then run physical-device
-push/CallKit/Telecom/audio acceptance before shipping a replacement build.
+Push-token access and native sign-in state moved to Vocivo in the September 8
+checkpoint. Ringtone compatibility, shared PushKit/FCM dispatch, Android native
+entry points and resource installation still need replacement before removing
+that package/plugin. Physical push/CallKit/Telecom/audio and sustained-call
+acceptance remain required before shipping the replacement to customers.
 
 Regression coverage: ManagedRuntimeIsolation proves lazy initialization and native
 control behavior; VoiceRegistration checks managed push persistence ordering;

@@ -1,21 +1,22 @@
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import { AppState, NativeModules, Platform } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
-import { createTokenConfig, TelnyxVoipClient } from '@telnyx/react-voice-commons-sdk';
+import { createManagedTokenConfig as createTokenConfig, isManagedPushLaunch } from '../runtime/managedVoiceRuntime';
 import { api } from '../../../shared/api';
-import { applyIncomingRingtone, loadIncomingRingtone } from '../media/ringtone';
-import { getVoicePushToken, persistVoiceSession, voipClient } from '../runtime/voipClient';
+import { pushEnvironment } from '../runtime/pushEnvironment';
+import { applyIncomingRingtone, defaultRingtone, loadIncomingRingtone } from '../media/ringtone';
+import { getVoicePushToken, loadVoiceSession, persistVoiceSession, voipClient } from '../runtime/voipClient';
 import { ensureSipRegistration, onSipRegistration, refreshVocivoSip, unregisterVocivoSip } from '../runtime/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../media/voiceRecovery';
-import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig } from '../runtime/voiceEdge';
+import { shouldUseSipNative, voiceEdgeFromConfig, type VoiceEdgeConfig, type VoiceEdge } from '../runtime/voiceEdge';
 import type { ActiveCall } from '../../../shared/types';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 import { voiceLoginConfig } from './session';
-import { pushEnvironment } from '../runtime/pushEnvironment';
 
 type VoiceRegistrationInput = {
+  onEngineSelected?: (edge: VoiceEdge | null) => void;
   activeCallRef: MutableRefObject<ActiveCall | null>;
   bootstrapSession?: VoiceLoginConfig | null;
   isAuthenticated: boolean;
@@ -27,6 +28,7 @@ type VoiceRegistrationInput = {
 };
 
 export function useVoiceRegistration({
+  onEngineSelected,
   activeCallRef,
   bootstrapSession,
   isAuthenticated,
@@ -36,9 +38,13 @@ export function useVoiceRegistration({
   setError,
   setPushRegistration,
 }: VoiceRegistrationInput) {
+  // A late push bootstrap is input to startup, not a new account/engine login.
+  const bootstrapSessionRef = useRef(bootstrapSession);
+  bootstrapSessionRef.current = bootstrapSession;
   useEffect(() => {
     if (loading) return;
     if (!isAuthenticated) {
+      onEngineSelected?.(null);
       loginConfigRef.current = null;
       // Both stacks. The carrier client alone was signed out, and the SIP
       // user agent kept its registration alive: the signed-out phone went on
@@ -72,19 +78,35 @@ export function useVoiceRegistration({
         if (onSipEdge && !shouldUseSipNative('sip', NativeModules)) {
           throw new Error('This build does not include Vocivo SIP calling. Install the latest app build.');
         }
-        const launchedFromPush = !onSipEdge && await TelnyxVoipClient.isLaunchedFromPushNotification();
+        const launchedFromPush = !onSipEdge && await isManagedPushLaunch();
         if (canceled) return;
-        const ringtone = await loadIncomingRingtone();
-        await applyIncomingRingtone(ringtone);
-        const pushBootstrap = launchedFromPush && bootstrapSession && isVoiceSessionFresh(bootstrapSession, 30_000)
-          ? bootstrapSession
+        let ringtone = defaultRingtone;
+        const prepareRingtone = async () => {
+          const selected = await loadIncomingRingtone();
+          if (canceled) return;
+          ringtone = selected;
+          await applyIncomingRingtone(selected);
+        };
+        if (onSipEdge) {
+          // Native ringtone preferences do not gate authenticated SIP signaling.
+          prepareRingtone().catch((failure) => reportVoiceError('prepare incoming ringtone', failure));
+        } else {
+          await prepareRingtone();
+        }
+        if (canceled) return;
+        const bootstrap = launchedFromPush
+          ? bootstrapSessionRef.current || await loadVoiceSession()
+          : null;
+        if (canceled) return;
+        const pushBootstrap = launchedFromPush && bootstrap && isVoiceSessionFresh(bootstrap, 30_000)
+          ? { ...bootstrap, ringtone }
           : null;
         const initialSession = onSipEdge ? null : pushBootstrap
           || voiceLoginConfig(await api.post<VoiceTokenResponse>('/api/telnyx/token', {}), ringtone);
         if (canceled) return;
         loginConfigRef.current = initialSession;
         if (initialSession) await persistVoiceSession(initialSession);
-        const pushNotificationDeviceToken = await getVoicePushToken();
+        const pushNotificationDeviceToken = onSipEdge ? undefined : await getVoicePushToken();
         if (canceled) return;
         let storedPushToken: string | undefined;
         if (pushNotificationDeviceToken) {
@@ -164,6 +186,7 @@ export function useVoiceRegistration({
         if (onSipEdge) {
           const engine = sipEngine();
           voice.use(engine.name, engine.client, engine.platform);
+          onEngineSelected?.('sip');
           sipAuthSubscription?.remove();
           sipAuthSubscription = onSipRegistration((state, reason) => {
             if (canceled) return;
@@ -185,6 +208,7 @@ export function useVoiceRegistration({
         } else {
           const engine = telnyxEngine();
           voice.use(engine.name, engine.client, engine.platform);
+          onEngineSelected?.('telnyx');
         }
         if (canceled) return;
         let registeredToken = storedPushToken;
@@ -265,12 +289,11 @@ export function useVoiceRegistration({
 
         const registerLatestDevice = async () => {
           if (canceled || registrationBusy) return;
-          const token = await getVoicePushToken();
-          if (canceled) return;
-          if (!token || token === registeredToken) return;
           registrationBusy = true;
-          setPushRegistration('registering');
           try {
+            const token = await getVoicePushToken();
+            if (canceled || !token || token === registeredToken) return;
+            setPushRegistration('registering');
             await api.post('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android', token,
               environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
@@ -292,6 +315,11 @@ export function useVoiceRegistration({
         if (initialSession) scheduleSessionRefresh(initialSession);
         setPushRegistration(registeredToken ? 'registered' : 'registering');
         if (!registeredToken) {
+          // SIP can become connected while push delivery is still registering.
+          // Keep push status separate and retry failures without restarting SIP.
+          if (onSipEdge) {
+            registerLatestDevice().catch((failure) => reportVoiceError('register Vocivo wakeup token', failure));
+          }
           tokenTimer = setInterval(() => {
             registerLatestDevice().then(() => {
               if (!registeredToken || !tokenTimer) return;
@@ -361,5 +389,5 @@ export function useVoiceRegistration({
       appStateSubscription?.remove();
       networkSubscription?.();
     };
-  }, [activeCallRef, bootstrapSession, isAuthenticated, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration]);
+  }, [activeCallRef, isAuthenticated, loading, loginConfigRef, reportVoiceError, setError, setPushRegistration, onEngineSelected]);
 }
