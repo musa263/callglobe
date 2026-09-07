@@ -8,6 +8,7 @@ import os
 import queue
 import threading
 import time
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,7 @@ cache_sweep_seconds = max(60, int(os.getenv("TTS_CACHE_SWEEP_SECONDS", "3600")))
 service_secret = os.getenv("TTS_SERVICE_SECRET", "")
 # Languages whose pipeline is built when the process starts rather than on the
 # first caller's greeting. American English is what every default prompt uses.
-warm_languages = [code for code in os.getenv("TTS_WARM_LANGUAGES", "a").split(",") if code.strip()]
+warm_languages = [code.strip() for code in os.getenv("TTS_WARM_LANGUAGES", "a").split(",") if code.strip()]
 pipelines: dict[str, KPipeline] = {}
 pipelines_lock = threading.Lock()
 
@@ -109,7 +110,7 @@ def authorize(authorization: str | None = Header(default=None)) -> None:
     if not service_secret:
         raise HTTPException(status_code=503, detail="TTS_SERVICE_SECRET is not configured")
     expected = f"Bearer {service_secret}"
-    if authorization is None or not hmac.compare_digest(authorization, expected):
+    if authorization is None or not hmac.compare_digest(authorization.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -136,6 +137,8 @@ def synthesize(request: SpeechRequest) -> bytes:
     if not chunks:
         raise HTTPException(status_code=500, detail="Voice engine returned no audio")
     audio = np.concatenate(chunks)
+    if audio.ndim != 1 or audio.size == 0 or not np.isfinite(audio).all() or not np.any(audio):
+        raise HTTPException(status_code=503, detail="Voice engine returned invalid or silent audio")
     log.info("rendered %d chars as %s in %.1fs (%.1fs of audio)", len(request.input), request.voice, time.monotonic() - started, len(audio) / 24000)
     buffer = io.BytesIO()
     sf.write(buffer, audio, 24000, format="WAV", subtype="PCM_16")
@@ -201,8 +204,13 @@ def cached_path(request: SpeechRequest) -> Path:
 def is_cached(request: SpeechRequest) -> bool:
     path = cached_path(request)
     try:
-        return path.is_file() and path.stat().st_size > 44
-    except OSError:
+        if not path.is_file():
+            return False
+        with wave.open(str(path), "rb") as audio:
+            frames = audio.getnframes()
+            return (frames > 0 and audio.getnchannels() == 1 and audio.getsampwidth() == 2
+                    and audio.getframerate() == 24000 and len(audio.readframes(frames)) == frames * 2)
+    except (OSError, EOFError, wave.Error):
         return False
 
 
@@ -260,7 +268,9 @@ def _warm_up() -> None:
             pipeline_for(code)
         # A first synthesis loads the voice pack and primes torch; without it
         # the first caller's greeting still starts several seconds late.
-        render_to_cache(SpeechRequest(input="Thank you for calling.", voice="af_heart"))
+        # A persistent cache hit says nothing about this process's inference
+        # readiness. Exercise the model even when this prompt is already cached.
+        synthesize(SpeechRequest(input="Thank you for calling.", voice="af_heart"))
         ready.set()
         log.info("voice engine warm")
     except Exception as error:  # noqa: BLE001 - the service still answers; /health says why it is cold

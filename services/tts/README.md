@@ -45,3 +45,10 @@ items are skipped and live requests still render on demand. The `queued` count
 reports admitted items. A fixed table of 512 striped locks preserves single
 render ownership even during cache churn; hash collisions serialize work.
 The service tests use a stub voice, not perceptual or MOS validation.
+
+
+The engine rejects empty, all-zero and non-finite generated waveforms. Cache
+hits require a complete 24 kHz mono PCM16 WAV. Startup always performs inference,
+even if the warmup sentence already exists on the persistent volume. These
+checks prevent known invalid assets; they do not provide MOS or language grading.
+Malformed Unicode bearer values return unauthorized rather than an internal error.

@@ -70,8 +70,10 @@ class EslConnection:
     middle of something else, or the app talks to a call that has gone.
     """
 
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, reply_timeout: float = 5.0):
+        self._ack_timeout = ack_timeout
         self._reader = reader
+        self._reply_timeout = reply_timeout
         self._writer = writer
         self._events: asyncio.Queue[Message | Exception] = asyncio.Queue()
         self._lock = asyncio.Lock()
@@ -137,17 +139,33 @@ class EslConnection:
                 if self._failure:
                     raise self._failure
                 self._writer.write(text.encode("utf-8"))
-                await self._writer.drain()
+                await asyncio.wait_for(self._writer.drain(), timeout=self._reply_timeout)
                 if self._reader_task is None:
                     self._reader_task = asyncio.create_task(self._pump())
-                message = await self._replies.get()
+                try:
+                    message = await asyncio.wait_for(self._replies.get(), timeout=self._reply_timeout)
+                except asyncio.TimeoutError as error:
+                    # Once an acknowledgement is missing we cannot correlate
+                    # a late reply with the next command. Poison the session.
+                    self._failure = EslProtocolError("Event Socket acknowledgement timed out")
+                    self.hungup.set()
+                    self._writer.close()
+                    raise self._failure from error
                 if isinstance(message, Exception):
                     raise message
                 return message
 
         # A cancelled playback must still consume its acknowledgement before
         # uuid_break is sent, or the two commands can take each other's reply.
-        task = asyncio.create_task(exchange())
+        async def bounded_exchange():
+            try:
+                return await asyncio.wait_for(exchange(), timeout=self._ack_timeout)
+            except asyncio.TimeoutError as error:
+                self._failure = EslProtocolError("Event Socket acknowledgment timed out")
+                self._writer.close()
+                await self._events.put(self._failure)
+                raise self._failure from error
+        task = asyncio.create_task(bounded_exchange())
         self._exchanges.add(task)
         def finished(done):
             self._exchanges.discard(done)
@@ -214,11 +232,11 @@ class EslConnection:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 log.warning("%s did not report completion within %ss", app, timeout)
-                return None
+                raise TimeoutError(f"{app} completion timed out")
             try:
                 message = await asyncio.wait_for(self._drain_or_read(), timeout=remaining)
-            except asyncio.TimeoutError:
-                return None
+            except asyncio.TimeoutError as error:
+                raise TimeoutError(f"{app} completion timed out") from error
             if self.hungup.is_set():
                 return None
             if message.event_name == "CHANNEL_EXECUTE_COMPLETE" and message.event.get("Application") == app and message.event.get("Application-UUID") == execution_id:

@@ -195,3 +195,25 @@ Use Python 3.11 (the container runtime) or newer for service validation. Tests
 also run without downloading Whisper models; inference and carrier behavior
 are mocked. The new `tests/test_ai_quality.py` covers stream failures, short
 answers, cancellation, context-independent message capture, and early playback.
+
+
+## Second-sweep failure contracts
+
+Malformed stream fields and unclosed content blocks enter model recovery.
+Only one tool action may be executed per turn. Rejected transfers and empty
+messages do not speak the model's success announcement. Missing ESL replies
+close the unusable connection after a five-second acknowledgement budget;
+missing application completions raise errors rather than advancing the turn.
+
+Setup failure, cancellation and transcript-storage exceptions have separate
+cleanup paths. Optional interruption-recording rejection falls back to sequential
+speech; a disconnected caller is not spoken to. A failed transcript upload cannot
+hang up a completed transfer. Startup errors close shared clients; shutdown stops
+admission, allows five seconds for active calls, then cancels and awaits cleanup
+before closing clients. Operators must allow time for cleanup beyond that grace
+period; a force-kill cannot drain calls.
+
+Fresh and cached speech WAVs must contain complete PCM16 frames. These checks
+validate the audio container, not perceived speech quality. See
+[the second-sweep report](../../docs/audits/ai-quality-sweep-2-2026-09-07.md)
+for regression evidence and remaining acceptance gates.

@@ -20,4 +20,4 @@ class KPipeline:
     def __call__(self, text: str, voice: str = "af_heart", speed: float = 1.0):
         time.sleep(0.02)
         for part in text.split(". ")[:2] or [text]:
-            yield part, None, np.zeros(2400, dtype=np.float32)
+            yield part, None, (0.1 * np.sin(np.arange(2400) * 2 * np.pi * 440 / 24000)).astype(np.float32)

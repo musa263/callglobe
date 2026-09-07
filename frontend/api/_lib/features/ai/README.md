@@ -32,3 +32,16 @@ The pre-render phrase list matches the Python canned prompts and fillers.
 Opening-hours descriptions only compress consecutive closed days into ranges.
 The voice quality field is a static catalog grade, not a measured MOS score;
 Spanish, Italian and Portuguese currently have no B- or better catalog fallback.
+
+
+`createAiTransferHandler` exposes injected dependencies for route regressions.
+A signed request still checks the current AI enabled/transfer flags, assistant id
+and extension tenant. Destinations must be exact 2–5 digit strings. A pre-dial
+failure after stopping the assistant attempts to resume the stored assistant.
+Failures without a routing claim cannot stop playback. Once a dial was attempted,
+the claim is retained and playback is left alone because a lost response does not
+prove that no leg was created; carrier reconciliation remains an acceptance gate.
+
+Self-hosted transfer targets also reject malformed extensions and blank SIP
+identities. API prewarming preserves titles and numbered-sentence boundaries using
+the Python splitter's rules, so these phrases hit the same cache.

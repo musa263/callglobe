@@ -216,3 +216,10 @@ test('nonconsecutive closed days do not claim that open days are closed', async 
   }]));
   assert.match(describeOfficeHours({ timezone: 'UTC', holidays: [], weekdays }), /Closed Monday and Wednesday and Friday\./);
 });
+
+test('self-hosted AI directory rejects malformed extensions and blank SIP identities', () => {
+  assert.deepEqual(transferTargets([
+    extension({extension:'1001extra'}), extension({extension:'123456'}),
+    extension({extension:'1001',sipUsername:'   '}),extension({extension:'1002'}),
+  ]),[{extension:'1002',label:'Sam Tailor'}]);
+});

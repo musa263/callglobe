@@ -30,33 +30,58 @@ async def serve() -> None:
     api = VocivoApi(settings)
     handler = CallHandler(settings, voice, ears, brain, api)
 
-    log.info("language model %s at %s (workspace %s); voice engine at %s", settings.llm_model, settings.llm_base_url, settings.llm_workspace_id or "not set", settings.tts_url)
-    log.info("warming the speech recogniser")
-    await ears.warm()
+    calls: set[asyncio.Task] = set()
+    server = None
+    loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
+    registered_signals = []
 
     async def on_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        calls.add(task)
         connection = EslConnection(reader, writer)
         try:
+            if stopping.is_set():
+                return
             await handler.handle(connection)
-        except Exception as error:  # noqa: BLE001 - one bad call must not stop the service
-            log.exception("unhandled error on a call: %s", error)
+        except Exception:
+            log.exception("unhandled error on a call")
+        finally:
             await connection.close()
+            calls.discard(task)
 
-    server = await asyncio.start_server(on_connection, settings.listen_host, settings.listen_port)
-    where = ", ".join(str(socket.getsockname()) for socket in server.sockets or [])
-    log.info("receptionist listening for FreeSWITCH on %s", where)
-
-    stopping = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for name in (signal.SIGINT, signal.SIGTERM):
-        # Calls in progress finish; new ones stop arriving.
-        loop.add_signal_handler(name, stopping.set)
-
-    async with server:
+    try:
+        log.info("warming the speech recogniser")
+        await ears.warm()
+        server = await asyncio.start_server(on_connection, settings.listen_host, settings.listen_port)
+        where = ", ".join(str(socket.getsockname()) for socket in server.sockets or [])
+        log.info("receptionist listening for FreeSWITCH on %s", where)
+        for name in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(name, stopping.set)
+            registered_signals.append(name)
         await stopping.wait()
+    finally:
+        stopping.set()
+        if server is not None:
+            server.close()
+            await server.wait_closed()
+        # Let admitted callbacks register before taking the shutdown snapshot.
+        await asyncio.sleep(0)
+        await drain_calls(calls)
+        for name in registered_signals:
+            loop.remove_signal_handler(name)
+        # Calls finish filing their transcripts before their HTTP clients close.
+        await asyncio.gather(voice.close(), brain.close(), api.close(), return_exceptions=True)
 
-    log.info("shutting down")
-    await asyncio.gather(voice.close(), brain.close(), api.close(), return_exceptions=True)
+
+async def drain_calls(calls: set[asyncio.Task], grace_seconds: float = 5.0) -> None:
+    if not calls:
+        return
+    _, pending = await asyncio.wait(tuple(calls), timeout=grace_seconds)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def run() -> None:

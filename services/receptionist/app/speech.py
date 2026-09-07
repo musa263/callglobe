@@ -96,6 +96,14 @@ def split_sentences(text: str, *, minimum: int = 12, maximum_parts: int = 8) -> 
     return parts
 
 
+def valid_pcm_wav(audio) -> bool:
+    frames = audio.getnframes()
+    if frames <= 0 or audio.getframerate() <= 0 or audio.getsampwidth() != 2 or audio.getnchannels() not in (1, 2):
+        return False
+    expected = frames * audio.getsampwidth() * audio.getnchannels()
+    return len(audio.readframes(frames)) == expected
+
+
 class Voice:
     """
     Turns text into a file FreeSWITCH can play.
@@ -138,7 +146,7 @@ class Voice:
         if path.exists():
             try:
                 with wave.open(str(path), "rb") as cached:
-                    if cached.getnframes() > 0 and cached.getframerate() > 0:
+                    if valid_pcm_wav(cached):
                         return path
             except (OSError, EOFError, wave.Error):
                 log.warning("discarding invalid cached speech audio")
@@ -163,6 +171,13 @@ class Voice:
         content_type = response.headers.get("content-type", "")
         if "audio" not in content_type or len(response.content) < 64 or not response.content.startswith(b"RIFF"):
             raise RuntimeError(f"voice engine answered with {content_type or 'no content type'}, not audio")
+        try:
+            with wave.open(io.BytesIO(response.content), "rb") as audio:
+                valid = valid_pcm_wav(audio)
+        except (wave.Error, EOFError, OSError):
+            valid = False
+        if not valid:
+            raise RuntimeError("Voice engine returned invalid or truncated PCM audio")
         # Written beside the target and moved into place, so a prompt half
         # written while another call reads the same path can never be played.
         # Concurrent calls can request the same phrase. Each writer needs its

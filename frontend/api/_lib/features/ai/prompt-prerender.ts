@@ -68,7 +68,19 @@ export function splitSpokenSentences(text: string, minimum = 12, maximumParts = 
   const cleaned = text.split(/\s+/).filter(Boolean).join(' ');
   if (!cleaned) return [];
   const parts: string[] = [];
-  for (const piece of cleaned.split(/(?<=[.!?…])\s+/)) {
+  const abbreviations = new Set(['dr', 'mr', 'mrs', 'ms', 'st', 'no', 'vs', 'etc', 'jr', 'sr', 'mt', 'e.g', 'i.e']);
+  const pieces: string[] = [];
+  let start = 0;
+  for (const match of cleaned.matchAll(/(?<=[.!?…])\s+/g)) {
+    const index = match.index!;
+    const prefix = cleaned.slice(0, index);
+    const word = prefix.replace(/\.+$/, '').split(' ').at(-1)!.toLowerCase();
+    if (prefix.endsWith('.') && (abbreviations.has(word) || /^\d+$/.test(word))) continue;
+    pieces.push(cleaned.slice(start, index));
+    start = index + match[0].length;
+  }
+  pieces.push(cleaned.slice(start));
+  for (const piece of pieces) {
     const trimmed = piece.trim();
     if (!trimmed) continue;
     if (parts.length && (parts[parts.length - 1].length < minimum || trimmed.length < minimum)) {
