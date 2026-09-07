@@ -4,9 +4,13 @@ import { authorizeSipCall, type SipCallAuthorization } from '../sip-call-authori
 import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredentials } from '../sip-credential-store.js';
 import { sipEdgeAuthorized, sipNonceStatus } from '../sip-edge-auth.js';
-import { claimReplayKey } from '../../../shared/object-store.js';
+import { claimReplayKey as claimStoredReplayKey } from '../../../shared/object-store.js';
 import { ownsSipRegistration, sipDigestReplayKey } from '../sip-registration-auth.js';
 import { sipRegistrationAllowed } from '../sip-registration-access.js';
+
+// The deployed schema is required. Keep schema setup and opportunistic expiry
+// cleanup off the REGISTER deadline; other ledger users retain maintenance.
+const claimReplayKey = (key: string, expiresAt: Date) => claimStoredReplayKey(key, expiresAt, { initialize: false, cleanup: false });
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';

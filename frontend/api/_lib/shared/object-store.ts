@@ -437,21 +437,31 @@ export async function readTenantSaasRows(organizationId: string, options: { init
     if (options.initialize !== false) await ensureSaasTables(sql);
     return sql.begin(async (transaction) => {
       await setSaasTransactionContext(transaction, organizationId);
-      const plans = await selectSaasPlans(transaction);
-      const tenants = await transaction<SaasTenantRow[]>`
-        select t.organization_id, plan_id, status, billing_cycle, amount::float8 as amount,
-          currency, starts_at, trial_ends_at, renews_at, cancel_at_period_end,
-          external_customer_id, notes, coalesce(e.feature_overrides, '{}'::jsonb) as feature_overrides
-        from vocivo_saas_tenants t
-        left join vocivo_saas_entitlements e using (organization_id)
-        where t.organization_id = ${organizationId}
+      // One data query inside the existing tenant-scoped transaction. Three
+      // serial SELECTs amplified network latency and queued other REGISTERs
+      // behind this instance's deliberately small database pool.
+      const [snapshot] = await transaction<SaasRows[]>`
+        select
+          (select coalesce(jsonb_agg(p order by p.monthly_price, p.plan_id), '[]'::jsonb) from (
+            select plan_id, name, description, monthly_price::float8 as monthly_price,
+              annual_price::float8 as annual_price, currency, seat_limit, phone_number_limit,
+              concurrent_call_limit, storage_days, features, active
+            from vocivo_saas_plans
+          ) p) as plans,
+          (select coalesce(jsonb_agg(t), '[]'::jsonb) from (
+            select t.organization_id, plan_id, status, billing_cycle, amount::float8 as amount,
+              currency, starts_at, trial_ends_at, renews_at, cancel_at_period_end,
+              external_customer_id, notes, coalesce(e.feature_overrides, '{}'::jsonb) as feature_overrides
+            from vocivo_saas_tenants t left join vocivo_saas_entitlements e using (organization_id)
+            where t.organization_id = ${organizationId}
+          ) t) as tenants,
+          (select coalesce(jsonb_agg(a order by a.created_at), '[]'::jsonb) from (
+            select id, organization_id, email, name, role, password_hash, status,
+              force_password_change, extension_id, extension, created_at, updated_at
+            from vocivo_saas_admins where organization_id = ${organizationId}
+          ) a) as admins
       `;
-      const admins = await transaction<SaasAdminRow[]>`
-        select id, organization_id, email, name, role, password_hash, status,
-          force_password_change, extension_id, extension, created_at, updated_at
-        from vocivo_saas_admins where organization_id = ${organizationId} order by created_at asc
-      `;
-      return { plans, tenants: assertTenantRows(organizationId, tenants), admins: assertTenantRows(organizationId, admins) };
+      return { plans: snapshot.plans, tenants: assertTenantRows(organizationId, snapshot.tenants), admins: assertTenantRows(organizationId, snapshot.admins) };
     });
   }, { initializeObjects: options.initialize });
 }
@@ -864,21 +874,22 @@ export async function del(pathnames: string | string[]) {
   });
 }
 
-export async function claimReplayKey(replayKey: string, expiresAt: Date) {
+export async function claimReplayKey(replayKey: string, expiresAt: Date, options: { initialize?: boolean; cleanup?: boolean } = {}) {
   if (!/^[a-z0-9:_-]{16,200}$/i.test(replayKey)) throw new Error('Invalid replay key.');
   if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) throw new Error('Invalid replay expiration.');
   return withDatabaseRetry(async (sql) => {
-    await ensureReplayTable(sql);
-    await sql`delete from vocivo_replay_ledger where replay_key = ${replayKey} and expires_at <= now()`;
+    if (options.initialize !== false) await ensureReplayTable(sql);
     const rows = await sql<Array<{ replay_key: string }>>`
       insert into vocivo_replay_ledger (replay_key, expires_at)
       values (${replayKey}, ${expiresAt})
-      on conflict (replay_key) do nothing
+      on conflict (replay_key) do update
+        set expires_at = excluded.expires_at, created_at = now()
+        where vocivo_replay_ledger.expires_at <= now()
       returning replay_key
     `;
-    if (Math.random() < 0.02) await sql`delete from vocivo_replay_ledger where expires_at <= now()`;
+    if (options.cleanup !== false && Math.random() < 0.02) await sql`delete from vocivo_replay_ledger where expires_at <= now()`;
     return rows.length === 1;
-  });
+  }, { initializeObjects: options.initialize });
 }
 
 export async function releaseReplayKey(replayKey: string) {
