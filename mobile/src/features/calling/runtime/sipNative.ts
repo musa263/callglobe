@@ -151,8 +151,12 @@ export async function registerVocivoSip(config: {
   displayName?: string;
   iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
 }) {
-  if (registeredConfig && registeredConfig.username === config.username && registeredConfig.password === config.password && registeredConfig.domain === config.domain) {
-    await ensureBridge().bridge.refresh();
+  if (registeredConfig && registeredConfig.username === config.username && registeredConfig.domain === config.domain && registeredConfig.wsUri === config.wsUri) {
+    // PushKit may already be ringing before the INVITE is tracked. Replacing
+    // an apparently idle stack here can invalidate the contact being called.
+    // Update auth and future-call ICE on the existing UA even while idle.
+    await ensureBridge().bridge.updateCredentials(config);
+    registeredConfig = config;
     return true;
   }
   const sipBridge = ensureBridge().bridge;

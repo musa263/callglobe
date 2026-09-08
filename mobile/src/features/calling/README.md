@@ -126,10 +126,18 @@ Credential replacement is checked again inside `SipStackBridge.register`, after
 any pending HTTP lookup. A call arriving during renewal prevents engine teardown.
 The existing SIP.js user agent receives the new password for subsequent Digest
 requests; a late rejection from an older password generation remains recoverable.
-Identity and WebSocket destination cannot change in place. New ICE settings stay
-cached until calls end, with a short application retry. Explicit sign-out still
-terminates calls. Bootstrap race tests and a real installed-SIP.js Digest test
-cover this path; handset acceptance requires the updated mobile build.
+Identity and WebSocket destination cannot change in place. Same-identity renewal
+also preserves an idle stack: PushKit can already be ringing before its INVITE
+is tracked. Renewed ICE settings replace the factory options for future dialogs,
+without mutating existing handlers or peer connections. Explicit sign-out still
+terminates calls. Bootstrap races before/after INVITE and installed-SIP.js Digest
+tests cover this path; handset acceptance requires the updated mobile build.
+
+`sipCallDiagnostics` emits release-visible answer failures with only a bounded
+call ID, failure phase, and INVITE/accept-start flags. It distinguishes missing
+invitation, failed acceptance, native end and deadline expiry; arbitrary errors,
+SIP packets and caller identities are excluded. The production Babel regression
+guards against accidentally stripping these diagnostics with debug warnings.
 
 Successful re-REGISTER responses also notify the app through
 `sipRegistrationRequestDelegate`. SIP.js 0.21.2 retains its Registered state

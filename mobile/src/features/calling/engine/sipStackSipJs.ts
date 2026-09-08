@@ -16,7 +16,7 @@ import {
   type SessionDescriptionHandlerOptions as WebSessionDescriptionHandlerOptions,
 } from 'sip.js/lib/platform/web';
 import { createRegistrationKeeper } from './sipRegistrationKeeper';
-import { rotateSipPassword } from './sipCredentialRotation';
+import { rotateSipPassword, updateSipIceServers } from './sipCredentialRotation';
 import { sipRegistrationRequestDelegate } from './sipRegistrationRequest';
 import { terminationDeadline } from '../state/terminationDeadline';
 import type {
@@ -386,6 +386,7 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
 
     updateCredentials: async (next) => {
       if (rotateSipPassword(userAgent, config, next)) credentialVersion += 1;
+      updateSipIceServers(userAgent, next.iceServers ?? options.iceServers ?? [{ urls: `stun:${config.domain}:3478` }]);
       await keeper.refresh();
     },
 

@@ -280,3 +280,29 @@ in this release commit.
 135 mobile unit tests, 53 mobile integration tests, both typechecks and the web
 build. Native iPhone acceptance remains open as recorded above; passing this
 release gate does not resolve the observed answer-screen transition.
+
+## Build 64 failed acceptance and renewal correction — September 8
+
+Build 64 (`bad9df1`) was installed and verified directly on the physical iPhone.
+The free internal call to 2003, `8e2k644see4rtmbmpj6l` / route
+`vc_mtrpunk2_qcjfwxv2`, started September 7 at 20:51:55 UTC and ended at
+20:52:07 with `NO_ANSWER`, without an answered event. The user confirmed tapping
+Answer and then seeing it disconnect after about three seconds. This is a failed
+acceptance test, not a stable Stage 1 or completed Stage 2 release.
+
+[Trace 34161520085](https://github.com/musa263/vocivo/actions/runs/34161520085)
+shows repeated recipient password mismatches, successful registrations between
+them, and a branch-add failure at 20:52:05.750. The device Console captured
+unregister-401 errors; old-password deregistration during replacement can produce
+those failures. These observations do not prove every auth failure belonged to
+the same transaction or establish the exact native termination cause.
+
+A new bootstrap regression reproduces a definite gap: renewal of an apparently
+idle stack stops its registered contact before a pushed call's INVITE arrives.
+Same-account renewal now updates authentication and future-dialog ICE in place,
+preserving the contact and late invitation. Existing peer connections are not
+reconfigured. Identity changes retain the existing guard. The regression fails
+on build 64 source and passes with this correction. Release-visible, bounded
+answer-failure metadata has also been added because the production Babel plugin
+removes ordinary warnings. Build 65 and physical retesting are required;
+the exact cause of the observed build 64 disconnect remains unconfirmed.

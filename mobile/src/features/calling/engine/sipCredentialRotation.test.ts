@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { UserAgent } from 'sip.js';
 import type { OutgoingRequestMessage } from 'sip.js/lib/core';
-import { rotateSipPassword } from './sipCredentialRotation';
+import type { SessionDescriptionHandlerFactoryOptions } from 'sip.js/lib/platform/web';
+import { rotateSipPassword, updateSipIceServers } from './sipCredentialRotation';
 
 const config = { username: 'employee', password: 'old-password', domain: 'example.invalid', wsUri: 'wss://example.invalid/ws' };
 const md5 = (text: string) => createHash('md5').update(text).digest('hex');
@@ -14,6 +15,22 @@ function agent() {
     transportOptions: { server: config.wsUri }, logLevel: 'error',
   });
 }
+
+test('renewed ICE is applied to future dialogs without mutating existing handler configuration', () => {
+  const ua = agent();
+  const oldIce = [{ urls: 'turn:relay.invalid', username: 'old', credential: 'old-relay' }];
+  const nextIce = [{ urls: 'turn:relay.invalid', username: 'new', credential: 'new-relay' }];
+  ua.configuration.sessionDescriptionHandlerFactoryOptions = {
+    iceGatheringTimeout: 3000, peerConnectionConfiguration: { iceServers: oldIce, bundlePolicy: 'max-bundle' },
+  };
+  const existingHandlerOptions = ua.configuration.sessionDescriptionHandlerFactoryOptions as SessionDescriptionHandlerFactoryOptions;
+  updateSipIceServers(ua, nextIce);
+  const renewed = ua.configuration.sessionDescriptionHandlerFactoryOptions as SessionDescriptionHandlerFactoryOptions;
+  assert.deepEqual(existingHandlerOptions.peerConnectionConfiguration?.iceServers, oldIce);
+  assert.deepEqual(renewed.peerConnectionConfiguration?.iceServers, nextIce);
+  assert.equal(renewed.iceGatheringTimeout, 3000);
+  assert.equal(renewed.peerConnectionConfiguration?.bundlePolicy, 'max-bundle');
+});
 
 test('installed SIP.js authenticates new requests with a rotated password without replacing its core or transport', () => {
   const ua = agent();
