@@ -29,8 +29,8 @@ jest.mock('../../src/features/calling/media/ringtone', () => ({
 }));
 jest.mock('../../src/features/calling/runtime/voipClient', () => ({
   getVoicePushToken: jest.fn(async () => 'device-token'),
-  persistVoiceSession: jest.fn(async () => undefined),
   loadVoiceSession: jest.fn(async () => null),
+  persistVoiceSession: jest.fn(async () => undefined),
   setVoiceSignedIn: jest.fn(async () => undefined),
   signOutVoiceDevice: jest.fn(async () => undefined),
   voipClient: { loginWithToken: jest.fn() },

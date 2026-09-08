@@ -18,7 +18,7 @@ function request(token = createVoiceRouteToken(grant)) {
 test('a signed carrier route bridges only the selected gateway with intact codecs and a call limit', async () => {
   const xml = await renderSipOutbound(request(), defaultPbxConfig(), async () => carrier);
   assert.match(xml, new RegExp(`sofia/gateway/${carrier.gateway}/\\+966135550000`));
-  assert.match(xml, /absolute_codec_string=PCMU,PCMA,OPUS/);
+  assert.match(xml, /application="export" data="nolocal:absolute_codec_string=PCMU,PCMA,OPUS"/);
   assert.match(xml, /application="limit"/);
   assert.doesNotMatch(xml, /telnyx|\{origination/);
   assert.equal(verifyVoiceRouteToken(createVoiceRouteToken(grant))?.carrierGateway, carrier.gateway);

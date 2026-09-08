@@ -51,6 +51,10 @@ expiry. It replaces admission and media with fixtures; it does not prove live
 authentication, RTP, carrier routing, or native behavior. It needs no production
 credentials and does not deploy anything.
 
+The gate reproduces the previous suspended-transaction failure before testing
+180 Ringing, 200/ACK/BYE, registration after 9/20/40 seconds, late second-device
+delivery, duplicate registration, concurrent callers, CANCEL, and expiry.
+
 ## Extension ringback and answer delivery
 
 An already-registered receiver is relayed immediately. Only calls with no
@@ -178,6 +182,22 @@ cloud firewall rules need separate access. `call-trace` continues past empty or
 unavailable service logs and labels those sections, rather than aborting before
 Kamailio output. An empty section must not be read as a healthy service.
 
+## Authentication service failures
+
+AUTH and CHALLENGE require the expected HTTP status and valid decision/nonce
+JSON. Kamailio's HTTP client can return a positive libcurl error (28 for a
+timeout); it is not an HTTP success or a wrong password. Unavailable or invalid
+responses return SIP 503, without minting another nonce or advertising a password
+challenge. Only a valid HTTP 403 / `ok:false` response reaches Digest recovery.
+The loopback auth phase of `validate_edge.py` exercises these production routes,
+including timeout/recovery, stale nonce, and malformed or inconsistent responses.
+
+Internal route authorization also clears response state and requires HTTP 200
+before reading route fields. HTTP 403 denies admission; HTTP failures or missing
+route decisions return 503. A previous worker request's route can never authorize
+a later request whose HTTP lookup failed. The loopback gate covers timeout after
+success, denial, malformed responses, server failure, and recovery.
+
 ## Inbound audio diagnostics
 
 The `Inbound audio diagnostics` workflow accepts a FreeSWITCH channel UUID.
@@ -189,6 +209,37 @@ commands do not establish that RTP reached the caller; confirm with a handset
 and, where necessary, live media counters or a scoped capture.
 
 ## Shared carrier IP connectivity
+
+### Temporary carrier audio acceptance
+
+`tests/temporary_carrier_pbx.py` is an explicitly operated, isolated IP-auth
+carrier test. It does not activate a portal trunk, select a tenant, modify a
+firewall, or stop an existing PBX. `prepare` takes the real local public IP,
+carrier IP, one E.164 DID (digits), its national spelling, and an authorized
+caller ID. It downloads a checksum-pinned official Docker runtime into
+`/opt/vocivo-carrier-test`, starts a separate daemon without bridge/NAT/firewall
+changes, and pulls the digest-pinned FreeSWITCH image. It needs Linux x86_64,
+systemd, root and 12 GiB free. No platform/carrier credentials are used.
+
+`start` checks SIP 5062, loopback ESL 18021 and UDP 9900–9919 are free, then
+starts the test profile. Only the specified carrier IP and DID can enter the
+tone/echo dialplan. It has no outbound bridge or SIP registrations. ESL uses a
+random private password; files remain root-only. `call COUNTRY_CODE_DIGITS`
+places exactly one explicitly authorized outbound call; it never retries. The
+answer plays a short tone and echoes caller audio, ending after 35 seconds.
+`reports` prints selected call/RTP counters without telephone numbers; private
+CDRs remain on the host. A human must confirm audible tone/echo and caller ID.
+
+Use `status` and `reports`, then `stop` to stop the container and temporary
+daemon. The daemon also expires after two hours. Its private test directory
+is retained for inspection and must be removed after evidence retention is
+decided. There is no automatic 3CX cutover: inbound testing on occupied 5060
+requires a separately verified idle-call check and timed restoration procedure
+before any service interruption. Existing tenant destinations stay unassigned.
+
+Run `python3 -m unittest discover -s services/sip/tests -p 'test_*carrier*.py'`.
+These tests validate the restricted configuration and input contract. Local
+Docker SIP/RTP acceptance and actual carrier/handset acceptance are distinct.
 
 `Carrier connectivity diagnostics` accepts the carrier IPv4/UDP port and the
 customer's expected public IPv4. It sends at most two SIP OPTIONS requests per
@@ -209,6 +260,63 @@ Run `python3 -m unittest discover -s services/sip/tests -p test_carrier_connecti
 for the bounded-probe tests; those tests use socket fixtures.
 
 ## Tenant-owned carriers
+
+For a temporary carrier egress test beside an existing PBX,
+`tests/temporary_carrier_relay.py` renders a separate outbound-only FreeSWITCH
+profile. It requires Digest authentication, the exact Vocivo peer address, and
+the published tenant caller IDs before bridging to the specified carrier.
+It anchors RTP on the actual relay host, disables REGISTER, bounds calls to
+180 seconds, and never modifies 3CX or any existing DID destination.
+
+`tests/relay_operations.py` implements fixed install/remove actions. The
+`Temporary carrier relay` workflow uses the existing operations SSH identity
+and private `VOCIVO_TEMP_CARRIER_TEST` JSON. Authorize that identity on the
+relay with an expiry and a source restriction before using it. The original
+prepared isolated Docker runtime must be stopped. Use unused SIP/ESL ports and
+a dedicated RTP range outside the existing PBX range; permit only the Vocivo
+peer for new relay SIP traffic. Timers are armed before listeners/gateways are
+installed. Activation requires the matching API expiry support and an
+outbound-only operator deployment record with the same deadline. Remove the
+record, temporary gateway, relay, SSH entry, cloud firewall exceptions and
+temporary repository secret when done. Retain private evidence only as needed.
+No workflow here claims carrier or handset acceptance, or moves the public IP.
+
+Ingress Digest credentials terminate at Kamailio after admission. Both
+`Authorization` and `Proxy-Authorization` are consumed before the loopback
+FreeSWITCH hop; signed Vocivo route headers remain for API authorization.
+FreeSWITCH otherwise challenges credentials from the previous hop even with
+`auth-calls=false`. Run `python3 services/sip/tests/validate_forward_auth.py`
+for the isolated real-protocol regression and ingress rejection checks.
+
+Temporary gateway proxy and From domain name the relay, so OPTIONS as well as
+INVITEs target that host. Carrier Digest realm and carrier egress remain on the
+relay. After `remove`, the explicit `archive` action verifies removal and retains
+closed test evidence before a fresh bounded test can be installed.
+The `diagnose` action reads at most six temporary relay call records and emits
+only UUIDs, hangup/codec fields and SDP media descriptions. It excludes SIP
+credentials, ICE credentials, media keys and unrelated PBX records.
+
+Authorized outbound dialplans export the carrier codec list with `nolocal:` so
+it applies to the new gateway channel. A plain `set` affects the originating
+channel and can leave the carrier offer Opus-only. The tenant-carriers wire gate
+also calls from an Opus-only endpoint to a G.711-only peer and verifies media in
+both directions through FreeSWITCH transcoding.
+
+Gateway deployment verifies the exact gateway name and its `trunk` profile after
+rescan; a successful reload response alone is insufficient. Keep an included
+gateway's `<include>` wrapper on separate lines: FreeSWITCH's preprocessor can
+silently discard a compact single-line include. `repair-gateway` republishes only
+the existing temporary gateway and preserves its active expiry timer.
+`python3 services/sip/tests/validate_gateway_load.py` reproduces the compact-XML
+failure and checks the generated gateway with production startup in isolated
+Docker. It sends no traffic outside that container.
+
+Run `python3 services/sip/tests/validate_relay.py` with local Docker. It uses
+network-isolated loopback fixtures to test Digest, invalid passwords, source
+and caller-ID rejection, destination normalization and actual RTP echo. The
+core needs to finish startup before INVITEs; an early 503 is not readiness.
+Reference: [Sofia profiles](https://developer.signalwire.com/freeswitch/users-and-endpoints/sip-profiles/)
+and [gateway authentication](https://developer.signalwire.com/freeswitch/users-and-endpoints/gateways/).
 
 The authenticated XML binding now selects outbound gateways from a signed tenant
 route, including when inbound SIP is disabled. Static outbound fallback returns

@@ -1,5 +1,6 @@
 import type { SipEventBus } from './sipBridge';
 import type { NativeSipBridge, SipEventSource, VoiceCallState } from './voiceEngine';
+import { reportSipAnswerFailure, type SipAnswerFailure } from './sipCallDiagnostics';
 
 /**
  * The system call UI — CallKit on iOS, ConnectionService on Android.
@@ -121,7 +122,12 @@ export function bindCallUi(options: {
     ended.add(callId);
     if (ended.size > 128) ended.delete(ended.values().next().value!);
   };
-  const failAnswer = (callId: string) => {
+  const diagnoseAnswer = (callId: string, phase: SipAnswerFailure) => {
+    reportSipAnswerFailure(callId, phase, invitations.has(callId), answers.get(callId)?.started ?? false);
+  };
+  const failAnswer = (callId: string, phase: SipAnswerFailure) => {
+    if (disposed || ended.has(callId)) return;
+    diagnoseAnswer(callId, phase);
     finish(callId);
     completeAnswer(callId, false);
     native.reportCallEnded({ callId, reason: 'failed' }).catch(swallow('end unanswered native action'));
@@ -139,7 +145,7 @@ export function bindCallUi(options: {
       completeAnswer(callId, true);
     }).catch((failure) => {
       swallow('answer from call UI')(failure);
-      if (!disposed && answers.get(callId) === pending) failAnswer(callId);
+      if (!disposed && answers.get(callId) === pending) failAnswer(callId, 'accept_rejected');
     });
   };
 
@@ -190,7 +196,10 @@ export function bindCallUi(options: {
       return;
     }
     if (payload.state === 'ENDED' || payload.state === 'FAILED' || payload.state === 'DROPPED') {
-      if (answers.has(payload.callId)) completeAnswer(payload.callId, false);
+      if (answers.has(payload.callId)) {
+        diagnoseAnswer(payload.callId, 'ended_during_answer');
+        completeAnswer(payload.callId, false);
+      }
       finish(payload.callId);
       native.reportCallEnded({ callId: payload.callId, reason: endingFor[payload.state] }).catch(swallow('report ended'));
     }
@@ -241,13 +250,16 @@ export function bindCallUi(options: {
     if (ended.has(payload.callId)) { completeAnswer(payload.callId, false); return; }
     if (accepted.has(payload.callId)) { completeAnswer(payload.callId, true); return; }
     if (!answers.has(payload.callId)) answers.set(payload.callId, {
-      started: false, cancelTimer: schedule(() => failAnswer(payload.callId), 12_000),
+      started: false, cancelTimer: schedule(() => failAnswer(payload.callId, 'answer_timeout'), 12_000),
     });
     answerWhenInvited(payload.callId);
   }));
 
   subscriptions.push(ui.addListener('callUiEnd', (payload) => {
-    if (answers.has(payload.callId)) completeAnswer(payload.callId, false);
+    if (answers.has(payload.callId)) {
+      diagnoseAnswer(payload.callId, 'native_end_during_answer');
+      completeAnswer(payload.callId, false);
+    }
     finish(payload.callId);
     bridge.hangup(payload.callId).catch(swallow('hang up from call UI'));
   }));
@@ -275,11 +287,11 @@ export function bindCallUi(options: {
     if (!invitations.has(payload.callId) && !wakeTimers.has(payload.callId)) {
       const expiry = payload.expiresAt ? Date.parse(payload.expiresAt) : Date.now() + 45_000;
       const delay = Math.max(0, Math.min(45_000, Number.isFinite(expiry) ? expiry - Date.now() : 0));
-      wakeTimers.set(payload.callId, schedule(() => failAnswer(payload.callId), delay));
+      wakeTimers.set(payload.callId, schedule(() => failAnswer(payload.callId, 'invite_timeout'), delay));
     }
     Promise.resolve().then(() => onPushWake?.(payload)).catch((failure) => {
       swallow('register after push')(failure);
-      if (!disposed && !invitations.has(payload.callId)) failAnswer(payload.callId);
+      if (!disposed && !invitations.has(payload.callId)) failAnswer(payload.callId, 'wake_failed');
     });
   }));
   // Flush native launch events only after every JS listener is installed.

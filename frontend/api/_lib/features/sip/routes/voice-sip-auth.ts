@@ -4,9 +4,13 @@ import { authorizeSipCall, type SipCallAuthorization } from '../sip-call-authori
 import { digestMatches, parseDigestAuthorization, type DigestChallenge } from '../sip-digest.js';
 import { readSipCredentials } from '../sip-credential-store.js';
 import { sipEdgeAuthorized, sipNonceStatus } from '../sip-edge-auth.js';
-import { claimReplayKey } from '../../../shared/object-store.js';
+import { claimReplayKey as claimStoredReplayKey } from '../../../shared/object-store.js';
 import { ownsSipRegistration, sipDigestReplayKey } from '../sip-registration-auth.js';
 import { sipRegistrationAllowed } from '../sip-registration-access.js';
+
+// The deployed schema is required. Keep schema setup off the REGISTER deadline
+// while retaining the ledger's occasional expiry cleanup on SIP-only systems.
+const claimReplayKey = (key: string, expiresAt: Date) => claimStoredReplayKey(key, expiresAt, { initialize: false });
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -27,6 +31,16 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
   return async function handler(req: VercelRequest, res: VercelResponse) {
     if (allowMobile(req, res)) return;
     if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
+    const startedAt = performance.now();
+    let phase = 'validation';
+    const timings: Record<string, number> = {};
+    let phaseStartedAt = startedAt;
+    const nextPhase = (next: string) => {
+      const now = performance.now();
+      timings[phase] = Math.round(now - phaseStartedAt);
+      phase = next;
+      phaseStartedAt = now;
+    };
     try {
       if (!sipEdgeAuthorized(req)) return res.status(401).json({ error: 'SIP edge authentication failed.', ok: false });
       const routeToken = text(req.body?.routeToken, 2000);
@@ -73,6 +87,7 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       if (nonceStatus === 'invalid') return res.status(403).json({ ok: false, reason: 'invalid_nonce' });
       // One extension is signed in on a browser and a handset at once, and each
       // holds a password of its own. Any of the live ones authenticates.
+      nextPhase('credentials');
       const stored = (await deps.readSipCredentials(challenge.username)).filter((credential) => credential.realm === challenge.realm);
       const matched = stored.find((credential) => digestMatches(credential.ha1, challenge));
       // The reason is for the edge's log, which is where a phone that cannot
@@ -80,11 +95,13 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       if (!stored.length) return res.status(403).json({ ok: false, reason: 'no_credential_for_user' });
       const ok = Boolean(matched);
       if (!ok) return res.status(403).json({ ok: false, reason: 'password_mismatch', credentials: stored.length });
+      nextPhase('currentAccess');
       if (!await deps.sipRegistrationAllowed(matched!)) return res.status(403).json({ ok: false, reason: 'calling_access_revoked' });
       // Tell the edge to advertise stale=true only after the Digest and current
       // access verify. This never authorizes registration with an expired nonce.
       if (nonceStatus === 'expired') return res.status(403).json({ ok: false, reason: 'stale_nonce', stale: true });
       if (ok) {
+        nextPhase('replay');
         const replayKey = sipDigestReplayKey(challenge);
         if (!replayKey || !await deps.claimReplayKey(replayKey, new Date(Number(challenge.nonce.split('.')[0]) * 1000))) {
           return res.status(403).json({ ok: false, reason: 'replayed_digest' });
@@ -103,6 +120,13 @@ export function createSipAuthHandler(deps = { readSipCredentials, claimReplayKey
       });
     } catch (error) {
       return res.status(500).json({ error: publicError(error), ok: false });
+    } finally {
+      const durationMs = Math.round(performance.now() - startedAt);
+      if (durationMs >= 1500) {
+        nextPhase('complete');
+        // No usernames, Digest, tokens, or request payloads in timing logs.
+        console.warn('[sip-auth] slow authorization', { durationMs, status: res.statusCode, timings });
+      }
     }
   };
 }

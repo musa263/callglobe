@@ -6,11 +6,6 @@ Vocivo owns application identities, PBX, clients, AI orchestration and video.
 
 ## Sequence and status
 
-Latest acceptance: the committed Stage 1 release was retested at 12:26 UTC and
-failed with delayed setup and an automatic hangup after nine connected seconds.
-See the [retest evidence](../audits/stage1-call-retest-2026-09-07.md). Identity
-adoption remains live; this is not a clean calling acceptance result.
-
 1. Independent extension identities: deployed and adopted in production; mobile
    answer-transition issue and remaining acceptance gates are open.
 2. Complete SIP calling and mobile native integration: started locally with managed
@@ -24,6 +19,14 @@ adoption does not establish complete device or carrier acceptance. Carrier crede
 but are no longer read by the local lifecycle after adoption.
 
 ## Stage 1 contracts
+
+Ownership is platform-wide: Vocivo superadmin operates the deployment, directory
+authority and SIP infrastructure. Global Heritage is a business tenant, not a
+platform owner. Its admins manage only their assigned company resources and
+cannot change directory authority, platform engine selection, another tenant's
+settings, subscription capacity or platform access. The test extensions 2000 and
+2003 are tenant calling identities, not superadmin identities. See the
+[platform/tenant ownership audit](../audits/stage1-platform-ownership-2026-09-08.md).
 
 - Encrypted directory version 3 records `authority: vocivo`. Default deployments
   with legacy directories retain their existing managed behavior until adoption.
@@ -131,6 +134,16 @@ It does not connect to production PostgreSQL or prove device/carrier behavior.
 
 ## Stage 2 first implementation slice
 
+September 8 checkpoint: the draft below was selectively integrated with all
+Stage 1 call-recovery fixes, including credential renewal protection, the bounded
+45-second deadline, successful re-registration acknowledgment and signed-profile
+APNs routing. The app now also uses Vocivo native methods for the push sign-in
+flag and iOS/Android token access. Build 64 is the first binary with that contract.
+The full gate passed 421 backend/web, 151 mobile unit and 70 integration tests
+(642 total). Regenerated iOS/Android sources match the maintained native files;
+iOS Release compiled and passed deep/strict signing verification, and Android
+debug compiled (486 tasks). No physical acceptance is claimed for build 64.
+
 `managedVoiceRuntime.tsx` loads the Telnyx JavaScript SDK lazily. SIP startup,
 shared native controls and sign-out do not create the managed client. VoiceRoot
 mounts its managed runtime only after authenticated configuration explicitly
@@ -144,10 +157,11 @@ Telnyx; errors leave push status unavailable instead of indefinitely registering
 
 This is not removal of the native SDK. `nativeVoiceBridge.ts` still uses the
 existing VoicePnBridge module supplied by the patched Telnyx native integration.
-Push-token access, ringtone preferences and some platform controls must move to
-Vocivo-owned native modules before removing that package/plugin. Next: implement
-and compile those native contracts on both platforms, then run physical-device
-push/CallKit/Telecom/audio acceptance before shipping a replacement build.
+Push-token access and native sign-in state moved to Vocivo in the September 8
+checkpoint. Ringtone compatibility, shared PushKit/FCM dispatch, Android native
+entry points and resource installation still need replacement before removing
+that package/plugin. Physical push/CallKit/Telecom/audio and sustained-call
+acceptance remain required before shipping the replacement to customers.
 
 Regression coverage: ManagedRuntimeIsolation proves lazy initialization and native
 control behavior; VoiceRegistration checks managed push persistence ordering;
@@ -252,3 +266,43 @@ other ongoing work; they do not establish deployed-code or device acceptance.
   reproduced registration/UI defects, ship a new mobile build and repeat locked
   and app-closed answers. Android, carrier inbound/outbound audio, and live
   extension administration/access-revocation gates remain unverified.
+
+## Git release checkpoint — September 7
+
+The Stage 1 release commit is based on remote main `6e01784` and contains the
+eight previously deployed Stage 1 files plus this runbook, organization contracts
+and the Stage 1 architecture note. Their implementation hashes match the protected
+cutover manifest. No unfinished Stage 2 mobile changes are included. The Stage 2
+implementation notes above describe work in the development checkout, not code
+in this release commit.
+
+`bash verify.sh` passed on the isolated release checkout: 410 backend/web tests,
+135 mobile unit tests, 53 mobile integration tests, both typechecks and the web
+build. Native iPhone acceptance remains open as recorded above; passing this
+release gate does not resolve the observed answer-screen transition.
+
+## Build 64 failed acceptance and renewal correction — September 8
+
+Build 64 (`bad9df1`) was installed and verified directly on the physical iPhone.
+The free internal call to 2003, `8e2k644see4rtmbmpj6l` / route
+`vc_mtrpunk2_qcjfwxv2`, started September 7 at 20:51:55 UTC and ended at
+20:52:07 with `NO_ANSWER`, without an answered event. The user confirmed tapping
+Answer and then seeing it disconnect after about three seconds. This is a failed
+acceptance test, not a stable Stage 1 or completed Stage 2 release.
+
+[Trace 34161520085](https://github.com/musa263/vocivo/actions/runs/34161520085)
+shows repeated recipient password mismatches, successful registrations between
+them, and a branch-add failure at 20:52:05.750. The device Console captured
+unregister-401 errors; old-password deregistration during replacement can produce
+those failures. These observations do not prove every auth failure belonged to
+the same transaction or establish the exact native termination cause.
+
+A new bootstrap regression reproduces a definite gap: renewal of an apparently
+idle stack stops its registered contact before a pushed call's INVITE arrives.
+Same-account renewal now updates authentication and future-dialog ICE in place,
+preserving the contact and late invitation. Existing peer connections are not
+reconfigured. Identity changes retain the existing guard. The regression fails
+on build 64 source and passes with this correction. Release-visible, bounded
+answer-failure metadata has also been added because the production Babel plugin
+removes ordinary warnings. Build 65 and physical retesting are required;
+the exact cause of the observed build 64 disconnect remains unconfirmed.

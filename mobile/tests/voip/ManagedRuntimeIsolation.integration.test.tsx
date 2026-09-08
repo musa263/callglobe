@@ -15,7 +15,11 @@ jest.mock('@telnyx/react-voice-commons-sdk', () => {
 });
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  NativeModules: { VoicePnBridge: {
+  NativeModules: { VocivoSip: {
+    voipPushToken: jest.fn(async () => 'native-push-token'),
+    firebasePushToken: jest.fn(async () => 'vocivo-fcm-token'),
+    setVoiceSignedIn: jest.fn(async () => true),
+  }, VoicePnBridge: {
     getVoipToken: jest.fn(async () => 'native-push-token'),
     setIncomingCallRingtone: jest.fn(async () => true),
     setVocivoVoiceSignedIn: jest.fn(async () => true),
@@ -37,17 +41,36 @@ test('SIP-compatible native controls and sign-out never initialize the managed J
   expect(mockCreateClient).not.toHaveBeenCalled();
   expect(await getVoicePushToken()).toBe('native-push-token');
   await setVoiceSignedIn(true);
+  expect(NativeModules.VocivoSip.setVoiceSignedIn).toHaveBeenCalledWith(true);
+  expect(NativeModules.VoicePnBridge.getVoipToken).not.toHaveBeenCalled();
   await VoicePnBridge.setIncomingCallRingtone('vocivo_classic');
   expect(NativeModules.VoicePnBridge.setIncomingCallRingtone).not.toHaveBeenCalled();
   (Platform as { OS: string }).OS = 'android';
   try {
+    expect(await getVoicePushToken()).toBe('vocivo-fcm-token');
     await VoicePnBridge.setIncomingCallRingtone('vocivo_classic');
     expect(NativeModules.VoicePnBridge.setIncomingCallRingtone).toHaveBeenCalledWith('vocivo_classic');
   } finally { (Platform as { OS: string }).OS = 'ios'; }
   expect(await VoicePnBridge.toggleSpeaker()).toBe(false); // false is an audio route, not failure.
   await signOutVoiceDevice();
+  expect(NativeModules.VocivoSip.setVoiceSignedIn).toHaveBeenLastCalledWith(false);
+  expect(NativeModules.VoicePnBridge.setVocivoVoiceSignedIn).not.toHaveBeenCalled();
   expect(mockSdkLoads).toBe(0);
   expect(mockCreateClient).not.toHaveBeenCalled();
+});
+
+test('missing Vocivo native controls fail explicitly without falling back to carrier sign-in', async () => {
+  const saved = NativeModules.VocivoSip;
+  NativeModules.VocivoSip = undefined;
+  try {
+    await expect(setVoiceSignedIn(true)).rejects.toThrow('Install the latest Vocivo build');
+    expect(NativeModules.VoicePnBridge.setVocivoVoiceSignedIn).not.toHaveBeenCalled();
+  } finally { NativeModules.VocivoSip = saved; }
+});
+
+test('native persistence rejection cannot report successful calling sign-in', async () => {
+  NativeModules.VocivoSip.setVoiceSignedIn.mockResolvedValueOnce(false);
+  await expect(setVoiceSignedIn(true)).rejects.toThrow('rejected the state change');
 });
 
 test('an explicitly mounted managed runtime shares one lazily created client', async () => {

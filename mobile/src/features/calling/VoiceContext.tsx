@@ -1,10 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import NetInfo, { type NetInfoStateType } from '@react-native-community/netinfo';
-import { AppState, Platform } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import { createManagedTokenConfig as createTokenConfig, ManagedVoiceRuntime } from './runtime/managedVoiceRuntime';
 import type { VoiceEdge } from './runtime/voiceEdge';
 import { ensureSipRegistration } from './runtime/sipNative';
 import { api } from '../../shared/api';
+import { pushEnvironment } from './runtime/pushEnvironment';
 import { loadIncomingRingtone } from './media/ringtone';
 import { persistVoiceSession, voipClient } from './runtime/voipClient';
 import { CallState, ConnectionState, isTerminalVoiceCallState, type VoiceCall, type VoiceCallState, type VoiceConnectionState } from './engine/voiceEngine';
@@ -487,7 +488,8 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
         // Media does not depend on it, so a call in progress stays up; only
         // if the edge has not come back within the grace period is the call
         // treated as lost.
-        if (transportLossTimerRef.current) clearTimeout(transportLossTimerRef.current);
+        // Repeated failures cannot extend the original recovery deadline.
+        if (transportLossTimerRef.current) return;
         transportLossTimerRef.current = setTimeout(() => {
           transportLossTimerRef.current = null;
           if (voice.currentConnectionState !== ConnectionState.CONNECTED) emergencyTransportCleanup(ConnectionState.DISCONNECTED);
@@ -564,7 +566,7 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
         }
         await api.post('/api/voice/devices', {
           platform: Platform.OS === 'ios' ? 'ios' : 'android', token: pushToken,
-          environment: __DEV__ ? 'sandbox' : 'production', bundleId: 'app.vocivo.mobile',
+          environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
         });
         setPushRegistration('registered');
         return;

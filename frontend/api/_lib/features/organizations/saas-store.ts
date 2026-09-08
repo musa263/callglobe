@@ -327,13 +327,18 @@ export async function readSignupPlans() {
   return stateFromRows({ plans: await readSaasPlanRows(), tenants: [], admins: [] }).plans;
 }
 
-export async function readTenantSaasState(organizationId: string, config?: PbxConfig) {
+export async function readTenantSaasState(organizationId: string, config?: PbxConfig, options: { initialize?: boolean } = {}) {
   if (!organizationId || (config && !config.organizations.some((organization) => organization.id === organizationId))) {
     throw new Error('Tenant organization was not found.');
   }
-  await ensureSaasRows(config);
+  if (options.initialize !== false) await ensureSaasRows(config);
   const tenantConfig = config ? { ...config, organizations: config.organizations.filter((organization) => organization.id === organizationId) } : undefined;
-  return stateFromRows(await readTenantSaasRows(organizationId), tenantConfig);
+  const rows = await readTenantSaasRows(organizationId, options);
+  // Authentication cannot use the display/bootstrap defaults in mergeState.
+  if (options.initialize === false && (!rows.plans.length || !rows.tenants.some(row => row.organization_id === organizationId))) {
+    throw new Error('Calling subscription data is unavailable.');
+  }
+  return stateFromRows(rows, tenantConfig);
 }
 
 export async function saveSaasSubscription(organizationId: string, subscription: SaasSubscription, config: PbxConfig) {

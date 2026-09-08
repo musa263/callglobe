@@ -16,6 +16,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
+import com.google.firebase.messaging.FirebaseMessaging
 
 /**
  * The `VocivoSip` React Native module on Android.
@@ -206,6 +207,33 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
   fun voipPushToken(promise: Promise) {
     // Android wakes on FCM, whose token the app already collects elsewhere.
     promise.resolve(null)
+  }
+
+  @ReactMethod
+  fun setVoiceSignedIn(signedIn: Boolean, promise: Promise) {
+    val saved = reactContext.getSharedPreferences("vocivo_auth", Context.MODE_PRIVATE)
+      .edit().putBoolean("voice_signed_in", signedIn).commit()
+    if (saved) promise.resolve(true)
+    else promise.reject("vocivo_auth_store", "Could not persist the native calling sign-in state")
+  }
+
+  @ReactMethod
+  fun firebasePushToken(promise: Promise) {
+    val preferences = reactContext.getSharedPreferences("vocivo_push", Context.MODE_PRIVATE)
+    try {
+      FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+        if (task.isSuccessful && !task.result.isNullOrBlank()) {
+          preferences.edit().putString("fcm_token", task.result).apply()
+          promise.resolve(task.result)
+        } else {
+          val stored = preferences.getString("fcm_token", null)
+          if (!stored.isNullOrBlank()) promise.resolve(stored)
+          else promise.reject("vocivo_push_token", "Firebase push token is unavailable", task.exception)
+        }
+      }
+    } catch (error: Exception) {
+      promise.reject("vocivo_push_token", "Firebase push token is unavailable", error)
+    }
   }
 
   private fun handle() = PhoneAccountHandle(

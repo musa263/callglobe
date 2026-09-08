@@ -105,7 +105,19 @@ export function createRegistrationKeeper(deps: RegistrationKeeperDeps) {
       clearRetry();
     },
     onUnregistered: () => {
+      if (!wanted) return;
       needsRegistration = true;
+      // SIP.js emits Unregistered before its final-response delegate. It can
+      // mean expiry or a temporary 5xx, so wait for that delegate to report a
+      // permanent refusal before allowing the UI to tear down an active call.
+      deps.notify('Reconnecting', 'registration is being renewed');
+      scheduleRetry();
+    },
+    onRejected: (status: number, reason: string) => {
+      if (!wanted) return;
+      needsRegistration = true;
+      const temporary = status === 408 || status === 429 || status >= 500;
+      deps.notify(temporary || !deps.isConnected() ? 'Reconnecting' : 'Unregistered', `${status} ${reason}`);
       scheduleRetry();
     },
     onDisconnect: (error?: unknown) => {

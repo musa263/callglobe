@@ -297,6 +297,73 @@ test('mounted SIP provider disposes media and engine calls on fatal transport lo
   }
 });
 
+test('SIP registration recovery preserves media then expires once after repeated failures', async () => {
+  jest.useFakeTimers();
+  const events = new SipEventBus();
+  let stateListener: ((state: SipSessionState) => void) | undefined;
+  const track = { stopped: false };
+  const handle: SipSessionHandle = {
+    id: 'sip-live-call', incoming: false, remoteDisplayName: 'Colleague', remoteUser: '2001', remoteTarget: 'sip:2001@example.test', headers: [],
+    disposition: () => ({}), peerConnection: () => null,
+    onStateChange: listener => { stateListener = listener; },
+    accept: async () => {}, terminate: async () => { throw new Error('socket unavailable'); },
+    dispose: async () => { track.stopped = true; throw new Error('BYE transport failure'); },
+    setHold: async () => {}, setMuted: async () => {}, sendDtmf: async () => {},
+  };
+  const bridge = new SipStackBridge({ events, createStack: () => ({
+    onRegistrationChange: () => {}, onInvitation: () => {}, start: async () => {}, stop: async () => {},
+    refresh: async () => {}, invite: async () => handle, setSpeaker: async () => {},
+  }) });
+  const client = new SipVoiceClient({ events, bridge });
+  const nativeEnd = jest.fn(async () => {});
+  voice.use('sip', client, { endNativeCall: nativeEnd, toggleSpeaker: async () => false, hideIncomingCallUi: async () => {} });
+  const observed: { current: ReturnType<typeof useVoice> | null } = { current: null };
+  function Probe() { observed.current = useVoice(); return null; }
+  let tree!: TestRenderer.ReactTestRenderer;
+  const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await act(async () => {
+      tree = TestRenderer.create(<VoiceProvider><Probe /></VoiceProvider>);
+    });
+    await act(async () => {
+      await bridge.register({ username: 'employee', password: 'test-only', domain: 'example.test' });
+      events.emit('registration', { state: 'ok' });
+      await client.newCall('2001', 'Colleague', undefined, [{ name: 'X-Vocivo-Route-ID', value: 'test-route-12345678' }]);
+      stateListener?.('Established');
+    });
+    expect(observed.current?.activeCall).not.toBeNull();
+    await act(async () => { events.emit('registration', { state: 'reconnecting', reason: '503 temporary auth failure' }); });
+    expect(track.stopped).toBe(false);
+    expect(observed.current?.activeCall).not.toBeNull();
+    // A successful retry preserves the existing session and cancels the deadline.
+    await act(async () => { events.emit('registration', { state: 'ok' }); });
+    expect(client.currentCalls).toHaveLength(1);
+    expect(track.stopped).toBe(false);
+    await act(async () => { events.emit('registration', { state: 'reconnecting' }); });
+    await act(async () => { jest.advanceTimersByTime(30_000); });
+    await act(async () => { events.emit('registration', { state: 'reconnecting' }); });
+    expect(track.stopped).toBe(false);
+    await act(async () => { jest.advanceTimersByTime(15_000); });
+    expect(track.stopped).toBe(true);
+    expect(client.currentCalls).toEqual([]);
+    expect(bridge.peerConnection(handle.id)).toBeUndefined();
+    expect(observed.current?.activeCall).toBeNull();
+    expect(observed.current?.duration).toBe(0);
+    expect(nativeEnd).toHaveBeenCalledWith(handle.id);
+    expect(routeCancellations.cancel).toHaveBeenCalledWith('test-route-12345678');
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('dispose call after transport loss'), expect.anything());
+    await act(async () => {
+      stateListener?.('Established');
+      events.emit('registration', { state: 'ok' });
+    });
+    expect(client.currentCalls).toEqual([]);
+    expect(observed.current?.activeCall).toBeNull();
+  } finally {
+    await act(async () => { tree?.unmount(); });
+    voice.detach(); client.dispose(); errors.mockRestore(); jest.useRealTimers();
+  }
+});
+
 test('an unresolved app session cannot bootstrap a cached Telnyx push session', async () => {
   const authState = (require('../../src/features/auth/AuthContext') as any).__authState;
   authState.loading = true;

@@ -33,8 +33,8 @@ export function telnyxEngine(): Engine {
 }
 
 /**
- * Vocivo's own SIP edge: SIP.js to this tenant's Kamailio, media through this
- * tenant's RTPEngine, CallKit and ConnectionService from the native module.
+ * Vocivo's platform SIP edge: tenant-scoped calls over its Kamailio/RTPEngine,
+ * with CallKit and ConnectionService from Vocivo's native module.
  */
 export function sipEngine(): Engine {
   return {

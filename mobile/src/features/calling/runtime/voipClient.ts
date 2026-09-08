@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { VoicePnBridge } from './nativeVoiceBridge';
+import { VoicePnBridge, setNativeVoiceSignedIn } from './nativeVoiceBridge';
 import { existingManagedVoiceClient, getManagedVoiceClient } from './managedVoiceRuntime';
-import { NativeModules, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
 export { VoicePnBridge };
 
@@ -85,6 +85,7 @@ export async function signOutVoiceDevice() {
     }],
     ['clear voice storage', () => AsyncStorage.multiRemove(telnyxStorageKeys)],
     ['delete stored voice session', () => SecureStore.deleteItemAsync(secureVoiceSessionKey)],
+    ['clear managed native actions', async () => { if (existingManagedVoiceClient()) await VoicePnBridge.clearManagedSession(); }],
     ['log out of the voice client', async () => { await existingManagedVoiceClient()?.logout(); }],
   ];
   for (const [step, run] of steps) {
@@ -99,8 +100,6 @@ export async function signOutVoiceDevice() {
 
 export async function setVoiceSignedIn(signedIn: boolean) {
   await AsyncStorage.setItem('@vocivo_voice_signed_in', signedIn ? '1' : '0');
-  const bridge = NativeModules.VoicePnBridge as { setVocivoVoiceSignedIn?: (value: boolean) => Promise<boolean> } | undefined;
-  if (!bridge?.setVocivoVoiceSignedIn) throw new Error('The native voice authentication bridge is unavailable.');
-  const updated = await bridge.setVocivoVoiceSignedIn(signedIn);
+  const updated = await setNativeVoiceSignedIn(signedIn);
   if (updated !== true) throw new Error('The native voice authentication bridge rejected the state change.');
 }

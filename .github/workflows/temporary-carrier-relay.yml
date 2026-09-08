@@ -1,0 +1,92 @@
+name: Temporary carrier relay
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Fixed temporary outbound test operation
+        type: choice
+        options: [public-key, deploy, repair-gateway, remove, archive, diagnose]
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: ops-droplet-sip
+  cancel-in-progress: false
+jobs:
+  temporary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Operate only the temporary relay and its gateway
+        env:
+          ACTION: ${{ inputs.action }}
+          HOST: ${{ secrets.SIP_EDGE_HOST }}
+          SSH_USER: ${{ vars.OPS_SSH_USER || 'root' }}
+          OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
+          TEST_CONFIG: ${{ secrets.VOCIVO_TEMP_CARRIER_TEST }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$OPS_SSH_KEY" > "$HOME/.ssh/ops_key"
+          test -s "$HOME/.ssh/ops_key"
+          if [ "$ACTION" = public-key ]; then
+            ssh-keygen -y -f "$HOME/.ssh/ops_key"
+            exit 0
+          fi
+          case "$ACTION" in deploy|repair-gateway|remove|archive|diagnose) ;; *) exit 2 ;; esac
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'services/sip/tests')
+          from relay_operations import config
+          cfg = config(json.loads(os.environ['TEST_CONFIG']))
+          Path('/tmp/vocivo-test.json').write_text(json.dumps(cfg))
+          Path('/tmp/vocivo-relay-host').write_text(cfg['public_ip'])
+          PY
+          RELAY_HOST=$(cat /tmp/vocivo-relay-host)
+          ssh-keyscan -T 10 -H "$HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          edge() { ssh -i "$HOME/.ssh/ops_key" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$HOST" "$@"; }
+          relay() {
+            ssh -i "$HOME/.ssh/ops_key" -o BatchMode=yes -o ConnectTimeout=15 \
+              -o "ProxyCommand=ssh -i $HOME/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=15 -W %h:%p $SSH_USER@$HOST" \
+              "root@$RELAY_HOST" "$@"
+          }
+          edge "ssh-keyscan -T 10 -H '$RELAY_HOST'" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          relay true
+          if [ "$ACTION" = remove ]; then
+            result=0
+            edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py remove-gateway || result=1
+            relay python3 /opt/vocivo-carrier-relay-ops/relay_operations.py remove-relay || result=1
+            exit "$result"
+          fi
+          for destination in edge relay; do
+            tar czf - -C services/sip/tests relay_operations.py relay_diagnostics.py temporary_carrier_relay.py temporary_carrier_pbx.py \
+              | "$destination" 'umask 077; install -d -m 700 /opt/vocivo-carrier-relay-ops; tar xzf - -C /opt/vocivo-carrier-relay-ops'
+          done
+          if [ "$ACTION" = diagnose ]; then
+            relay python3 /opt/vocivo-carrier-relay-ops/relay_diagnostics.py
+            exit 0
+          fi
+          if [ "$ACTION" = repair-gateway ]; then
+            edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py repair-gateway
+            exit 0
+          fi
+          if [ "$ACTION" = archive ]; then
+            edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py archive-gateway
+            relay python3 /opt/vocivo-carrier-relay-ops/relay_operations.py archive-relay
+            exit 0
+          fi
+          relay_ready=0
+          cleanup_failure() {
+            result=$?
+            if [ "$result" -ne 0 ] && [ "$relay_ready" = 1 ]; then
+              relay python3 /opt/vocivo-carrier-relay-ops/relay_operations.py remove-relay || true
+            fi
+            exit "$result"
+          }
+          trap cleanup_failure EXIT
+          relay python3 /opt/vocivo-carrier-relay-ops/relay_operations.py install-relay < /tmp/vocivo-test.json
+          relay_ready=1
+          edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py install-gateway < /tmp/vocivo-test.json

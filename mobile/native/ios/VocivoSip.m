@@ -54,4 +54,6 @@ RCT_EXTERN_METHOD(voipPushToken
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(setVoiceSignedIn:(BOOL)signedIn resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+
 @end

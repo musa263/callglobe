@@ -30,6 +30,13 @@ loads lazily and mounts only after authenticated managed-session preparation.
 The SIP path uses Vocivo's client; the existing patched native VoicePnBridge is
 still a compatibility dependency pending the next native migration stage.
 
+Mobile requires an explicit valid engine response. Its Telnyx JavaScript runtime
+loads lazily only for the authenticated managed path. SIP startup and refresh
+use Vocivo's bridge without constructing that client. Native sign-in state and
+push-token access now live in `VocivoSip`; build 64 introduces that contract.
+The native Telnyx package remains a compatibility dependency for shared push
+dispatch, Android entry points and ringtone handling until later Stage 2 work.
+
 Vocivo owns the applications and their tenant, authorization, routing, wallet,
 and administration logic. The SIP stack runs on the configured DigitalOcean
 host; Vercel hosts the HTTP application. Telnyx remains an external carrier for

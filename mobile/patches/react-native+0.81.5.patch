@@ -1,0 +1,11 @@
+diff --git a/node_modules/react-native/ReactCommon/react/runtime/React-RuntimeCore.podspec b/node_modules/react-native/ReactCommon/react/runtime/React-RuntimeCore.podspec
+--- a/node_modules/react-native/ReactCommon/react/runtime/React-RuntimeCore.podspec
++++ b/node_modules/react-native/ReactCommon/react/runtime/React-RuntimeCore.podspec
+@@ -30,6 +30,7 @@ Pod::Spec.new do |s|
+   s.source_files           = podspec_sources(["*.{cpp,h}", "nativeviewconfig/*.{cpp,h}"], ["*.h", "nativeviewconfig/*.h"])
+   s.exclude_files          = "iostests/*", "tests/**/*.{cpp,h}"
+   s.header_dir             = "react/runtime"
++  s.header_mappings_dir    = "."
+   s.pod_target_xcconfig    = { "HEADER_SEARCH_PATHS" => "\"$(PODS_ROOT)/Headers/Private/React-Core\" \"${PODS_TARGET_SRCROOT}/../..\"",
+                                 "USE_HEADERMAP" => "YES",
+                                 "CLANG_CXX_LANGUAGE_STANDARD" => rct_cxx_language_standard(),

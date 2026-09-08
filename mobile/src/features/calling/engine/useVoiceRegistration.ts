@@ -3,6 +3,7 @@ import { AppState, NativeModules, Platform } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { createManagedTokenConfig as createTokenConfig, isManagedPushLaunch } from '../runtime/managedVoiceRuntime';
 import { api } from '../../../shared/api';
+import { pushEnvironment } from '../runtime/pushEnvironment';
 import { applyIncomingRingtone, defaultRingtone, loadIncomingRingtone } from '../media/ringtone';
 import { getVoicePushToken, loadVoiceSession, persistVoiceSession, voipClient } from '../runtime/voipClient';
 import { ensureSipRegistration, onSipRegistration, refreshVocivoSip, unregisterVocivoSip } from '../runtime/sipNative';
@@ -113,7 +114,7 @@ export function useVoiceRegistration({
             await api.post('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android',
               token: pushNotificationDeviceToken,
-              environment: __DEV__ ? 'sandbox' : 'production',
+              environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__),
               bundleId: 'app.vocivo.mobile',
             });
             storedPushToken = pushNotificationDeviceToken;
@@ -295,7 +296,7 @@ export function useVoiceRegistration({
             setPushRegistration('registering');
             await api.post('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android', token,
-              environment: __DEV__ ? 'sandbox' : 'production', bundleId: 'app.vocivo.mobile',
+              environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
             });
             if (canceled) return;
             await login(token);

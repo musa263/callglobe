@@ -16,6 +16,8 @@ import {
   type SessionDescriptionHandlerOptions as WebSessionDescriptionHandlerOptions,
 } from 'sip.js/lib/platform/web';
 import { createRegistrationKeeper } from './sipRegistrationKeeper';
+import { rotateSipPassword, updateSipIceServers } from './sipCredentialRotation';
+import { sipRegistrationRequestDelegate } from './sipRegistrationRequest';
 import { terminationDeadline } from '../state/terminationDeadline';
 import type {
   SipDisposition,
@@ -321,16 +323,12 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     },
   });
 
+  let credentialVersion = 0;
   const registerer = new Registerer(userAgent, { expires: 600 });
   const registrationListener = (state: RegistererState) => {
     if (state === RegistererState.Registered) keeper.onRegistered();
-    if (state === RegistererState.Unregistered) keeper.onUnregistered();
-    // A REGISTER that failed because the socket was down comes back as a
-    // synthetic 503 and an Unregistered state. While the keeper is bringing
-    // the socket back that is "reconnecting", not "signed out": the UI keeps
-    // any call up instead of closing it over a blip.
-    if (state === RegistererState.Unregistered && keeper.wanted && !userAgent.isConnected()) {
-      onRegistration?.('Reconnecting', 'registration lapsed while the connection was down');
+    if (state === RegistererState.Unregistered && keeper.wanted) {
+      keeper.onUnregistered();
       return;
     }
     onRegistration?.(toSipRegistererState(state));
@@ -344,15 +342,21 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     isPending: (error) => error instanceof RequestPendingError,
     notify: (state, reason) => onRegistration?.(state, reason),
     schedule: options.schedule,
-    register: () => registerer.register({
-      requestDelegate: {
-        onReject: (response) => {
-          keeper.onUnregistered();
-          if (!userAgent.isConnected()) return; // the state listener has already said "reconnecting"
-          onRegistration?.('Unregistered', `${response.message.statusCode} ${response.message.reasonPhrase}`);
-        },
-      },
-    }).then(() => undefined),
+    register: () => {
+      const version = credentialVersion;
+      return registerer.register({
+        requestDelegate: sipRegistrationRequestDelegate({
+          wanted: () => keeper.wanted,
+          current: () => version === credentialVersion,
+          ready: () => userAgent.isConnected() && registerer.state === RegistererState.Registered,
+          registered: () => {
+            keeper.onRegistered();
+            onRegistration?.('Registered');
+          },
+          rejected: (status, reason) => keeper.onRejected(status, reason),
+        }),
+      }).then(() => undefined);
+    },
   });
 
   return {
@@ -379,6 +383,12 @@ export function createSipJsStack(config: SipStackConfig, options: SipJsStackOpti
     },
 
     refresh: () => keeper.refresh(),
+
+    updateCredentials: async (next) => {
+      if (rotateSipPassword(userAgent, config, next)) credentialVersion += 1;
+      updateSipIceServers(userAgent, next.iceServers ?? options.iceServers ?? [{ urls: `stun:${config.domain}:3478` }]);
+      await keeper.refresh();
+    },
 
     invite: async (target, headers) => {
       const targetUri = UserAgent.makeURI(target.includes('@') ? `sip:${target.replace(/^sip:/, '')}` : `sip:${target}@${config.domain}`);
