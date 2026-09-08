@@ -80,6 +80,9 @@ def carrier(index):
                         ERRORS.append('Wrong gateway destination')
                     if ROUTES[index]['callerId'] not in h['from']:
                         ERRORS.append('Wrong tenant caller ID')
+                if not re.search(r'^a=rtpmap:8 PCMA/8000', msg, re.M):
+                    sip.sendto(response(msg, status='488 Not Acceptable Here', tag=';tag=carrier').encode(), addr)
+                    continue
                 body = sdp(15180 + index)
                 sip.sendto(response(msg, body=body, contact=f'sip:carrier@127.0.0.1:{15080 + index}', tag=';tag=carrier').encode(), addr)
             elif msg.startswith(('OPTIONS ', 'BYE ', 'CANCEL ')):
@@ -89,7 +92,8 @@ def carrier(index):
 
 
 class Caller:
-    def __init__(self, index, invalid=False):
+    def __init__(self, index, invalid=False, opus=False):
+        self.opus = opus
         self.sip = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sip.bind(('127.0.0.1', 0))
         self.sip.settimeout(8)
@@ -102,6 +106,8 @@ class Caller:
         self.base = f'Via: SIP/2.0/UDP 127.0.0.1:{self.port};branch=z9hG4bK{self.cid}\r\nMax-Forwards: 70\r\nFrom: <sip:caller@127.0.0.1>;tag=caller{self.cid}\r\nTo: <{target}>\r\nCall-ID: {self.cid}\r\nContact: <sip:caller@127.0.0.1:{self.port}>\r\n'
         token = 'invalid' if invalid else route['token']
         body = sdp(self.rtp.getsockname()[1])
+        if opus:
+            body = body.replace('RTP/AVP 8', 'RTP/AVP 102').replace('a=rtpmap:8 PCMA/8000', 'a=rtpmap:102 opus/48000/2')
         msg = f'INVITE {target} SIP/2.0\r\n{self.base}CSeq: 1 INVITE\r\nX-Vocivo-Flow: outbound\r\nX-Vocivo-Caller-ID: {route["callerId"]}\r\nX-Vocivo-Route-Token: {token}\r\nContent-Type: application/sdp\r\nContent-Length: {len(body)}\r\n\r\n{body}'
         self.sip.sendto(msg.encode(), ('127.0.0.1', 15060))
         while True:
@@ -122,10 +128,11 @@ class Caller:
     def audio(self):
         received = 0
         for seq in range(100):
-            self.rtp.sendto(struct.pack('!BBHII', 0x80, 8, seq, seq * 160, 12345) + b'\xd5' * 160, self.media)
+            payload = b'\xf8\xff\xfe' if self.opus else b'\xd5' * 160
+            self.rtp.sendto(struct.pack('!BBHII', 0x80, 102 if self.opus else 8, seq, seq * (960 if self.opus else 160), 12345) + payload, self.media)
             for ready in select.select([self.rtp], [], [], .02)[0]:
                 packet = ready.recv(2048)
-                received += packet[12:] == b'\xd5' * 160
+                received += (len(packet) > 12 and packet[1] & 127 == 102) if self.opus else packet[12:] == b'\xd5' * 160
         return received
 
     def close(self):
@@ -155,7 +162,10 @@ assert COUNTS == [1, 1] and not ERRORS, (COUNTS, ERRORS)
 for caller in [a, blocked, b, invalid]:
     caller.close()
 time.sleep(.3)
-retry = Caller(0)
-assert retry.code == 200, ('capacity was not released after BYE', retry.code)
+retry = Caller(0, opus=True)
+assert retry.code == 200, ('Opus-only caller could not reach the G.711 carrier after releasing capacity', retry.code)
+before = MEDIA[0]
+opus_audio = retry.audio()
+assert opus_audio > 30 and MEDIA[0] > before + 30, ('Opus/G.711 media did not cross the bridge', opus_audio, MEDIA[0] - before)
 retry.close()
-print(json.dumps({'tenantGateways': COUNTS, 'callerIdCorrect': not ERRORS, 'mediaEchoPackets': audio, 'carrierMediaPackets': MEDIA, 'capacityDenied': blocked.code, 'invalidGrantDenied': invalid.code, 'capacityReleased': True}))
+print(json.dumps({'tenantGateways': COUNTS, 'callerIdCorrect': not ERRORS, 'mediaEchoPackets': audio, 'carrierMediaPackets': MEDIA, 'capacityDenied': blocked.code, 'invalidGrantDenied': invalid.code, 'capacityReleased': True, 'opusToG711EchoPackets': opus_audio}))

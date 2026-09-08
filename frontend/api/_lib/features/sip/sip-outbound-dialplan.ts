@@ -30,7 +30,9 @@ export async function renderSipOutbound(request: XmlCurlRequest, config: PbxConf
     action('set', `effective_caller_id_number=${admitted.callerId}`),
     action('set', 'effective_caller_id_name=Vocivo'),
     action('set', 'sip_cid_type=pid'),
-    action('set', 'absolute_codec_string=PCMU,PCMA,OPUS'),
+    // Set the carrier leg explicitly. Setting only the originating channel
+    // leaves a browser's Opus-only negotiation on the new gateway channel.
+    action('export', 'nolocal:absolute_codec_string=PCMU,PCMA,OPUS'),
     action('set', 'call_timeout=45'),
     action('set', 'session_in_hangup_hook=true'),
     action('set', `api_hangup_hook=system /bin/sh /opt/vocivo-fs/sip-hangup.sh ${admitted.routeId} \${uuid} \${billsec}`),

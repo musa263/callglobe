@@ -296,6 +296,12 @@ The `diagnose` action reads at most six temporary relay call records and emits
 only UUIDs, hangup/codec fields and SDP media descriptions. It excludes SIP
 credentials, ICE credentials, media keys and unrelated PBX records.
 
+Authorized outbound dialplans export the carrier codec list with `nolocal:` so
+it applies to the new gateway channel. A plain `set` affects the originating
+channel and can leave the carrier offer Opus-only. The tenant-carriers wire gate
+also calls from an Opus-only endpoint to a G.711-only peer and verifies media in
+both directions through FreeSWITCH transcoding.
+
 Gateway deployment verifies the exact gateway name and its `trunk` profile after
 rescan; a successful reload response alone is insufficient. Keep an included
 gateway's `<include>` wrapper on separate lines: FreeSWITCH's preprocessor can

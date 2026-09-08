@@ -31,7 +31,7 @@ for (const index of [0, 1]) {
   routes.push({ ...grant, token, xml });
 }
 writeFileSync(join(dir, 'routes.json'), JSON.stringify({ routes, unavailable: outboundUnavailable() }));
-const modules = ['console', 'logfile', 'commands', 'dptools', 'dialplan_xml', 'xml_curl', 'sofia', 'event_socket', 'hash'];
+const modules = ['console', 'logfile', 'commands', 'dptools', 'dialplan_xml', 'xml_curl', 'sofia', 'event_socket', 'hash', 'opus'];
 const params = entries => Object.entries(entries).map(([name, value]) => `<param name="${name}" value="${value}"/>`).join('');
 const configuration = (name, body) => `<configuration name="${name}">${body}</configuration>`;
 writeFileSync(join(dir, 'freeswitch.xml'), `<document type="freeswitch/xml"><section name="configuration">
@@ -40,6 +40,6 @@ ${configuration('switch.conf', `<settings>${params({ 'max-sessions': 10, 'sessio
 ${configuration('console.conf', '<mappings><map name="all" value="console,debug,info,notice,warning,err,crit,alert"/></mappings><settings><param name="colorize" value="false"/><param name="loglevel" value="debug"/></settings>')}
 ${configuration('event_socket.conf', `<settings>${params({ 'listen-ip': '127.0.0.1', 'listen-port': 18021, password: 'local-test-only', 'apply-inbound-acl': 'loopback.auto' })}</settings>`)}
 ${configuration('xml_curl.conf', '<bindings><binding name="fixture"><param name="gateway-url" value="http://127.0.0.1:18881/dialplan" bindings="dialplan"/><param name="disable-100-continue" value="true"/><param name="timeout" value="8"/></binding></bindings>')}
-${configuration('sofia.conf', `<profiles><profile name="test-edge"><gateways>${gateways.join('')}</gateways><settings>${params({ 'sip-ip': '127.0.0.1', 'sip-port': 15060, 'rtp-ip': '127.0.0.1', context: 'public', dialplan: 'XML', 'auth-calls': 'false', 'disable-register': 'true', 'apply-inbound-acl': 'loopback.auto', 'inbound-codec-prefs': 'PCMA,PCMU', 'outbound-codec-prefs': 'PCMA,PCMU', 'manage-presence': 'false' })}</settings></profile></profiles>`)}
+${configuration('sofia.conf', `<profiles><profile name="test-edge"><gateways>${gateways.join('')}</gateways><settings>${params({ 'sip-ip': '127.0.0.1', 'sip-port': 15060, 'rtp-ip': '127.0.0.1', context: 'public', dialplan: 'XML', 'auth-calls': 'false', 'disable-register': 'true', 'apply-inbound-acl': 'loopback.auto', 'inbound-codec-prefs': 'OPUS,PCMA,PCMU', 'outbound-codec-prefs': 'PCMA,PCMU', 'manage-presence': 'false' })}</settings></profile></profiles>`)}
 </section><section name="dialplan"><context name="public"><extension name="refuse"><condition><action application="respond" data="503 Unavailable"/></condition></extension></context></section></document>`);
 console.log('Prepared two isolated tenant gateways and signed XML dialplans.');
