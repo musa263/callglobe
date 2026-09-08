@@ -9,7 +9,7 @@ export function CallerIdMenu({ numbers, selected, onSelect, open, onToggle }) {
         <span className="caller-number">{selected?.phone_number || 'No number'}</span><ChevronDown size={16} />
       </button>
       {open && <div className="caller-menu">{numbers.map((number) => (
-        <button key={number.id} onClick={() => onSelect(number)}><span><strong>{number.label}</strong><small>{number.phone_number}</small></span>{selected?.id === number.id && <Check size={17} />}</button>
+        <button key={number.id} onClick={() => onSelect(number)}><span><strong>{number.label}</strong><small>{number.phone_number}{number.source === 'carrier' && number.status !== 'ready' ? ' · Pending activation' : ''}</small></span>{selected?.id === number.id && <Check size={17} />}</button>
       ))}</div>}
     </div>
   );

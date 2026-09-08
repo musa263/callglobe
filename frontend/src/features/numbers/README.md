@@ -14,3 +14,8 @@ carrier form and previous company numbers, with an accessible removal modal.
 Every saved DID is visible even when unassigned or pending activation. Password
 fields are write-only; details show whether one is stored. Test with
 `node scripts/test-carrier-admin.mjs` using the Playwright module and Vite on 5191.
+
+App bootstrap retains `source: carrier` entries in the caller-ID menu. Pending
+lines remain visible with their status; the dialer disables external calls for
+them while internal calls remain independent. The full-App startup browser
+harness covers all five imported DIDs, pending admission and ready selection.

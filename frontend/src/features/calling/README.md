@@ -34,3 +34,7 @@ configuration have different lifetimes; use the API's configuration expiry.
 Run the keeper unit tests, mobile SipRecovery/SipBootstrap integration suites,
 `bash verify.sh`, and the browser SIP harness. These prove controlled recovery,
 not physical Wi-Fi/5G handoff, killed-state operation, or two-way carrier audio.
+
+The dialer displays imported company carrier numbers and prevents external calls
+through a pending carrier line. Internal calling still uses the extension route.
+The server independently validates activation and ownership for every call.

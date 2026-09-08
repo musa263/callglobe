@@ -13,6 +13,10 @@ try {
   const errors = [];
   const requests = [];
   let sessionValid = true;
+  let carrierReady = false;
+  const carrierNumbers = () => [0, 1, 2, 3, 4].map(index => ({ id: `carrier-${index}`, source: 'carrier',
+    phone_number: `+96613511000${index}`, label: index ? `Company carrier ${index + 1}` : 'Company carrier main line',
+    status: carrierReady ? 'ready' : 'pending_activation', receives_calls: false }));
   let releaseBootstrap;
   let holdBootstrap = true;
   let releaseSession;
@@ -36,7 +40,7 @@ try {
     }
     if (path === '/api/mobile/bootstrap' && holdBootstrap) await new Promise((resolve) => { releaseBootstrap = resolve; });
     const data = {
-      '/api/mobile/bootstrap': { profile, account: { balance: 0, rates: [] }, numbers: [] },
+      '/api/mobile/bootstrap': { profile, account: { balance: 0, rates: [] }, numbers: carrierNumbers() },
       '/api/voice/config': { provider: 'sip', voice_edge: 'sip' },
       '/api/voice/route': { destination: 'sip:qa-colleague@test.invalid', destinationName: 'QA Colleague', routeToken: 'fixture' },
       '/api/voice/sip-credentials': { username: 'qa', password: 'fixture', domain: 'test.invalid', wsUri: 'wss://test.invalid', expires_in: 3600 },
@@ -99,12 +103,26 @@ try {
   releaseBootstrap();
   console.log('PASS: authenticated phone renders before bootstrap completes; only REGISTER acknowledgement makes it ready');
   assert.ok(requests.includes('/api/voice/sip-credentials'));
+  await page.getByRole('button', { name: /CALLING FROM Company carrier main line/ }).click();
+  assert.equal(await page.locator('.caller-menu button').count(), 5);
+  assert.equal(await page.locator('.caller-menu button').filter({ hasText: 'Pending activation' }).count(), 5);
+  await page.locator('.caller-menu button').last().click();
+  await page.getByRole('textbox', { name: 'Phone number', exact: true }).fill('+12025550123');
+  assert.equal(await page.getByRole('button', { name: 'Call now', exact: true }).isDisabled(), true);
+  await page.getByRole('status').filter({ hasText: 'This carrier line is pending activation.' }).waitFor();
+  assert.equal(requests.includes('/api/voice/route'), false);
+  console.log('PASS: all five carrier DIDs survive App bootstrap; pending lines stay visible and cannot start external calls');
+  carrierReady = true;
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.sipInput);
   await page.evaluate(() => window.sipInput.onRegistration('Registered'));
   await page.getByText('Ready for calls', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => 'token' in JSON.parse(localStorage.getItem('vocivo.session'))), false);
   console.log('PASS: full App starts and re-registers after reload without a stored bearer');
+  await page.getByRole('button', { name: /CALLING FROM Company carrier main line/ }).waitFor();
+  await page.getByRole('textbox', { name: 'Phone number', exact: true }).fill('+12025550123');
+  assert.equal(await page.getByRole('button', { name: 'Call now', exact: true }).isEnabled(), true);
+  await page.getByRole('textbox', { name: 'Phone number', exact: true }).fill('');
 
   await page.evaluate(() => window.receiveCall());
   await page.getByText('QA Colleague', { exact: true }).waitFor();

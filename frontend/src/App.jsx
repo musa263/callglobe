@@ -70,7 +70,7 @@ export default function App() {
           return;
         }
         resolvedProfile = { ...resolvedProfile, ...bootstrap.profile };
-        const owned = (bootstrap.numbers || []).filter((number) => number.source === 'owned');
+        const owned = (bootstrap.numbers || []).filter((number) => number.source === 'owned' || number.source === 'carrier');
         const verified = (bootstrap.numbers || []).filter((number) => number.source === 'verified');
         setProfile(resolvedProfile);
         setBalance(bootstrap.account?.balance == null ? null : Number(bootstrap.account.balance));

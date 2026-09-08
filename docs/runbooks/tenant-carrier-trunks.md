@@ -94,3 +94,27 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-carrier-admin.
 ```
 
 Reference: [FreeSWITCH gateways](https://developer.signalwire.com/freeswitch/FreeSWITCH-Explained/Configuration/Sofia-SIP-Stack/Gateways-Configuration_7144069).
+
+## September 8 production checkpoint
+
+Release `a5b94f1` reached `main` and Vercel's existing Git integration deployed
+the web/API. A separate manual Vercel redeploy was declined and was not retried.
+The SIP host configuration has not been synchronized for this release.
+
+In the authenticated Global Heritage company portal, the five Go Telecom DIDs
+were published and the default caller ID verified as `+966135117680`.
+`+18447161777` was detached from that company's inventory, caller IDs and inbound
+assignment; it is no longer displayed in the company portal. This did not cancel
+the number's carrier-account rental. No number was purchased. All five Go DID
+destinations remain unassigned, as requested. No operator deployment record was
+created for `64.226.96.144`; 3CX was unchanged, and Go remains pending activation.
+
+The exact release passed `bash verify.sh` (436 backend/web, 154 mobile unit and
+71 mobile integration tests). [SIP validation 34198307263](https://github.com/musa263/vocivo/actions/runs/34198307263)
+passed both ingress and isolated tenant-carrier Docker jobs. The final live
+browser check found the App's old source filter excluded carrier numbers; the
+follow-up retains them, labels pending lines and prevents external admission.
+The full-App browser regression covers pending and ready carrier inventory,
+internal calling, session restoration, incoming ringing and audio recovery.
+These checks do not establish Go carrier call/audio acceptance or a new mobile
+binary release.

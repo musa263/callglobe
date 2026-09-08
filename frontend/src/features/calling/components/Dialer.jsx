@@ -37,6 +37,7 @@ export function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNum
   const destinationCountry = parsePhoneNumberFromString(fullNumber)?.country || country?.country_code;
   const callerCountry = selectedNumber?.country_code || parsePhoneNumberFromString(selectedNumber?.phone_number || '')?.country;
   const routeRisk = selectedNumber?.source === 'verified' && callerCountry === destinationCountry && !['US', 'CA'].includes(destinationCountry || '');
+  const carrierPending = dialMode === 'external' && selectedNumber?.source === 'carrier' && selectedNumber.status !== 'ready';
   const ownedFallback = numbers.find((item) => item.source === 'owned' && item.phone_number !== selectedNumber?.phone_number);
   const zeroHoldRef = useRef({ timer: null, fired: false });
   function startZeroHold() {
@@ -55,7 +56,7 @@ export function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNum
     setNumber((current) => `${current}${value}`.slice(0, 22));
   }
   async function call() {
-    if (!number || voice.callStarting || voice.active) return;
+    if (!number || voice.callStarting || voice.active || carrierPending) return;
     if (dialMode === 'extension') {
       setCallError('');
       try {
@@ -93,7 +94,8 @@ export function Dialer({ balance, rates, numbers, selectedNumber, setSelectedNum
           {dialMode === 'external' ? <><div className="rate-strip"><span><small>DESTINATION</small><strong>{country?.country_name || 'Select country'}</strong></span><span><small>COUNTRY CODE</small><strong>{country?.dial_code || '-'}</strong></span><span><small>ESTIMATED TIME</small><strong>{minutes ? `${minutes.toLocaleString()} min` : 'See live rate'}</strong></span></div>{routeRisk && <div className="route-warning"><AlertTriangle size={18} /><div><strong>This caller ID may not ring locally</strong><small>Some countries filter verified same-country caller IDs arriving through international routes. An owned international number is usually more compatible.</small></div>{ownedFallback && <button onClick={() => { setSelectedNumber(ownedFallback); setCallError(''); }}>Use {formatPhone(ownedFallback.phone_number)}</button>}</div>}</> : <div className="rate-strip extension-strip"><span><small>ROUTE</small><strong>Private company network</strong></span><span><small>COST</small><strong>Free internal call</strong></span><span><small>PHONE NUMBER</small><strong>Not required</strong></span></div>}
           <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key)} onPointerDown={key === '0' ? startZeroHold : undefined} onPointerUp={key === '0' ? endZeroHold : undefined} onPointerLeave={key === '0' ? endZeroHold : undefined}><strong>{key}</strong><small>{letters}</small></button>)}</div>
           {(callError || voice.error) ? <div className="inline-error" role="alert">{callError || voice.error}</div> : voice.notice && <div className="call-notice" role="status"><PhoneOff size={18} /><span>{voice.notice}</span></div>}
-          <button className="call-button" onClick={call} disabled={voice.active || voice.callStarting || !number || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !selectedNumber?.phone_number) || !voice.ready}><Phone size={22} /> {voice.ready ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
+          {carrierPending && <p className="call-notice" role="status">This carrier line is pending activation. Contact your company administrator to enable external calls.</p>}
+          <button className="call-button" onClick={call} disabled={voice.active || voice.callStarting || !number || carrierPending || (dialMode === 'extension' && !/^\d{2,5}$/.test(number)) || (dialMode !== 'extension' && !selectedNumber?.phone_number) || !voice.ready}><Phone size={22} /> {voice.ready ? (dialMode === 'extension' ? 'Call extension' : 'Call now') : 'Connecting phone...'} </button>
         </div>
       </div>
     </section>
