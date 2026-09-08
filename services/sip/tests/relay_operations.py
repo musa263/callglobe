@@ -127,6 +127,11 @@ def install_gateway(cfg):
         raise RuntimeError('Refusing to replace an existing gateway')
     save(cfg)
     arm('gateway', seconds)
+    publish_gateway(cfg, target)
+    print('Temporary gateway installed and verified; timed removal armed. No other gateway was replaced.')
+
+
+def gateway_xml(cfg):
     root = ET.Element('include')
     gateway = ET.SubElement(root, 'gateway', name=cfg['gateway'])
     params = {'proxy': f'{cfg["carrier_ip"]}:{cfg["carrier_port"]}', 'realm': cfg['carrier_ip'],
@@ -136,8 +141,15 @@ def install_gateway(cfg):
               'extension-in-contact': 'true', 'ping': '30'}
     for name, value in params.items():
         ET.SubElement(gateway, 'param', name=name, value=value)
+    # FreeSWITCH's include preprocessor discards lines containing the wrapper.
+    # Serializing the whole document onto one line silently discards the gateway.
+    ET.indent(root, space='  ')
+    return ET.tostring(root, encoding='unicode') + '\n'
+
+
+def publish_gateway(cfg, target):
     target.parent.mkdir(mode=0o700, exist_ok=True)
-    target.write_text(ET.tostring(root, encoding='unicode'))
+    target.write_text(gateway_xml(cfg))
     container = run('docker', 'compose', 'ps', '-q', 'freeswitch', cwd='/opt/vocivo/sip').stdout.strip()
     if not re.fullmatch(r'[a-f0-9]{12,64}', container):
         raise RuntimeError('FreeSWITCH container unavailable')
@@ -145,7 +157,23 @@ def install_gateway(cfg):
     result = fs('fs_cli', '-x', 'sofia profile trunk rescan reloadxml').stdout
     if '-ERR' in result:
         raise RuntimeError('Gateway rescan failed')
-    print('Temporary gateway installed; timed removal armed. No other gateway was replaced.')
+    status = fs('fs_cli', '-x', 'sofia status gateway ' + cfg['gateway']).stdout
+    fields = dict(line.split(None, 1) for line in status.splitlines() if len(line.split(None, 1)) == 2)
+    if fields.get('Name') != cfg['gateway'] or fields.get('Profile') != 'trunk':
+        raise RuntimeError('Gateway was not loaded after rescan')
+
+
+def repair_gateway():
+    cfg = config(json.loads((ROOT / 'settings.json').read_text()))
+    remaining(cfg)
+    if run('systemctl', 'is-active', 'vocivo-temporary-gateway-expiry.timer', check=False).stdout.strip() != 'active':
+        raise RuntimeError('Gateway expiry timer must still be active')
+    target = Path('/opt/vocivo/carriers') / (cfg['gateway'] + '.xml')
+    saved = ET.fromstring(target.read_text()).find('gateway')
+    if saved is None or saved.get('name') != cfg['gateway']:
+        raise RuntimeError('Refusing to replace an unrelated gateway file')
+    publish_gateway(cfg, target)
+    print('Existing temporary gateway repaired and verified; original expiry preserved.')
 
 
 def remove(role):
@@ -183,6 +211,8 @@ if __name__ == '__main__':
     try:
         if action in ('remove-relay', 'remove-gateway'):
             remove(action.split('-', 1)[1])
+        elif action == 'repair-gateway':
+            repair_gateway()
         elif action in ('install-relay', 'install-gateway'):
             cfg = config(json.load(sys.stdin))
             install(action.split('-', 1)[1], cfg)

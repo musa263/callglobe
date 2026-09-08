@@ -31,6 +31,7 @@ jobs:
         run: |
           python3 -m unittest discover -s services/sip/tests -p 'test_*carrier*.py'
           python3 services/sip/tests/validate_relay.py
+          python3 services/sip/tests/validate_gateway_load.py
   ingress:
     runs-on: ubuntu-latest
     timeout-minutes: 10

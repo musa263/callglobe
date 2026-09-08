@@ -281,6 +281,15 @@ record, temporary gateway, relay, SSH entry, cloud firewall exceptions and
 temporary repository secret when done. Retain private evidence only as needed.
 No workflow here claims carrier or handset acceptance, or moves the public IP.
 
+Gateway deployment verifies the exact gateway name and its `trunk` profile after
+rescan; a successful reload response alone is insufficient. Keep an included
+gateway's `<include>` wrapper on separate lines: FreeSWITCH's preprocessor can
+silently discard a compact single-line include. `repair-gateway` republishes only
+the existing temporary gateway and preserves its active expiry timer.
+`python3 services/sip/tests/validate_gateway_load.py` reproduces the compact-XML
+failure and checks the generated gateway with production startup in isolated
+Docker. It sends no traffic outside that container.
+
 Run `python3 services/sip/tests/validate_relay.py` with local Docker. It uses
 network-isolated loopback fixtures to test Digest, invalid passwords, source
 and caller-ID rejection, destination normalization and actual RTP echo. The

@@ -5,7 +5,7 @@ on:
       action:
         description: Fixed temporary outbound test operation
         type: choice
-        options: [public-key, deploy, remove]
+        options: [public-key, deploy, repair-gateway, remove]
         required: true
 permissions:
   contents: read
@@ -35,7 +35,7 @@ jobs:
             ssh-keygen -y -f "$HOME/.ssh/ops_key"
             exit 0
           fi
-          case "$ACTION" in deploy|remove) ;; *) exit 2 ;; esac
+          case "$ACTION" in deploy|repair-gateway|remove) ;; *) exit 2 ;; esac
           python3 - <<'PY'
           import json, os, sys
           from pathlib import Path
@@ -65,6 +65,10 @@ jobs:
             tar czf - -C services/sip/tests relay_operations.py temporary_carrier_relay.py temporary_carrier_pbx.py \
               | "$destination" 'umask 077; install -d -m 700 /opt/vocivo-carrier-relay-ops; tar xzf - -C /opt/vocivo-carrier-relay-ops'
           done
+          if [ "$ACTION" = repair-gateway ]; then
+            edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py repair-gateway
+            exit 0
+          fi
           relay_ready=0
           cleanup_failure() {
             result=$?
