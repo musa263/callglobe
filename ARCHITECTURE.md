@@ -16,7 +16,7 @@ Vercel API -> PostgreSQL
     |
     +-- VOCIVO_VOICE_EDGE=sip -> SIP.js -> Kamailio -> RTPEngine
                                            |
-                                           +-> FreeSWITCH -> Telnyx trunk -> PSTN
+                                           +-> FreeSWITCH -> tenant carrier / managed trunk -> PSTN
                                                   |
                                                   +-> Python receptionist / TTS
 ```
@@ -25,6 +25,10 @@ Vercel API -> PostgreSQL
 only for the explicit value `sip`; otherwise it selects Telnyx. Read the live
 environment and `/api/voice/config` to establish which path is deployed. Merely
 finding a carrier library in the repository does not establish its active use.
+Mobile requires an explicit valid engine in that API response. Its managed JS SDK
+loads lazily and mounts only after authenticated managed-session preparation.
+The SIP path uses Vocivo's client; the existing patched native VoicePnBridge is
+still a compatibility dependency pending the next native migration stage.
 
 Vocivo owns the applications and their tenant, authorization, routing, wallet,
 and administration logic. The SIP stack runs on the configured DigitalOcean
@@ -60,6 +64,16 @@ Keep tests next to pure modules; mounted React Native integration tests live in
 `mobile/tests/voip/`. `scripts/test-files.mjs` discovers nested unit tests.
 
 ## Calling Boundaries
+
+Extension authority is separate from the selected voice engine. Legacy directories
+use Telnyx telephony credentials; an explicitly adopted encrypted v3 directory
+uses Vocivo's local lifecycle through `organizations/vocivo-extensions.ts`. Adoption
+preserves existing IDs and SIP usernames, so account/history links do not change.
+Both app and inbound SIP must be selected before adopting the directory. The
+durable authority marker prevents an environment rollback from silently selecting
+the old credential lifecycle; older binaries without v3 support are not a valid
+rollback. `/api/voice/config` reports `extension_authority` separately from
+`voice_edge`. See the [carrier-only migration runbook](docs/runbooks/vocivo-carrier-only-migration.md).
 
 On the SIP edge, the client obtains a session-bound temporary SIP credential,
 registers, requests a signed call route, then sends its INVITE. Kamailio validates
@@ -102,3 +116,9 @@ Strict registration changes require the matching SIP config before Vercel
 promotion. Use the pinned Kamailio image's parser on staged configuration, retain
 the prior server backup, and inspect live container health before promoting HTTP
 changes. Vercel does not ship a TestFlight or APK update.
+
+Tenant BYOC connection records are encrypted and company-scoped. Operator
+deployment records bind a gateway and real edge IP; signed outbound grants and
+the XML bridge prevent fallback to another carrier. Configuration, publication,
+deployment and real call acceptance are separate states. See the
+[tenant carrier runbook](docs/runbooks/tenant-carrier-trunks.md).

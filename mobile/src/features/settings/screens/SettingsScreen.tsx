@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { BellRing, Building2, Camera, Check, ChevronRight, Clock3, CreditCard, KeyRound, LogOut, Pause, Phone, Play, Plus, Radio, Settings2, Signal, Trash2, UserRoundPen, Voicemail, WifiOff, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import Constants from 'expo-constants';
 import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 import * as ImagePicker from 'expo-image-picker';
@@ -185,7 +186,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
   return <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}><Text style={styles.eyebrow}>YOUR ACCOUNT</Text><Text style={styles.title}>Settings</Text></View>
+      <View style={styles.header}><PageHeading title="Settings" /></View>
       <Pressable onPress={openProfile} style={styles.profile}>{profile?.photo_url ? <Image source={{ uri: profile.photo_url }} style={styles.avatarImage} /> : <View style={styles.avatar}><Text style={styles.initials}>{initials}</Text></View>}<View style={styles.profileCopy}><Text style={styles.profileName}>{profile?.full_name || 'Vocivo member'}</Text><Text style={styles.profileEmail}>{profile?.job_title || profile?.email}</Text></View><ChevronRight size={18} color={colors.textFaint} /></Pressable>
       <Text style={styles.sectionLabel}>ACCOUNT</Text>
       <View style={styles.group}><Row icon={UserRoundPen} title="Personal profile" subtitle="Photo, name, role and contact details" onPress={openProfile} /></View>
@@ -208,7 +209,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
     <Modal visible={showProfile} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowProfile(false)}>
       <ScrollView style={styles.modalPage} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>YOUR ACCOUNT</Text><Text style={styles.modalTitle}>Personal profile</Text></View><Pressable accessibilityLabel="Close profile" onPress={() => setShowProfile(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.modalHeader}><PageHeading title="Personal profile" /><Pressable accessibilityLabel="Close profile" onPress={() => setShowProfile(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <Pressable onPress={() => chooseProfilePhoto().catch(() => setError('Photo access is unavailable.'))} style={styles.photoEditor}>{profilePhoto?.uri || profile?.photo_url ? <Image source={{ uri: profilePhoto?.uri || profile?.photo_url }} style={styles.photoPreview} /> : <View style={styles.photoFallback}><Text style={styles.photoInitials}>{initials}</Text></View>}<View style={styles.cameraBadge}><Camera size={17} color={colors.ink} /></View></Pressable>
         <Text style={styles.photoHelp}>Tap to choose a square profile photo</Text>
         <Label>FULL NAME</Label><TextInput value={profileDraft.fullName} onChangeText={(fullName) => setProfileDraft((value) => ({ ...value, fullName }))} style={styles.field} maxLength={80} />
@@ -225,7 +226,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
     <Modal visible={showBusiness} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowBusiness(false)}>
       <ScrollView style={styles.modalPage} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>PHONE SYSTEM</Text><Text style={styles.modalTitle}>Professional Voice</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowBusiness(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.modalHeader}><PageHeading title="Professional Voice" /><Pressable accessibilityLabel="Close" onPress={() => setShowBusiness(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <View style={styles.enableRow}><View style={styles.enableCopy}><Text style={styles.fieldTitle}>Answer with voice menu</Text><Text style={styles.fieldHelp}>Incoming calls hear your greeting and choose a division before your app rings.</Text></View><Switch value={draft.enabled} onValueChange={(enabled) => setDraft((value) => ({ ...value, enabled }))} trackColor={{ false: colors.line, true: colors.mintDark }} thumbColor={colors.text} /></View>
         <Label>COMPANY NAME</Label><TextInput value={draft.companyName} onChangeText={(companyName) => setDraft((value) => ({ ...value, companyName }))} style={styles.field} placeholder={profile?.organization_name || 'Your company'} placeholderTextColor={colors.textFaint} />
         <Label>WELCOME MESSAGE</Label><TextInput value={draft.greeting} onChangeText={(greeting) => setDraft((value) => ({ ...value, greeting }))} style={[styles.field, styles.message]} multiline maxLength={500} placeholder={`Welcome to ${profile?.organization_name || 'your company'}.`} placeholderTextColor={colors.textFaint} />
@@ -242,7 +243,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
     <Modal visible={showVoicemail} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowVoicemail(false)}>
       <View style={[styles.modalPage, styles.passwordPage]}>
-        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>MISSED CALLS</Text><Text style={styles.modalTitle}>Voicemail</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowVoicemail(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.modalHeader}><PageHeading title="Voicemail" /><Pressable accessibilityLabel="Close" onPress={() => setShowVoicemail(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <View style={styles.enableRow}><View style={styles.enableCopy}><Text style={styles.fieldTitle}>Send unanswered calls to voicemail</Text><Text style={styles.fieldHelp}>Works for Personal and Business calls, including when Vocivo is closed.</Text></View><Switch value={draft.voicemailEnabled} onValueChange={(voicemailEnabled) => setDraft((value) => ({ ...value, voicemailEnabled }))} trackColor={{ false: colors.line, true: colors.mintDark }} thumbColor={colors.text} /></View>
         <Label>RING FOR</Label>
         <View style={styles.choice}>{[15, 25, 40, 60].map((seconds) => <Pressable key={seconds} onPress={() => setDraft((value) => ({ ...value, voicemailDelaySeconds: seconds }))} style={[styles.choiceButton, draft.voicemailDelaySeconds === seconds && styles.choiceActive]}><Clock3 size={14} color={draft.voicemailDelaySeconds === seconds ? colors.mint : colors.textFaint} /><Text style={[styles.choiceText, draft.voicemailDelaySeconds === seconds && styles.choiceTextActive]}>{seconds}s</Text></Pressable>)}</View>
@@ -255,7 +256,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
     <Modal visible={showMyCalls} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowMyCalls(false)}>
       <View style={[styles.modalPage, styles.passwordPage]}>
-        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>YOUR EXTENSION</Text><Text style={styles.modalTitle}>My call handling</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowMyCalls(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.modalHeader}><PageHeading title="My call handling" /><Pressable accessibilityLabel="Close" onPress={() => setShowMyCalls(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <View style={styles.enableRow}><View style={styles.enableCopy}><Text style={styles.fieldTitle}>Send my unanswered calls to voicemail</Text><Text style={styles.fieldHelp}>When you do not pick up in time, callers can leave you a message instead of ringing out.</Text></View><Switch value={myCalls.voicemailEnabled} onValueChange={(voicemailEnabled) => setMyCalls((value) => ({ ...value, voicemailEnabled }))} trackColor={{ false: colors.line, true: colors.mintDark }} thumbColor={colors.text} /></View>
         <Label>RING MY PHONE FOR</Label>
         <View style={styles.choice}>{[15, 25, 40, 60].map((seconds) => <Pressable key={seconds} onPress={() => setMyCalls((value) => ({ ...value, noAnswerSeconds: seconds }))} style={[styles.choiceButton, myCalls.noAnswerSeconds === seconds && styles.choiceActive]}><Clock3 size={14} color={myCalls.noAnswerSeconds === seconds ? colors.mint : colors.textFaint} /><Text style={[styles.choiceText, myCalls.noAnswerSeconds === seconds && styles.choiceTextActive]}>{seconds}s</Text></Pressable>)}</View>
@@ -274,7 +275,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
     <Modal visible={showRingtones} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowRingtones(false)}>
       <View style={[styles.modalPage, styles.ringtonePage]}>
-        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>INCOMING CALLS</Text><Text style={styles.modalTitle}>Choose a ringtone</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowRingtones(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.modalHeader}><PageHeading title="Choose a ringtone" /><Pressable accessibilityLabel="Close" onPress={() => setShowRingtones(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <Text style={styles.ringtoneIntro}>Vocivo uses this sound when iPhone CallKit presents an incoming call.</Text>
         <View style={styles.ringtoneList}>{ringtoneOptions.map((option) => <Pressable disabled={saving} key={option.id} onPress={() => selectRingtone(option.id)} style={({ pressed }) => [styles.ringtoneRow, pressed && styles.pressed]}><View style={[styles.ringtoneIcon, ringtone === option.id && styles.ringtoneIconActive]}>{previewingRingtone === option.id && ringtonePlayerStatus.playing ? <Pause size={18} color={ringtone === option.id ? colors.ink : colors.blue} /> : <Play size={18} color={ringtone === option.id ? colors.ink : colors.blue} fill={ringtone === option.id ? colors.ink : colors.blue} />}</View><View style={styles.ringtoneCopy}><Text style={styles.ringtoneTitle}>{option.label}</Text><Text style={styles.ringtoneDetail}>{option.description}</Text></View>{ringtone === option.id && <Check size={20} color={colors.mint} />}</Pressable>)}</View>
         {!!error && <Text style={styles.error}>{error}</Text>}
@@ -283,7 +284,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
     </Modal>
 
     <Modal visible={showPassword} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowPassword(false)}>
-      <View style={[styles.modalPage, styles.passwordPage]}><View style={styles.modalHeader}><View><Text style={styles.eyebrow}>SECURITY</Text><Text style={styles.modalTitle}>Reset password</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowPassword(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+      <View style={[styles.modalPage, styles.passwordPage]}><View style={styles.modalHeader}><PageHeading title="Reset password" /><Pressable accessibilityLabel="Close" onPress={() => setShowPassword(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <Label>CURRENT PASSWORD</Label><TextInput secureTextEntry value={currentPassword} onChangeText={setCurrentPassword} style={styles.field} autoCapitalize="none" />
         <Label>NEW PASSWORD</Label><TextInput secureTextEntry value={newPassword} onChangeText={setNewPassword} style={styles.field} autoCapitalize="none" />
         <Text style={styles.fieldHelp}>At least 10 characters with uppercase, lowercase and a number.</Text>
@@ -294,7 +295,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
 
     <Modal visible={showEsim} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowEsim(false)}>
       <View style={[styles.modalPage, styles.passwordPage]}>
-        <View style={styles.modalHeader}><View><Text style={styles.eyebrow}>MOBILE CONNECTIVITY</Text><Text style={styles.modalTitle}>Travel data eSIM</Text></View><Pressable accessibilityLabel="Close" onPress={() => setShowEsim(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
+        <View style={styles.modalHeader}><PageHeading title="Travel data eSIM" /><Pressable accessibilityLabel="Close" onPress={() => setShowEsim(false)} style={styles.close}><X size={21} color={colors.text} /></Pressable></View>
         <View style={styles.connectivityHero}>{network?.isConnected ? <Signal size={30} color={colors.mint} /> : <WifiOff size={30} color={colors.coral} />}<View><Text style={styles.fieldTitle}>{network?.isConnected ? 'Vocivo is online' : 'Vocivo is offline'}</Text><Text style={styles.fieldHelp}>{network?.isConnected ? `Current connection: ${network.type}.` : 'An eSIM can restore data only where a partner mobile network has coverage.'}</Text></View></View>
         <Text style={styles.sectionLabel}>HOW IT WORKS</Text>
         <View style={styles.esimSteps}><Text><Text style={styles.esimStepNumber}>1</Text> Choose a supported country and data plan.</Text><Text><Text style={styles.esimStepNumber}>2</Text> The carrier issues an eSIM activation code.</Text><Text><Text style={styles.esimStepNumber}>3</Text> iPhone installs the plan and Vocivo uses its data.</Text></View>

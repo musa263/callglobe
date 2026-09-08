@@ -9,7 +9,9 @@ export type VoiceEdgeConfig = {
 };
 
 export function voiceEdgeFromConfig(config?: VoiceEdgeConfig | null): VoiceEdge {
-  return config?.voice_edge === 'sip' || config?.provider === 'sip' ? 'sip' : 'telnyx';
+  const selected = config?.voice_edge ?? config?.provider;
+  if (selected !== 'sip' && selected !== 'telnyx') throw new Error('The calling engine configuration is unavailable.');
+  return selected;
 }
 
 export function sipNativeAvailable(nativeModules: { VocivoSip?: unknown } | null | undefined) {

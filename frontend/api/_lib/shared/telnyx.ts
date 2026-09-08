@@ -56,7 +56,6 @@ type CarrierHealth = {
   ready: boolean;
 };
 
-let carrierHealth: CarrierHealth | undefined;
 const carrierHealthTtlMs = 15_000;
 
 export function telnyxCarrierHasCredit(payload: unknown) {
@@ -69,15 +68,26 @@ export function telnyxCarrierHasCredit(payload: unknown) {
   return Number.isFinite(availableCredit) && availableCredit > 0;
 }
 
-export async function assertTelnyxVoiceReady() {
-  const now = Date.now();
-  if (!carrierHealth || now - carrierHealth.checkedAt >= carrierHealthTtlMs) {
-    const response = await telnyx('/balance');
-    const payload = await response.json();
-    carrierHealth = { checkedAt: now, ready: telnyxCarrierHasCredit(payload) };
-  }
-  if (!carrierHealth.ready) throw new TelnyxCarrierUnavailableError();
+export function createTelnyxVoiceReadiness(readBalance: () => Promise<unknown>, now = Date.now) {
+  let health: CarrierHealth | undefined;
+  let pending: Promise<void> | undefined;
+  return async () => {
+    if (!health || now() - health.checkedAt >= carrierHealthTtlMs) {
+      if (!pending) pending = (async () => {
+        const payload = await readBalance();
+        health = { checkedAt: now(), ready: telnyxCarrierHasCredit(payload) };
+      })().finally(() => { pending = undefined; });
+      await pending;
+    }
+    if (!health?.ready) throw new TelnyxCarrierUnavailableError();
+  };
 }
+
+// One total deadline across GET retries keeps balance checks off the long setup path.
+export const assertTelnyxVoiceReady = createTelnyxVoiceReadiness(async () => {
+  const response = await telnyx('/balance', { signal: AbortSignal.timeout(Math.min(2500, requestTimeoutMs())) });
+  return response.json();
+});
 
 function requestTimeoutMs() {
   const configured = Number(process.env.TELNYX_REQUEST_TIMEOUT_MS);
@@ -111,7 +121,7 @@ export async function telnyx(path: string, init: RequestInit = {}) {
       await response.arrayBuffer().catch(() => undefined);
     } catch (error) {
       requestError = error;
-      if (attempt === attempts - 1) break;
+      if (attempt === attempts - 1 || init.signal?.aborted) break;
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }

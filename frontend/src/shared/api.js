@@ -65,6 +65,11 @@ export async function api(path, options = {}) {
       if (!response.ok) {
         const requestError = new Error(payload.error || 'The request could not be completed.');
         requestError.status = response.status;
+        const retryAfter = response.headers.get('Retry-After');
+        if (retryAfter) {
+          const seconds = Number(retryAfter);
+          requestError.retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
+        }
         throw requestError;
       }
       return payload;

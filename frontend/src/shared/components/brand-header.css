@@ -1,0 +1,17 @@
+:root { --vocivo-header-height: 56px; }
+.vocivo-app-header {
+  position: sticky;
+  top: 0;
+  z-index: 16;
+  box-sizing: border-box;
+  height: var(--vocivo-header-height);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #d5e1ef;
+  background: #fff;
+  color: #10233f;
+}
+.vocivo-wordmark { display: flex; align-items: center; gap: 10px; font: 700 20px/1.2 'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; letter-spacing: 0; }
+.vocivo-wordmark img { display: block; width: 32px; height: 32px; flex: 0 0 32px; border-radius: 6px; }
+@media (max-width: 620px) { .vocivo-app-header { padding-inline: 18px; } }

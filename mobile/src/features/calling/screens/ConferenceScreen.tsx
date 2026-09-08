@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ArrowLeft, ChevronDown, CircleDollarSign, Globe2, Minus, PhoneCall, Plus, RotateCw, Search, UserRound, UsersRound, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import { useLocales } from 'expo-localization';
 import { useAuth } from '../../auth/AuthContext';
 import { api } from '../../../shared/api';
@@ -73,7 +74,7 @@ export function ConferenceScreen({ onDirect, onWallet }: { onDirect: () => void;
 
   return <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} keyboardShouldPersistTaps="handled">
-      <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Back to calls" onPress={onDirect} style={styles.close}><ArrowLeft size={22} color={colors.text} /></Pressable><Text style={styles.pageTitle}>Conference</Text><Pressable accessibilityRole="button" accessibilityLabel="Open calling balance" onPress={onWallet} style={styles.close}><CircleDollarSign size={21} color={colors.mint} /></Pressable></View>
+      <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Back to calls" onPress={onDirect} style={styles.close}><ArrowLeft size={22} color={colors.text} /></Pressable><View style={{ flex: 1 }}><PageHeading title="Conference" /></View><Pressable accessibilityRole="button" accessibilityLabel="Open calling balance" onPress={onWallet} style={styles.close}><CircleDollarSign size={21} color={colors.mint} /></Pressable></View>
       {started ? <View style={styles.success}><PhoneCall size={26} color={colors.mint} /><Text style={styles.successTitle}>Answer the host call</Text><Text style={styles.successText}>Vocivo will join each participant after you answer.</Text><Pressable onPress={() => setStarted(false)} style={styles.secondary}><Text style={styles.secondaryText}>Start another conference</Text></Pressable></View> : <>
         <Text style={styles.participantsHeading}>Participants</Text>
         {participants.map((row, index) => {

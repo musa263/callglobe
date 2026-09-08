@@ -93,3 +93,22 @@ export async function listCallEvents(limit = 100, organizationId?: string) {
   return [...new Map([...current, ...legacy].map((event) => [event.id, event])).values()]
     .sort((a, b) => b.event_timestamp.localeCompare(a.event_timestamp)).slice(0, limit);
 }
+
+/** History needs complete calls: event-level limits can remove a caller's own records. */
+export async function listCompleteTenantCallEvents(organizationId: string) {
+  await migrateCallEvents(organizationId);
+  const prefix = `vocivo/call-events/v3/${tenantStorageKey(organizationId)}/`;
+  const events: StoredCallEvent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, cursor, limit: 1000 });
+    const objects = await readObjects(page.blobs.map((item) => item.pathname));
+    for (const value of objects.values()) {
+      const event = decrypt(value);
+      if (event.organizationId === organizationId) events.push(event);
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+    if (page.hasMore && !cursor) throw new Error('History pagination cursor is missing.');
+  } while (cursor);
+  return [...new Map(events.map(event => [event.id, event])).values()];
+}

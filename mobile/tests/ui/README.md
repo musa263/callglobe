@@ -1,7 +1,8 @@
 # Isolated mobile screen preview
 
 This separate Expo entry mounts the real DialerScreen, RecentsScreen,
-ActiveCallScreen and ConferenceScreen with fixture contexts. It does not initialize SIP, request
+ActiveCallScreen, ConferenceScreen, ContactsScreen, MessagesScreen, SettingsScreen
+and LaunchScreen with fixture contexts. It does not initialize SIP, request
 microphone access, authenticate, contact the production API or place calls.
 The root mobile production entry does not import this project.
 
@@ -24,11 +25,11 @@ dependencies must match the mobile app; this is not an Expo Go project. Use
 - The footer identifies the fixture and opens the extension scenario.
 - Conference opens from the dialer's header icon. Participant
   types are detected automatically. Starting it returns a fixture response only.
-- Wallet and company settings are outside this harness.
+- Wallet and company settings mutations are outside this harness.
 - The production BottomTabs component is included so the calling layouts are
-  previewed with the real navigation height. Contacts, Messages and
-  Settings display an explicit preview-only placeholder here; their production
-  screens remain unchanged. Full-screen active calls hide tabs as in App.tsx.
+  previewed with the real navigation height. Contacts, Messages and Settings use
+  their production screens with fixture services. The footer can show the launch
+  placeholder. Full-screen active calls hide tabs as in App.tsx.
 
 This preview validates layout and interactions, not audio, background delivery,
 CallKit, Android Telecom or real network recovery. Run the production app with

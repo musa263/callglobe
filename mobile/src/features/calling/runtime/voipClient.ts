@@ -1,14 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { createTelnyxVoipClient, VoicePnBridge } from '@telnyx/react-voice-commons-sdk';
+import { VoicePnBridge } from './nativeVoiceBridge';
+import { existingManagedVoiceClient, getManagedVoiceClient } from './managedVoiceRuntime';
 import { NativeModules, Platform } from 'react-native';
 
 export { VoicePnBridge };
 
-export const voipClient = createTelnyxVoipClient({
-  enableAppStateManagement: true,
-  debug: __DEV__,
-  useTrickleIce: true,
+// Keep the existing adapter surface while deferring all client construction.
+export const voipClient = new Proxy({} as ReturnType<typeof getManagedVoiceClient>, {
+  get(_target, property) {
+    const client = getManagedVoiceClient();
+    const value = Reflect.get(client, property, client);
+    return typeof value === 'function' ? value.bind(client) : value;
+  },
 });
 
 const secureVoiceSessionKey = 'vocivo.secure.voice-session.v1';
@@ -28,7 +32,7 @@ export async function persistVoiceSession(session: {
     expiresAt: session.expiresAt || 0,
     iceServers: session.iceServers || [],
   }), {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
   });
   // Remove legacy plaintext copies immediately after successful migration.
   await AsyncStorage.multiRemove(['@credential_token', '@credential_token_expires_at', '@ice_servers']);
@@ -73,13 +77,15 @@ export async function signOutVoiceDevice() {
   const steps: Array<[string, () => Promise<unknown>]> = [
     ['disable native voice sign-in flag', () => setVoiceSignedIn(false)],
     ['unregister push notifications', async () => {
-      voipClient.disablePushNotifications();
+      const client = existingManagedVoiceClient();
+      if (!client) return;
+      client.disablePushNotifications();
       // Let the SDK send the unregister command before closing its socket.
       await new Promise((resolve) => setTimeout(resolve, 250));
     }],
     ['clear voice storage', () => AsyncStorage.multiRemove(telnyxStorageKeys)],
     ['delete stored voice session', () => SecureStore.deleteItemAsync(secureVoiceSessionKey)],
-    ['log out of the voice client', () => voipClient.logout()],
+    ['log out of the voice client', async () => { await existingManagedVoiceClient()?.logout(); }],
   ];
   for (const [step, run] of steps) {
     try {

@@ -1,14 +1,18 @@
+import { acquireTenantMutation } from '../../organizations/tenant-mutation.js';
+import { pendingNumberPurchases, changePendingNumberPurchases } from '../purchase-reservations.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../../auth/auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../../../shared/http.js';
 import { nextNumberTags, tenantVisibleNumberTags } from '../number-config.js';
-import { inboundConnectionId, telnyx, telnyxPstnConnectionId } from '../../../shared/telnyx.js';
+import { inboundConnectionId, telnyx, TelnyxApiError, telnyxPstnConnectionId } from '../../../shared/telnyx.js';
 import { pbxForOrganization, readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { assignNumberToOrganization, removeNumberAssignment } from '../../organizations/tenancy.js';
 import { getExtension } from '../../organizations/pbx.js';
 import { requireFeature } from '../../organizations/saas-access.js';
 import { invalidatePhoneNumberCache } from '../phone-number-access.js';
 import { requestOrganizationId, writeTenantScopeError } from '../../organizations/request-organization.js';
+import { carrierMode, carrierNumberInventory } from '../carrier-number-service.js';
+import { carrierTrunks } from '../carrier-trunk-store.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 
@@ -22,6 +26,7 @@ async function assignFulfilledNumbers(organizationId: string, phoneNumbers: stri
   await Promise.all([...new Set(phoneNumbers)].map(async (phoneNumber) => {
     try {
       await assignNumberToOrganization(phoneNumber, organizationId, { source: 'owned', destinationType: 'main' });
+      await changePendingNumberPurchases(organizationId, [], [phoneNumber]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!options.failOnError && message.includes('already belongs to another organization')) {
@@ -49,11 +54,32 @@ type AvailableNumber = {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method || '')) return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
+  let release: (() => Promise<boolean>) | undefined;
   try {
     const access = await requireAdmin(req);
-    const config = await readPbxConfig();
+    let config = await readPbxConfig();
     const subscriptionAccess = await requireFeature(access.session, 'phoneNumbers', config);
     const activeOrganizationId = requestOrganizationId(req, access.session, config);
+    if (req.method !== 'GET') {
+      release = await acquireTenantMutation(activeOrganizationId);
+      config = await readPbxConfig({fresh:true});
+    }
+    const ownCarrier = carrierMode(config, activeOrganizationId);
+    if (ownCarrier && (req.method === 'POST' || req.method === 'GET' && req.query.mode === 'search')) {
+      return res.status(409).json({ error: 'This company uses its own SIP trunks. Add the numbers supplied by your carrier in SIP trunks.' });
+    }
+    if (req.method === 'GET' && ownCarrier) {
+      const trunks = await carrierTrunks.list(activeOrganizationId);
+      return res.status(200).json({ callingMode: 'carrier',
+        numbers: carrierNumberInventory(trunks).map(item => ({ id: item.id, phoneNumber: item.phone_number,
+          source: 'carrier', status: item.status, provider: trunks.find(trunk => trunk.id === item.carrier_trunk_id)?.provider,
+          assignment: { organizationId: activeOrganizationId, destinationType: item.destination_type, destinationId: item.destination_id } })),
+        legacyNumbers: Object.entries(config.numberAssignments)
+          .filter(([, item]) => item.organizationId === activeOrganizationId && !item.disabled && item.source !== 'carrier')
+          .map(([phoneNumber]) => ({ id: `assigned:${phoneNumber}`, phoneNumber })),
+        orders: [], messagingProfiles: [],
+      });
+    }
     if (req.method === 'GET' && req.query.mode === 'search') {
       const country = text(req.query.country, 2).toUpperCase();
       if (!/^[A-Z]{2}$/.test(country)) return res.status(400).json({ error: 'Choose a two-letter country code.' });
@@ -96,10 +122,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .filter((item) => String(item.customer_reference || '').startsWith(orderPrefix))
         .flatMap((item) => successfulOrderNumbers(item)));
       const assignedConfig = await readPbxConfig();
-      const visibleNumbers = (numbersPayload.data ?? []).filter((item) => assignedConfig.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId);
+      const visibleNumbers = (numbersPayload.data ?? []).filter((item) => assignedConfig.numberAssignments[item.phone_number]?.organizationId === activeOrganizationId && !assignedConfig.numberAssignments[item.phone_number]?.disabled);
       const visibleProfileIds = new Set(visibleNumbers.map((item) => String(item.messaging_profile_id || '')).filter(Boolean));
       const visibleProfiles = access.superadmin ? profilesPayload.data ?? [] : (profilesPayload.data ?? []).filter((item) => visibleProfileIds.has(String(item.id || '')));
       return res.status(200).json({
+        callingMode: 'managed',
         numbers: visibleNumbers.map((item) => ({ id: item.id, phoneNumber: item.phone_number, status: item.status, country: item.country_iso_alpha2, ...(access.superadmin ? { connectionId: item.connection_id, connectionName: item.connection_name } : {}), messagingProfileId: item.messaging_profile_id, tags: tenantVisibleNumberTags(item.tags), purchasedAt: item.purchased_at, assignment: assignedConfig.numberAssignments[item.phone_number] || { organizationId: activeOrganizationId, destinationType: 'main' } })),
         orders: (ordersPayload.data ?? []).filter((item) => String(item.customer_reference || '').startsWith(orderPrefix)).map((item) => ({ id: item.id, status: item.status || (item.requirements_met ? 'complete' : 'requirements pending'), count: item.phone_numbers_count, createdAt: item.created_at, customerReference: item.customer_reference, requirementsMet: item.requirements_met })),
         messagingProfiles: visibleProfiles.map((item) => ({ id: item.id, name: item.name || item.id, ...(access.superadmin ? { webhookUrl: item.webhook_url || '', webhookFailoverUrl: item.webhook_failover_url || '' } : {}) })),
@@ -110,9 +137,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const phoneNumbers = Array.isArray(req.body?.phoneNumbers) ? req.body.phoneNumbers.map((value: unknown) => text(value, 24)).filter((value: string) => /^\+[1-9]\d{6,14}$/.test(value)).slice(0, 10) : [];
       if (!phoneNumbers.length) return res.status(400).json({ error: 'Choose at least one valid phone number.' });
       if (subscriptionAccess.superadmin === false) {
-        const assigned = Object.values(config.numberAssignments).filter((assignment) => assignment.organizationId === activeOrganizationId).length;
+        const assigned = new Set([...Object.entries(config.numberAssignments).filter(([,assignment]) => assignment.organizationId === activeOrganizationId).map(([number]) => number), ...await pendingNumberPurchases(activeOrganizationId)]).size;
         if (assigned + phoneNumbers.length > subscriptionAccess.plan.limits.phoneNumbers) return res.status(409).json({ error: `Your ${subscriptionAccess.plan.name} plan includes ${subscriptionAccess.plan.limits.phoneNumbers} phone numbers.` });
       }
+      const pending = await pendingNumberPurchases(activeOrganizationId);
+      if (phoneNumbers.some((number: string) => pending.includes(number))) return res.status(409).json({error:'A purchase for this number is already awaiting confirmation.'});
+      await changePendingNumberPurchases(activeOrganizationId, phoneNumbers);
       const response = await telnyx('/number_orders', {
         method: 'POST',
         body: JSON.stringify({
@@ -120,9 +150,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           connection_id: access.superadmin ? text(req.body?.connectionId, 80) || inboundConnectionId() || telnyxPstnConnectionId() : inboundConnectionId() || telnyxPstnConnectionId(),
           customer_reference: access.superadmin ? text(req.body?.customerReference, 100) || `Vocivo ${activeOrganizationId} ${new Date().toISOString()}` : `Vocivo ${activeOrganizationId} ${new Date().toISOString()}`,
         }),
+      }).catch(async error => {
+        if (error instanceof TelnyxApiError && error.status >= 400 && error.status < 500 && error.status !== 408) await changePendingNumberPurchases(activeOrganizationId, [], phoneNumbers);
+        throw error;
       });
       const payload = await response.json() as { data?: Record<string, any> };
       await assignFulfilledNumbers(activeOrganizationId, successfulOrderNumbers(payload.data), { failOnError: true });
+      await changePendingNumberPurchases(activeOrganizationId, [], successfulOrderNumbers(payload.data));
       invalidatePhoneNumberCache('owned');
       return res.status(201).json({ order: payload.data });
     }
@@ -140,6 +174,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const response = await telnyx(`/phone_numbers/${encodeURIComponent(id)}`, { method: 'DELETE' });
       const payload = response.status === 204 ? {} : await response.json() as { data?: Record<string, unknown> };
       await removeNumberAssignment(phoneNumber);
+      await changePendingNumberPurchases(activeOrganizationId, [], [phoneNumber]);
       invalidatePhoneNumberCache('owned');
       return res.status(200).json({ number: payload.data, released: true });
     }
@@ -206,10 +241,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     invalidatePhoneNumberCache('owned');
     return res.status(200).json({ number: payload.data });
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Tenant mutation in progress')) return res.status(409).json({error:error.message});
     if (writeTenantScopeError(res, error)) return;
     if (writeAuthError(res, error)) return;
     if (error instanceof Error && /Feature not enabled|Subscription inactive|Organization inactive/i.test(error.message)) return res.status(403).json({ error: 'Phone-number management is not enabled for this company.' });
     if (error instanceof Error && error.message === 'Forbidden') return res.status(403).json({ error: 'Owner access is required.' });
     return res.status(500).json({ error: publicError(error) });
-  }
+  } finally { if (release) await release().catch(() => console.error('Tenant mutation lease release failed')); }
 }

@@ -10,6 +10,8 @@ import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } fr
 import { browserSipDeviceId, revokeBrowserSipCredential } from '../engine/sipDevice';
 
 export function useSipVoice(token, enabled, identity = {}) {
+  const displayNameRef = useRef(identity.name);
+  displayNameRef.current = identity.name;
   const sessionRef = useRef(null);
   const incomingRef = useRef(null);
   const sessionTeardownsRef = useRef(new Map());
@@ -28,6 +30,9 @@ export function useSipVoice(token, enabled, identity = {}) {
   const [notice, setNotice] = useState('');
   const [call, setCall] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
+  useEffect(() => {
+    if (!incomingCall) navigator.serviceWorker?.controller?.postMessage({type:'vocivo.close-call-notifications'});
+  }, [incomingCall]);
   const [state, setState] = useState(null);
   const [muted, setMuted] = useState(false);
   const [dialedNumber, setDialedNumber] = useState('');
@@ -231,6 +236,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     let renewal;
     let credentialRejected = false;
     let connectionPending = true;
+    let recoveryTimer;
     let credentialExpiresAt;
     const renew = () => {
       renewal = undefined;
@@ -239,6 +245,8 @@ export function useSipVoice(token, enabled, identity = {}) {
         renewal = setTimeout(renew, 60_000);
         return;
       }
+      if (connectionPending) return;
+      connectionPending = true;
       setCredentialEpoch((epoch) => epoch + 1);
     };
     const scheduleRenewal = (delay) => {
@@ -248,12 +256,12 @@ export function useSipVoice(token, enabled, identity = {}) {
     browserSipDeviceId().then(deviceId => api('/api/voice/sip-credentials', { method: 'POST', body: { client: 'web', deviceId } })).then(async (credentials) => {
       if (cancelled) { await revokeBrowserSipCredential(api, credentials); return; }
       if (!credentials.wsUri) throw new Error('VOCIVO_SIP_WSS_URI is not configured.');
-      // Replaced at four fifths of its life, and never sooner than five
-      // minutes from now however short the answer says it is. Getting a new
+      // Replaced at four fifths of its life, with a one-second floor;
+      // short grants must not be cached for five minutes. Getting a new
       // password means building the phone again, so a call in progress is
       // waited out rather than cut off.
       const lifetime = Number(credentials.expires_in) * 1000;
-      const renewIn = Math.min(Math.max(5 * 60 * 1000, (Number.isFinite(lifetime) && lifetime > 0 ? lifetime : 60 * 60 * 1000) * 0.8), 2 ** 31 - 1);
+      const renewIn = Math.min(Math.max(1000, (Number.isFinite(lifetime) && lifetime > 0 ? lifetime : 60 * 60 * 1000) * 0.8), 2 ** 31 - 1);
       credentialExpiresAt = Date.now() + renewIn;
       scheduleRenewal(renewIn);
       const connection = await connectSipUserAgent({
@@ -261,7 +269,9 @@ export function useSipVoice(token, enabled, identity = {}) {
         password: credentials.password,
         domain: credentials.domain,
         wsUri: credentials.wsUri,
-        displayName: identity.name,
+        // Profile enrichment must not tear down registration or an active call.
+        // The latest name is picked up at the next actual credential/identity restart.
+        displayName: displayNameRef.current,
         iceServers: credentials.ice_servers,
         onTransport: (connected) => {
           if (!cancelled) callHealthRef.current.forEach((health) => health.transport(connected));
@@ -338,13 +348,19 @@ export function useSipVoice(token, enabled, identity = {}) {
     });
     // A tab that comes back into view or a network that comes back gets the
     // phone registered again at once rather than on the back-off timer.
-    const refresh = () => {
+    const refresh = (event) => {
       if (cancelled || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
-      if (credentialsRef.current) {
-        credentialsRef.current.refresh?.().catch((failure) => reportWebVoiceError('SIP refresh', failure));
-      } else if (!connectionPending) {
-        clearTimeout(renewal);
-        renew();
+      const busy = sessionRef.current || incomingRef.current || dialingRef.current;
+      if (!busy && !credentialRejected && !connectionPending
+          && (event?.type === 'online' || Date.now() >= credentialExpiresAt || !credentialsRef.current)) {
+        clearTimeout(recoveryTimer);
+        recoveryTimer = setTimeout(() => {
+          if (cancelled || connectionPending) return;
+          clearTimeout(renewal);
+          renew();
+        }, 300);
+      } else {
+        credentialsRef.current?.refresh?.().catch((failure) => reportWebVoiceError('SIP refresh', failure));
       }
     };
     window.addEventListener('online', refresh);
@@ -352,11 +368,12 @@ export function useSipVoice(token, enabled, identity = {}) {
     return () => {
       cancelled = true;
       if (renewal) clearTimeout(renewal);
+      clearTimeout(recoveryTimer);
       window.removeEventListener('online', refresh);
       document.removeEventListener('visibilitychange', refresh);
       disconnect();
     };
-  }, [credentialEpoch, disconnect, enabled, identity.name, token, watchSession]);
+  }, [credentialEpoch, disconnect, enabled, token, watchSession]);
 
   useEffect(() => {
     if (!enabled || !token || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;

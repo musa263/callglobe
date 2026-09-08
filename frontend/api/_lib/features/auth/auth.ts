@@ -1,3 +1,5 @@
+import { assertCompanyAccountIdentity, isCompanyAccountRole } from './company-account.js';
+import { readCurrentExtension } from '../organizations/extension-identity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { jwtVerify, SignJWT, type JWTPayload } from 'jose';
@@ -8,6 +10,9 @@ import { isExtensionSessionRevoked } from '../organizations/extension-session-st
 import { activeTenantAdmin, type TenantAdminAccount } from '../organizations/saas-store.js';
 import { readPbxConfig } from '../organizations/pbx-config-store.js';
 
+import { credentialVersion, assertCredentialVersion } from './credential-version.js';
+import { readPasswordHash } from './owner-password.js';
+
 const issuer = 'vocivo-vercel';
 const audience = 'vocivo-mobile';
 
@@ -16,7 +21,7 @@ function key() {
 }
 
 export async function createSession(email: string) {
-  return new SignJWT({ email, role: 'superadmin', accountType: 'platform' })
+  return new SignJWT({ email, role: 'superadmin', accountType: 'platform', credentialVersion: credentialVersion(await readPasswordHash()) })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject('vocivo-owner')
     .setIssuer(issuer)
@@ -49,6 +54,7 @@ export async function createTenantAdminSession(account: TenantAdminAccount) {
     extension: account.extension,
     organizationId: account.organizationId,
     forcePasswordChange: account.forcePasswordChange,
+    credentialVersion: credentialVersion(account.passwordHash),
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(`vocivo-account:${account.id}`)
@@ -170,15 +176,17 @@ async function ownerSessionsInvalidatedAtSeconds() {
 
 async function assertOwnerSessionCurrent(payload: JWTPayload) {
   const invalidatedAtSeconds = await ownerSessionsInvalidatedAtSeconds();
+  assertCredentialVersion(payload.credentialVersion, await readPasswordHash());
   if (invalidatedAtSeconds && (typeof payload.iat !== 'number' || payload.iat < invalidatedAtSeconds)) throw new Error('Unauthorized');
 }
 
-export async function requireSession(req: VercelRequest) {
+const sessionDependencies = { readPbxConfig, activeTenantAdmin, readCurrentExtension, isExtensionSessionRevoked };
+export async function requireSession(req: VercelRequest, deps = sessionDependencies) {
   const payload = await verifySessionToken(req);
   const tenantSession = payload.sub.startsWith('vocivo-extension:') || payload.sub.startsWith('vocivo-account:');
   if (tenantSession) {
     if (typeof payload.organizationId !== 'string' || !payload.organizationId.trim()) throw new Error('Unauthorized');
-    const config = await readPbxConfig();
+    const config = await deps.readPbxConfig();
     const organization = config.organizations.find((organization) => organization.id === payload.organizationId && organization.status === 'active');
     if (!organization) throw new Error('Unauthorized');
     // Membership can change during a token's lifetime. A previous company role
@@ -191,12 +199,14 @@ export async function requireSession(req: VercelRequest) {
   }
   if (payload.sub.startsWith('vocivo-extension:')) {
     if (typeof payload.extensionId !== 'string' || typeof payload.extension !== 'string' || typeof payload.iat !== 'number') throw new Error('Unauthorized');
-    if (await isExtensionSessionRevoked(payload.extensionId, payload.iat)) throw new Error('Unauthorized');
+    if (await deps.isExtensionSessionRevoked(payload.extensionId, payload.iat)) throw new Error('Unauthorized');
   }
   if (payload.sub.startsWith('vocivo-account:')) {
-    if (typeof payload.accountId !== 'string' || typeof payload.organizationId !== 'string' || !['company_owner', 'company_admin'].includes(String(payload.role))) throw new Error('Unauthorized');
-    const account = await activeTenantAdmin(payload.accountId, payload.organizationId);
+    if (typeof payload.accountId !== 'string' || typeof payload.organizationId !== 'string' || !isCompanyAccountRole(payload.role)) throw new Error('Unauthorized');
+    const account = await deps.activeTenantAdmin(payload.accountId, payload.organizationId);
     if (!account) throw new Error('Unauthorized');
+    assertCredentialVersion(payload.credentialVersion, account.passwordHash);
+    assertCompanyAccountIdentity(account, account.extensionId ? await deps.readCurrentExtension(account.extensionId) : null);
     const session = {
       ...payload,
       email: account.email,
@@ -223,6 +233,10 @@ export async function requireOwner(req: VercelRequest) {
 
 export async function requireAdmin(req: VercelRequest) {
   const session = await requireSession(req);
+  return adminAccessForSession(session);
+}
+
+export function adminAccessForSession(session: VocivoSession) {
   const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
   const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['company_owner', 'company_admin'].includes(session.role || ''));
   if (!superadmin && !companyAdmin) throw new Error('Forbidden');

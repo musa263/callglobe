@@ -87,7 +87,7 @@ audio { display: none; }
 .caller-trigger small,.balance-block small,.rate-strip small { color:#7a8580; font-size:9px; font-weight:700; letter-spacing:.8px; }
 .caller-trigger strong { font-size:13px; }
 .caller-number { color:var(--muted); font-size:13px; }
-.caller-menu { width:100%; position:absolute; top:calc(100% + 6px); left:0; padding:5px; border:1px solid #d7ded9; border-radius:6px; background:white; box-shadow:0 16px 34px rgba(24,40,34,.13); }
+.caller-menu { width:100%; max-height:min(360px,60vh); overflow-y:auto; position:absolute; top:calc(100% + 6px); left:0; padding:5px; border:1px solid #d7ded9; border-radius:6px; background:white; box-shadow:0 16px 34px rgba(24,40,34,.13); }
 .caller-menu button { width:100%; min-height:50px; padding:6px 10px; display:flex; justify-content:space-between; align-items:center; border:0; border-radius:4px; text-align:left; color:var(--ink); background:white; }
 .caller-menu button:hover,.country-list button:hover { background:var(--soft); }
 .caller-menu button span { display:grid; }
@@ -357,3 +357,15 @@ audio { display: none; }
 @keyframes opening-dot { 0%,100% { opacity:.25; transform:translateY(0); } 50% { opacity:1; transform:translateY(-3px); } }
 @media (max-width: 700px) { .opening-screen { grid-template-columns:1fr; justify-items:center; text-align:center; } .opening-line { justify-content:center; } }
 @media (prefers-reduced-motion: reduce) { .opening-ring-a,.opening-ring-b,.opening-person,.opening-dots i { animation:none; } }
+
+.application-frame .app-shell,
+.application-frame .content-view,
+.application-frame .opening-screen,
+.application-frame .loading-screen,
+.application-frame .login-shell { min-height:calc(100dvh - var(--vocivo-header-height)); }
+.application-frame .side-nav { top:var(--vocivo-header-height); min-height:calc(100dvh - var(--vocivo-header-height)); }
+.application-frame .side-nav > .brand-lockup,
+.application-frame .login-brand > .brand-lockup { display:none; }
+.application-frame .toast { top:calc(var(--vocivo-header-height) + 12px); }
+@media (min-width:901px) { .application-frame .login-brand { min-height:calc(100dvh - var(--vocivo-header-height)); justify-content:center; gap:48px; } }
+@media (max-width:620px) { .application-frame .main-area { min-height:calc(100dvh - var(--vocivo-header-height)); } }

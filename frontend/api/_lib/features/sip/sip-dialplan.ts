@@ -28,6 +28,8 @@ export type XmlCurlRequest = {
   vocivoCallerIdHeader: string;
   /** `X-Vocivo-Flow`, which Kamailio sets to `inbound` on a call the carrier delivered. */
   vocivoFlowHeader: string;
+  routeToken?: string;
+  carrierSourceIp?: string;
   stage: string;
   organizationId: string;
   did: string;
@@ -68,6 +70,8 @@ export function parseXmlCurlRequest(body: unknown): XmlCurlRequest {
     switchAddr: field(source, 'FreeSWITCH-IPv4'),
     vocivoCallerIdHeader: field(source, 'variable_sip_h_X-Vocivo-Caller-ID'),
     vocivoFlowHeader: field(source, 'variable_sip_h_X-Vocivo-Flow').toLowerCase(),
+    routeToken: field(source, 'variable_sip_h_X-Vocivo-Route-Token'),
+    carrierSourceIp: field(source, 'variable_sip_h_X-Vocivo-Carrier-Source'),
     stage: field(source, 'variable_vocivo_stage').toLowerCase(),
     organizationId: field(source, 'variable_vocivo_org'),
     did: field(source, 'variable_vocivo_did'),
@@ -115,6 +119,7 @@ export type SipDialplanInput = {
   promptFormat: 'wav' | 'mp3';
   recordingsDir: string;
   trunkGateway: string;
+  carrierCapacity?: { gateway: string; limit: number };
   /**
    * host:port of Vocivo's own receptionist, which FreeSWITCH reaches over the
    * Event Socket. Loopback on the SIP edge, because the receptionist runs on
@@ -283,7 +288,7 @@ function contact(extension: ExtensionUser) {
 function trunkLeg(input: SipDialplanInput, destination: string) {
   const callerId = e164.test(input.did) ? input.did : '';
   const variables = callerId
-    ? `{origination_caller_id_number=${callerId},origination_caller_id_name=Vocivo,sip_cid_type=pid,nolocal:sip_h_P-Asserted-Identity=<sip:${callerId}@sip.telnyx.com>}`
+    ? `{origination_caller_id_number=${callerId},origination_caller_id_name=Vocivo,sip_cid_type=pid${input.trunkGateway === 'telnyx' ? `,nolocal:sip_h_P-Asserted-Identity=<sip:${callerId}@sip.telnyx.com>` : ''}}`
     : '';
   return `${variables}sofia/gateway/${input.trunkGateway}/${destination}`;
 }
@@ -311,7 +316,7 @@ function bridgeActions(input: SipDialplanInput, legs: string[], timeoutSeconds: 
     set('hangup_after_bridge', 'true'),
     set('continue_on_fail', 'true'),
     set('ignore_early_media', 'true'),
-    set('call_timeout', String(Math.min(900, Math.max(5, Math.round(timeoutSeconds))))),
+    set('call_timeout', String(Math.min(900, Math.max(1, Math.round(timeoutSeconds))))),
     set('hold_music', holdMusic),
     set('ringback', holdMusic),
     set('transfer_ringback', holdMusic),
@@ -443,10 +448,12 @@ function groupActions(input: SipDialplanInput, kind: GroupKind, id: string, atte
   }
   const maxWait = Math.min(900, Math.max(15, 'maxWait' in group ? group.maxWait || 180 : 180));
   const attempts = Math.max(1, Math.ceil(maxWait / queueAttemptSeconds));
+  const remaining = maxWait - attempt * queueAttemptSeconds;
+  if (remaining <= 0) return transferToStage('after-group', { arg: `${kind}:${id}` });
   const nextAttempt = attempt + 1;
   const actions: Action[] = [];
   if (attempt === 0) actions.push(playback(input, input.business.waitingMessage), set('vocivo_waiting', '1'));
-  actions.push(...bridgeActions(input, members.map(contact), Math.min(queueAttemptSeconds, maxWait), { announceWaiting: false }));
+  actions.push(...bridgeActions(input, members.map(contact), Math.min(queueAttemptSeconds, remaining), { announceWaiting: false }));
   if (nextAttempt < attempts) {
     actions.push(playback(input, input.business.waitingMessage), ...transferToStage('queue', { arg: `${kind}:${id}`, attempt: nextAttempt }));
   } else {
@@ -585,8 +592,11 @@ function fsCauseToVocivo(disposition: string) {
 function entryActions(input: SipDialplanInput) {
   const pbx = input.pbx;
   const assignment = pbx.numberAssignments[input.did];
+  if (!assignment || assignment.disabled || assignment.organizationId !== input.organizationId
+    || assignment.source === 'carrier' && !assignment.destinationType) return [action('respond', '480 Number unavailable'), action('hangup', 'NO_ROUTE_DESTINATION')];
   const caller = callerVars(input);
   const prelude = [
+    ...(input.carrierCapacity ? [action('limit', `hash vocivo-carrier ${input.carrierCapacity.gateway} ${input.carrierCapacity.limit} !NORMAL_CIRCUIT_CONGESTION`)] : []),
     action('answer'),
     // The carrier's media takes a moment to arrive after the answer; a prompt
     // that starts before it does loses its first word or two.

@@ -11,6 +11,8 @@ check_only=0
 
 if [ "$check_only" = 0 ]; then
   mkdir -p /var/lib/kamailio
+  if ! command -v sqlite3 >/dev/null 2>&1; then apk add --no-cache sqlite >/dev/null; fi
+  sqlite3 /var/lib/kamailio/cdr.db 'PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL UNIQUE, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0);' >/dev/null
   if [ ! -f /var/lib/kamailio/usrloc.db ]; then
     if ! command -v sqlite3 >/dev/null 2>&1; then
       apk add --no-cache sqlite >/dev/null

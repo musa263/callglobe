@@ -19,6 +19,7 @@ export async function sendIncomingCallWebPush(input: {
   extensionIds: string[];
   callerName?: string;
   callId: string;
+  ended?: boolean;
 }) {
   if (!configureWebPush()) return { sent: 0, unavailable: true };
   const extensionIds = [...new Set(input.extensionIds.filter(Boolean))];
@@ -27,7 +28,9 @@ export async function sendIncomingCallWebPush(input: {
   const results = await Promise.allSettled(records.map(async (record) => {
     try {
       await webpush.sendNotification({ endpoint: record.endpoint, expirationTime: record.expirationTime, keys: record.keys }, JSON.stringify({
-        type: 'vocivo.incoming_call',
+        type: input.ended ? 'vocivo.call_ended' : 'vocivo.incoming_call',
+        callId: input.callId,
+        expiresAt: new Date(Date.now() + 45_000).toISOString(),
         title: input.callerName ? `Call from ${input.callerName}` : 'Incoming Vocivo call',
         body: 'Open Vocivo to answer this call.',
         tag: `vocivo-call-${input.callId}`,

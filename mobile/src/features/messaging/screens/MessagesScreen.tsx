@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AlertCircle, ArrowLeft, Check, ContactRound, Inbox, MessageSquareText, PenLine, Search, Send, SendHorizontal, Sparkles } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import { useMessaging } from '../MessagingContext';
 import { useBusiness } from '../../organizations/BusinessContext';
 import { useAuth } from '../../auth/AuthContext';
@@ -160,7 +161,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
       <View style={[styles.page, { paddingTop: Math.max(insets.top, 12) }]}>
         <View style={styles.conversationHeader}>
           <Pressable accessibilityLabel="Back to messages" onPress={closeThread} style={styles.iconButton}><ArrowLeft size={21} color={colors.text} /></Pressable>
-          <View style={styles.conversationIdentity}><Text numberOfLines={1} style={styles.conversationName}>{contactName || (activePeer === 'new' ? 'New message' : activePeer)}</Text>{!!contactName && <Text style={styles.conversationNumber}>{recipient}</Text>}</View>
+          <View style={styles.conversationIdentity}><PageHeading title={contactName || (activePeer === 'new' ? 'New message' : activePeer)} />{ !!contactName && <Text style={styles.conversationNumber}>{recipient}</Text>}</View>
           <Pressable accessibilityLabel="Choose from contacts" onPress={onContacts} style={styles.iconButton}><ContactRound size={20} color={colors.blue} /></Pressable>
         </View>
         {activePeer === 'new' && profile?.account_type === 'business' && <View style={styles.transport}><Pressable onPress={() => { setTransport('internal'); setRecipient(''); setContactName(''); }} style={[styles.transportButton, transport === 'internal' && styles.transportActive]}><Text style={[styles.transportText, transport === 'internal' && styles.transportTextActive]}>Extension</Text></Pressable><Pressable onPress={() => { setTransport('sms'); setRecipient(''); setContactName(''); }} style={[styles.transportButton, transport === 'sms' && styles.transportActive]}><Text style={[styles.transportText, transport === 'sms' && styles.transportTextActive]}>External SMS</Text></Pressable></View>}
@@ -182,7 +183,7 @@ export function MessagesScreen({ target, onContacts }: { target: NavigationTarge
 
   return (
     <View style={[styles.page, { paddingTop: Math.max(insets.top, 18) }]}>
-      <View style={styles.header}><View><Text style={styles.eyebrow}>GLOBAL MESSAGING</Text><Text style={styles.title}>Messages</Text></View><Pressable accessibilityLabel="New message" onPress={compose} style={styles.compose}><PenLine size={20} color={colors.ink} /></Pressable></View>
+      <View style={styles.header}><PageHeading title="Messages" /><Pressable accessibilityLabel="New message" onPress={compose} style={styles.compose}><PenLine size={20} color={colors.ink} /></Pressable></View>
       <View style={styles.mailboxes}>
         <Pressable onPress={() => setMailbox('inbox')} style={[styles.mailbox, mailbox === 'inbox' && styles.mailboxActive]}><Inbox size={17} color={mailbox === 'inbox' ? colors.blue : colors.textMuted} /><Text style={[styles.mailboxText, mailbox === 'inbox' && styles.mailboxTextActive]}>Inbox</Text></Pressable>
         <Pressable onPress={() => setMailbox('sent')} style={[styles.mailbox, mailbox === 'sent' && styles.mailboxActive]}><SendHorizontal size={17} color={mailbox === 'sent' ? colors.blue : colors.textMuted} /><Text style={[styles.mailboxText, mailbox === 'sent' && styles.mailboxTextActive]}>Sent</Text></Pressable>

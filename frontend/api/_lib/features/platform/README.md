@@ -9,3 +9,7 @@ key management, delivery diagnostics and event views.
 These are privileged operations, not default company-admin capabilities. Check
 role, scope and explicit organization selection at each entry point. Never expose
 raw credentials in diagnostic payloads. Run frontend API typecheck and tests.
+
+For company carrier mode, the keyed numbers API lists published BYOC inventory
+and rejects purchases. Managed call-control routes reject carrier caller IDs;
+tenant SIP calling uses the signed app route instead.

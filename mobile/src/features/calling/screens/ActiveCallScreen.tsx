@@ -120,7 +120,7 @@ export function ActiveCallScreen({ onMinimize }: { onMinimize: () => void }) {
   const businessAccount = profile?.account_type === 'business';
   const transferEnabled = Boolean(businessAccount && profile?.extension && activeCall.isIncoming && activeCall.phase === 'active' && !conference);
   const selectedCaller = callerNumbers.find((number) => number.phone_number === activeCall.callerId)
-    ?? callerNumbers.find((number) => number.source === 'owned' && number.status === 'active')
+    ?? callerNumbers.find((number) => number.source === 'carrier' && number.status === 'ready' || number.source === 'owned' && number.status === 'active')
     ?? callerNumbers[0];
 
   const openTransfer = async () => {

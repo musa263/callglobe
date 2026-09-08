@@ -1,3 +1,4 @@
+import { vocivoExtensions, vocivoExtensionsEnabled } from './vocivo-extensions.js';
 import { requiredEnv } from '../../shared/http.js';
 import { telnyx, TelnyxApiError } from '../../shared/telnyx.js';
 import { readPbxConfig } from './pbx-config-store.js';
@@ -35,7 +36,7 @@ export type ExtensionUser = {
   department: string;
   role: 'company_owner' | 'company_admin' | 'manager' | 'user' | 'individual';
   sipUsername: string;
-  sipProvider?: 'telnyx';
+  sipProvider?: 'telnyx' | 'vocivo';
   status: 'active' | 'expired';
   createdAt?: string;
 };
@@ -57,6 +58,7 @@ type CredentialConnectionResource = {
 };
 
 export async function ensureTelnyxSipUriCalling() {
+  if (await vocivoExtensionsEnabled()) return;
   const connectionId = requiredEnv('TELNYX_CONNECTION_ID');
   if (sipUriPreflight?.connectionId === connectionId && sipUriPreflight.expiresAt > Date.now()) return;
   const resourcePath = `/credential_connections/${encodeURIComponent(connectionId)}`;
@@ -130,6 +132,7 @@ async function listCarrierExtensions() {
 }
 
 export async function listExtensions(organizationId?: string): Promise<ExtensionUser[]> {
+  if (await vocivoExtensionsEnabled()) return vocivoExtensions.list(organizationId);
   if (!extensionCache || extensionCache.expiresAt <= Date.now()) {
     extensionRequest ||= (async () => {
       const stored = await readExtensionDirectory();
@@ -162,7 +165,7 @@ async function replaceStoredExtension(extension: ExtensionUser | null, removedId
       .filter((item) => item.id !== targetId)
       .concat(extension ? [extension] : [])
       .sort((a, b) => Number(a.extension) - Number(b.extension));
-  });
+  }, undefined, 'telnyx');
   extensionCache = { expiresAt: Date.now() + extensionCacheTtlMs, value: next };
 }
 
@@ -192,6 +195,7 @@ async function extensionForCreate(input: Partial<ExtensionUser>) {
 }
 
 export async function createExtension(input: Partial<ExtensionUser>) {
+  if (await vocivoExtensionsEnabled()) return vocivoExtensions.create(input);
   await ensureTelnyxSipUriCalling();
   const allocated = await extensionForCreate(input);
   const value = validateExtensionInput({ ...input, organizationId: allocated.organizationId, role: allocated.accountType === 'individual' ? 'individual' : input.role }, allocated.extension);
@@ -236,7 +240,8 @@ function credentialData(stored: StoredExtensionCredential | null): CredentialRes
   };
 }
 
-async function requireManagedCredentialResource(id: string) {
+async function requireManagedCredentialResource(id: string, authorityChecked = false) {
+  if (!authorityChecked && await vocivoExtensionsEnabled()) throw new Error('Telnyx extension credentials are retired; use Vocivo SIP device credentials.');
   const cached = credentialCache.get(id);
   if (cached && cached.expiresAt > Date.now()) return { parsed: cached.parsed, data: cached.data };
   const stored = await readExtensionCredential(id);
@@ -262,13 +267,13 @@ async function requireManagedCredentialResource(id: string) {
   return { parsed, data };
 }
 
-async function requireManagedCredential(id: string) { return (await requireManagedCredentialResource(id)).parsed; }
+async function requireManagedCredential(id: string, authorityChecked = false) { return (await requireManagedCredentialResource(id, authorityChecked)).parsed; }
 
 async function ensureTelnyxDirectory(extensions: ExtensionUser[]) {
   const normalized: ExtensionUser[] = [];
   for (const extension of extensions) {
     try {
-      normalized.push(await requireManagedCredential(extension.id));
+      normalized.push(await requireManagedCredential(extension.id, true));
     } catch (error) {
       console.error(`Vocivo could not refresh extension ${extension.extension} (${extension.id}); skipping it in the shared directory`, error);
     }
@@ -281,6 +286,7 @@ function assertExtensionOrganization(extension: ExtensionUser, expectedOrganizat
 }
 
 export async function getExtension(id: string, expectedOrganizationId?: string) {
+  if (await vocivoExtensionsEnabled()) return vocivoExtensions.get(id, expectedOrganizationId);
   await listExtensions();
   const extension = await requireManagedCredential(id);
   assertExtensionOrganization(extension, expectedOrganizationId);
@@ -288,6 +294,10 @@ export async function getExtension(id: string, expectedOrganizationId?: string) 
 }
 
 export async function listExtensionSipUsernames(id: string) {
+  if (await vocivoExtensionsEnabled()) {
+    const target = await vocivoExtensions.get(id);
+    return target.status === 'active' ? [target.sipUsername] : [];
+  }
   await ensureTelnyxSipUriCalling();
   const target = await getExtension(id);
   try {
@@ -306,6 +316,7 @@ export async function getExtensionCredentials(id: string, expectedOrganizationId
 }
 
 export async function updateExtension(id: string, input: Partial<ExtensionUser>, expectedOrganizationId?: string) {
+  if (await vocivoExtensionsEnabled()) return vocivoExtensions.update(id, input, expectedOrganizationId);
   const existing = await getExtension(id, expectedOrganizationId);
   const value = validateExtensionInput({ ...existing, ...input }, clean(input.extension, 5) || existing.extension);
   const config = await readPbxConfig();
@@ -352,6 +363,7 @@ function dataFor(extension: ExtensionUser, id: string): CredentialResource {
 }
 
 export async function deleteExtension(id: string, expectedOrganizationId?: string) {
+  if (await vocivoExtensionsEnabled()) return vocivoExtensions.remove(id, expectedOrganizationId);
   const stored = await readExtensionCredential(id);
   const managed = stored ? null : await requireManagedCredentialResource(id);
   assertExtensionOrganization(stored ? stored.extension : managed!.parsed, expectedOrganizationId);

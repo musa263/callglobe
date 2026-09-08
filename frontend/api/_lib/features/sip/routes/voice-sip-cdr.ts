@@ -1,3 +1,4 @@
+import { sendIncomingCallWebPush } from '../../push/web-push-dispatcher.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { storeCallEvent } from '../../calling/call-event-store.js';
 import { allowMobile, methodNotAllowed, publicError } from '../../../shared/http.js';
@@ -36,6 +37,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ recorded: false, reason: 'no_tenant' });
     }
     for (const event of events) await storeCallEvent(event);
+    if (relayed && ['answered','bye','cancel','failed'].includes(relayed.event)) {
+      const organizations = [...new Set(events.map(event => event.organizationId))];
+      await Promise.all(organizations.map(organizationId => sendIncomingCallWebPush({
+        organizationId, extensionIds:context.extensions.filter(item => item.organizationId === organizationId).map(item => item.id), callId:relayed.callId, ended:true,
+      })));
+    }
     return res.status(200).json({ recorded: true, events: events.length });
   } catch (error) {
     // A malformed record is dropped, not retried forever.

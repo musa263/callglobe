@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, get, list, put, putMany, readObjects } from '../../shared/object-store.js';
+import { transactObjectGroup, get, list, put, putMany, readObjects } from '../../shared/object-store.js';
 import { requiredEnv } from '../../shared/http.js';
 import { hasMigrationMarker, listAllStoredPaths, newestFirstTimestamp, overwriteEntries, saveMigrationMarker, tenantStorageKey } from '../../shared/tenant-storage.js';
 
@@ -113,7 +113,13 @@ export async function listVoicemails(organizationId: string) {
 export async function deleteVoicemail(id: string, organizationId: string) {
   const existing = (await listVoicemails(organizationId)).find((item) => item.id === id);
   if (!existing) return false;
-  await del(existing.recordingPath).catch(() => undefined);
-  await storeVoicemail({ ...existing, deleted: true, updatedAt: new Date().toISOString() });
+  const event = { ...existing, deleted: true, updatedAt: new Date().toISOString() };
+  const eventKey = createHash('sha256').update(`${event.id}:${event.updatedAt}`).digest('hex').slice(0, 20);
+  const pathname = `vocivo/voicemails/v3/${tenantStorageKey(organizationId)}/${newestFirstTimestamp(event.updatedAt)}-${eventKey}.bin`;
+  // Audio and tombstone use the same Postgres transaction: either both commit or neither does.
+  await transactObjectGroup(`voicemail-delete:${organizationId}:${id}`, [existing.recordingPath], () => ({
+    puts: [{ pathname, value: encrypt(event), options: { access: 'private', contentType: 'application/octet-stream' } }],
+    deletes: [existing.recordingPath], result: true,
+  }));
   return true;
 }

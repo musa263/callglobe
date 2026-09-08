@@ -6,11 +6,17 @@ on:
     paths:
       - 'services/sip/**'
       - '.github/workflows/sip-validation.yml'
+      - 'frontend/api/_lib/features/numbers/**'
+      - 'frontend/api/_lib/features/sip/**'
+      - 'frontend/scripts/render-byoc-test.mjs'
   push:
     branches: [main]
     paths:
       - 'services/sip/**'
       - '.github/workflows/sip-validation.yml'
+      - 'frontend/api/_lib/features/numbers/**'
+      - 'frontend/api/_lib/features/sip/**'
+      - 'frontend/scripts/render-byoc-test.mjs'
 
 permissions:
   contents: read
@@ -26,3 +32,29 @@ jobs:
           python-version: '3.11'
       - name: Parse production configuration and probe isolated SIP ingress
         run: python3 services/sip/tests/validate_edge.py
+  tenant-carriers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: frontend
+      - name: Render production tenant gateway and dialplan fixtures
+        working-directory: frontend
+        run: node --import tsx scripts/render-byoc-test.mjs "$RUNNER_TEMP/byoc/conf"
+      - name: Test isolated carrier selection, caller ID, RTP and capacity
+        run: |
+          mkdir -p "$RUNNER_TEMP/byoc/state/log" "$RUNNER_TEMP/byoc/state/db" "$RUNNER_TEMP/byoc/state/run"
+          docker run -d --name vocivo-byoc-validation --network none --memory 512m --pids-limit 128 \
+            -v "$RUNNER_TEMP/byoc/conf:/conf:ro" -v "$RUNNER_TEMP/byoc/state:/state" \
+            --entrypoint /usr/bin/freeswitch safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6 \
+            -nf -nonat -np -conf /conf -log /state/log -db /state/db -run /state/run -mod /usr/lib/freeswitch/mod
+          docker run --rm --network container:vocivo-byoc-validation \
+            -v "$RUNNER_TEMP/byoc/conf:/fixtures:ro" -v "$PWD/services/sip/tests/byoc_wire.py:/test.py:ro" \
+            python:3.12-alpine python /test.py
+      - name: Remove isolated test container
+        if: always()
+        run: docker rm -f vocivo-byoc-validation || true

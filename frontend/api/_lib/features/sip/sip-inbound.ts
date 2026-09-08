@@ -58,7 +58,9 @@ export async function lookupSipInbound(
   }
   const did = normalizeE164(to);
   const assignment = config.numberAssignments[did];
-  if (!assignment?.organizationId) {
+  if (!assignment?.organizationId || assignment.disabled || assignment.source === 'carrier') {
+    // BYOC requires the source-bound XML dialplan. The legacy fallback cannot
+    // authenticate the carrier or implement an individually assigned route.
     return { enabled: false, reason: 'unassigned', usernames: [], bridge: '' };
   }
 

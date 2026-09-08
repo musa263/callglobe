@@ -1,9 +1,11 @@
+import { completeSend, sendFingerprint } from '../send-operation.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { methodNotAllowed } from '../../../shared/http.js';
 import { storeMessageEvent } from '../message-store.js';
 import { organizationForNumber } from '../../organizations/tenancy.js';
 import { verifyTelnyxWebhook } from '../../../shared/telnyx-webhook-auth.js';
 import { quarantineSecurityEvent } from '../../../shared/security-quarantine.js';
+import { telnyxMessageEvent } from '../telnyx-message-event.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
@@ -26,21 +28,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.warn(`Quarantined unscoped Telnyx messaging event: type=${eventType}, id=${eventId}`);
     return res.status(202).json({ received: true, quarantined: true });
   }
-  const errors = Array.isArray(payload.errors) ? payload.errors : [];
-  if (messageId !== 'unknown') {
-    await storeMessageEvent({
-      id: messageId,
-      to: destination,
-      from,
-      text: typeof payload.text === 'string' ? payload.text : '',
-      direction: inbound ? 'inbound' : 'outbound',
-      status: errors.length ? 'failed' : inbound ? 'received' : 'sent',
-      createdAt: payload.received_at || payload.sent_at || payload.completed_at || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      error: errors[0]?.detail || errors[0]?.title,
-      organizationId,
-      transport: 'sms',
+  if (!inbound && typeof req.query.operation === 'string' && /^[a-f0-9]{64}$/.test(req.query.operation)) {
+    await completeSend(req.query.operation, sendFingerprint(from, destination, String(payload.text || '')), {
+      id:messageId, status:payload.to?.[0]?.status || 'sent', direction:'outbound', created_at:payload.sent_at || payload.received_at || new Date().toISOString(),
     });
+  }
+  if (messageId !== 'unknown') {
+    await storeMessageEvent(telnyxMessageEvent(req.body.data, organizationId));
   }
   console.info(`Telnyx messaging webhook received: type=${eventType}, id=${eventId}`);
   return res.status(200).json({ received: true });

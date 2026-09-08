@@ -441,14 +441,19 @@ export async function readPlatformWalletState(organizations: Array<{ id: string;
       await setContext(transaction, undefined, true);
       await seedPricing(transaction);
       for (const organization of organizations) await ensureWallet(transaction, organization.id, organization.currency || 'USD');
-      const [walletRows, entryRows, settingsRows, packageRows, ruleRows] = await Promise.all([
+      const [walletRows, entryRows, settingsRows, packageRows, ruleRows, totalRows] = await Promise.all([
         transaction<WalletRow[]>`select * from vocivo_wallets order by updated_at desc`,
         transaction<EntryRow[]>`select * from vocivo_wallet_entries order by created_at desc limit 150`,
         transaction<SettingsRow[]>`select * from vocivo_pricing_settings where settings_id = 'global' limit 1`,
         transaction<PackageRow[]>`select * from vocivo_topup_packages order by sort_order, amount_minor`,
         transaction<RateRuleRow[]>`select * from vocivo_rate_rules order by destination_name`,
+        transaction<Array<{credits: string; debits: string}>>`select
+          coalesce(sum(amount_minor) filter (where direction = 'credit'),0)::text as credits,
+          coalesce(sum(amount_minor) filter (where direction = 'debit'),0)::text as debits
+          from vocivo_wallet_entries where created_at >= now() - interval '30 days'`,
       ]);
       return {
+        totals30d: { credits: Number(totalRows[0].credits), debits: Number(totalRows[0].debits) },
         wallets: walletRows.map(walletFromRow),
         entries: entryRows.map(entryFromRow),
         settings: settingsFromRow(settingsRows[0]),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { TelnyxApiError, inboundConnectionId, telnyx, telnyxCarrierHasCredit, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
+import { TelnyxApiError, TelnyxCarrierUnavailableError, createTelnyxVoiceReadiness, inboundConnectionId, telnyx, telnyxCarrierHasCredit, telnyxCredentialConnectionPath, telnyxPstnConnectionId, telnyxPstnConnectionPath } from './telnyx.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.TELNYX_API_KEY;
@@ -98,4 +98,27 @@ test('requires positive platform carrier credit before placing calls', () => {
   assert.equal(telnyxCarrierHasCredit({ data: { balance: '-0.07', available_credit: '-0.07' } }), false);
   assert.equal(telnyxCarrierHasCredit({ data: { balance: '10.00', available_credit: '10.00' } }), true);
   assert.equal(telnyxCarrierHasCredit({ data: {} }), false);
+});
+
+test('concurrent call setup shares balance work and never caches a failed read as credit', async () => {
+  let now = 0, requests = 0, balance = '10';
+  const ready = createTelnyxVoiceReadiness(async () => { requests++; await Promise.resolve(); return { data: { balance } }; }, () => now);
+  await Promise.all(Array.from({ length: 20 }, () => ready()));
+  assert.equal(requests, 1);
+  now = 16000; balance = '0';
+  const results = await Promise.allSettled([ready(), ready()]);
+  assert.equal(requests, 2);
+  assert.ok(results.every(result => result.status === 'rejected' && result.reason instanceof TelnyxCarrierUnavailableError));
+  let fail = true;
+  const recovery = createTelnyxVoiceReadiness(async () => { if (fail) throw new Error('offline'); return { data: { balance: '1' } }; });
+  await assert.rejects(recovery(), /offline/);
+  fail = false; await recovery();
+});
+
+test('an exhausted shared request deadline is not retried', async () => {
+  process.env.TELNYX_API_KEY = 'fixture';
+  const controller = new AbortController(); let requests = 0;
+  globalThis.fetch = async () => { requests++; controller.abort(); throw new DOMException('expired', 'AbortError'); };
+  await assert.rejects(telnyx('/balance', { signal: controller.signal }), /did not respond/);
+  assert.equal(requests, 1);
 });

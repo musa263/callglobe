@@ -25,6 +25,8 @@ services/pbx/secrets/
 # OS files
 .DS_Store
 Thumbs.db
+# Microsoft Word creates these lock files while a document is open.
+~$*.docx
 
 # IDE
 .vscode/

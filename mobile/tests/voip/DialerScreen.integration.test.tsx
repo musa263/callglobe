@@ -49,7 +49,7 @@ test('pasted international number is not prefixed with the device country code',
 test('Dial Pad exposes the keypad and one conference icon without a Home or recent-calls panel', async () => {
   await act(async () => { renderer = TestRenderer.create(<DialerScreen {...props} />); });
   const content = JSON.stringify(renderer.toJSON());
-  expect(content).toContain('Dial Pad');
+  expect(content).toContain('Vocivo');
   expect(content).toContain('Dial 1');
   expect(content).not.toContain('Recent calls');
   expect(content).not.toContain('Back to home');

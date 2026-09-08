@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { del, list, put, readObjects } from '../../shared/object-store.js';
+import { createOwnedPushStore, type PushStorage } from './push-ownership-store.js';
 import { requiredEnv } from '../../shared/http.js';
 import { tenantStorageKey } from '../../shared/tenant-storage.js';
 
@@ -49,26 +49,14 @@ export function webPushSubscriptionId(endpoint: string) {
   return createHash('sha256').update(endpoint).digest('hex').slice(0, 40);
 }
 
-export async function saveWebPushSubscription(record: WebPushSubscriptionRecord) {
-  await put(pathname(record), encrypt(record), { access: 'private', contentType: 'application/octet-stream', allowOverwrite: true });
+export function createWebPushStore(deps?: PushStorage) {
+  return createOwnedPushStore<WebPushSubscriptionRecord>({
+    root: 'vocivo/web-push/v1/', scope: prefix, pathname, encrypt, decrypt,
+    destination: record => record.endpoint,
+  }, deps);
 }
 
-export async function deleteWebPushSubscription(record: Pick<WebPushSubscriptionRecord, 'organizationId' | 'extensionId' | 'id'>) {
-  await del(pathname(record));
-}
-
-export async function listWebPushSubscriptions(organizationId: string, extensionId: string) {
-  const result = await list({ prefix: prefix(organizationId, extensionId), limit: 100 });
-  const objects = await readObjects(result.blobs.map((blob) => blob.pathname));
-  const staleBefore = Date.now() - 45 * 24 * 60 * 60 * 1000;
-  return result.blobs.flatMap((blob) => {
-    try {
-      const encrypted = objects.get(blob.pathname);
-      const record = encrypted ? decrypt(encrypted) : null;
-      return record && new Date(record.updatedAt).getTime() >= staleBefore ? [record] : [];
-    } catch (error) {
-      console.warn('Vocivo ignored an unreadable web push subscription', { pathname: blob.pathname, error });
-      return [];
-    }
-  });
-}
+const subscriptions = createWebPushStore();
+export const saveWebPushSubscription = subscriptions.save;
+export const listWebPushSubscriptions = subscriptions.list;
+export const deleteWebPushSubscription = subscriptions.remove;

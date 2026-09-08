@@ -37,6 +37,8 @@ let bridge: SipStackBridge | null = null;
 let client: SipVoiceClient | null = null;
 let binding: { remove: () => void } | null = null;
 let registrationRequest: Promise<number> | null = null;
+let registrationOperation: { renewed: boolean } | null = null;
+let queuedRenewal: Promise<number> | null = null;
 let registeredConfig: SipStackConfig | null = null;
 let registrationEpoch = 0;
 const sipSessionKey = 'vocivo.secure.sip-session.v1';
@@ -50,18 +52,43 @@ async function revokeCredential(credential: Pick<CachedSipSession, 'deviceId' | 
 
 /** Shared by foreground registration and a native killed-state wake. */
 export function ensureSipRegistration(forceRenew = false): Promise<number> {
-  if (registrationRequest) return registrationRequest;
+  if (registrationRequest) {
+    if (!forceRenew || registrationOperation?.renewed) return registrationRequest;
+    if (queuedRenewal) return queuedRenewal;
+    const operation = registrationOperation;
+    const epoch = registrationEpoch;
+    queuedRenewal = registrationRequest.then(lifetime => {
+      if (epoch !== registrationEpoch) throw new Error('Calling session changed.');
+      return operation?.renewed ? lifetime : ensureSipRegistration(true);
+    }).finally(() => { queuedRenewal = null; });
+    return queuedRenewal;
+  }
   const epoch = registrationEpoch;
+  const operation = { renewed: false };
+  registrationOperation = operation;
   registrationRequest = (async () => {
-    const sessionToken = await api.getSessionToken();
+    const [sessionToken, raw] = await Promise.all([
+      api.getSessionToken(),
+      SecureStore.getItemAsync(sipSessionKey),
+    ]);
     if (!sessionToken) throw new Error('Sign in before receiving calls.');
-    const raw = await SecureStore.getItemAsync(sipSessionKey);
     let cached: CachedSipSession | null = null;
     try { cached = raw ? JSON.parse(raw) : null; }
     catch { console.warn('[Vocivo SIP] Ignoring invalid secure session cache'); }
+    // Older releases cached a seven-day SIP password with a one-hour TURN grant.
+    // Honor the embedded coturn REST deadline even for those existing caches.
+    if (cached && Number.isFinite(cached.expiresAt)) {
+      for (const server of cached.config?.iceServers || []) {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        if (urls.some(url => /^turns?:/i.test(url)) && /^\d+:/.test(server.username || '')) {
+          cached.expiresAt = Math.min(cached.expiresAt, Number(server.username!.split(':')[0]) * 1000);
+        }
+      }
+    }
     if (forceRenew || cached?.sessionToken !== sessionToken || !cached?.deviceId || !cached?.credentialId || !cached?.config?.password || !Number.isFinite(cached?.expiresAt) || Date.now() >= cached!.expiresAt - 30_000) cached = null;
     if (!cached) {
       const deviceId = await SecureStore.getItemAsync(sipDeviceKey);
+      operation.renewed = true;
       const sip = await api.post<{ username: string; password: string; domain: string; wsUri: string; expires_in: number; deviceId: string; credentialId: string; ice_servers?: SipStackConfig['iceServers'] }>('/api/voice/sip-credentials', { client: Platform.OS, ...(deviceId ? { deviceId } : {}) });
       if (!sip.username || !sip.password || !sip.wsUri || !sip.deviceId || !sip.credentialId || !(sip.expires_in > 0)) throw new Error('Incomplete SIP credentials.');
       if (epoch !== registrationEpoch || await api.getSessionToken() !== sessionToken) {
@@ -108,6 +135,11 @@ function ensureBridge() {
   bus = events;
   bridge = created;
   return { bridge: created, bus: events };
+}
+
+/** Final registration outcomes, including rejection codes, for credential recovery. */
+export function onSipRegistration(listener: (state: string, reason?: string) => void) {
+  return ensureBridge().bus.addListener('registration', payload => listener(payload.state, payload.reason));
 }
 
 export async function registerVocivoSip(config: {

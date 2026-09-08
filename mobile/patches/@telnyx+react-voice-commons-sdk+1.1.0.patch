@@ -2247,7 +2247,7 @@ index 975ef71..ddc554c 100644
 +          sipUser: config.sipUser,
 +          sipPassword: config.sipPassword,
 +          iceServers: config.iceServers || [],
-+        })
++        }), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY }
 +      );
        await AsyncStorage.setItem(
          USE_TRICKLE_ICE_STORAGE_KEY,
@@ -2295,7 +2295,7 @@ index 975ef71..ddc554c 100644
 +          token: config.token,
 +          expiresAt: Number(existing.expiresAt || 0),
 +          iceServers: config.iceServers || existing.iceServers || [],
-+        })
++        }), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY }
 +      );
        await AsyncStorage.setItem(
          USE_TRICKLE_ICE_STORAGE_KEY,
@@ -2730,8 +2730,8 @@ index 5a26cc7..f7afabc 100644
          MISSED_CALL_NOTIFICATIONS_STORAGE_KEY
        );
        const useTrickleIce =
-+      const iceServers = Array.isArray(storedIceServers) ? storedIceServers : undefined;
          storedUseTrickleIce === null ? this._options.useTrickleIce : storedUseTrickleIce === 'true';
++      const iceServers = Array.isArray(storedIceServers) ? storedIceServers : undefined;
        const pushWhenActive = storedPushWhenActive === 'true';
        const enableMissedCallNotifications = storedMissedCallNotifications === 'true';
        const nativePushToken =
@@ -2777,7 +2777,7 @@ index 5a26cc7..f7afabc 100644
 +        sipUser: config.sipUser,
 +        sipPassword: config.sipPassword,
 +        iceServers: config.iceServers || [],
-+      }));
++      }), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
        await AsyncStorage.setItem(
          USE_TRICKLE_ICE_STORAGE_KEY,
          String(config.useTrickleIce ?? false)
@@ -2804,7 +2804,7 @@ index 5a26cc7..f7afabc 100644
 +        token: config.token,
 +        expiresAt: Number(existing.expiresAt || 0),
 +        iceServers: config.iceServers || existing.iceServers || [],
-+      }));
++      }), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
        await AsyncStorage.setItem(
          USE_TRICKLE_ICE_STORAGE_KEY,
          String(config.useTrickleIce ?? false)

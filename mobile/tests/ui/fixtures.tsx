@@ -19,9 +19,14 @@ export function FixtureProvider({ children }: { children: React.ReactNode }) {
   return <Context.Provider value={{ activeCall, isReady: true, duration: 12, startInternalCall: start, startCall: async (number: string, _rate: unknown, _caller: unknown, name: string) => start('', number, name || number), endCall: async () => setActiveCall(null), toggleMute: () => update('muted'), toggleHold: () => update('onHold'), toggleSpeaker: () => update('speaker'), sendDtmf: () => undefined }}>{children}</Context.Provider>;
 }
 export const useVoice = () => useContext(Context);
-export const useBusiness = () => ({ ...useContext(Context), profile: { enabled: true, companyName: 'Northstar Studio' } });
+export const useBusiness = () => ({ ...useContext(Context), profile: { enabled: true, companyName: 'Northstar Studio', departments: ['Design', 'Operations'], greeting: 'Welcome to Northstar Studio.', waitingMessage: 'Please hold.', voicemailEnabled: false, voicemailDelaySeconds: 25, voicemailGreeting: '', voice: 'AWS.Polly.Joanna-Neural', backgroundImageUrl: '', aiTone: 'professional' } });
 export const api = { get: async () => ({ voicemails: [], users: [
   { id: 'jamie', name: 'Jamie Roberts', extension: '2001', department: 'Design' },
   { id: 'sam', name: 'Sam Lee', extension: '2002', department: 'Operations' },
 ] }), post: async () => ({}) };
 export const findPhoneContact = async () => null;
+export const useMessaging = () => ({ messages: [], loading: false, refreshMessages: async () => undefined, sendMessage: async () => undefined, suggestReplies: async () => [] });
+export const requestPermissionsAsync = async () => ({ status: 'granted' });
+export const getContactsAsync = async () => ({ data: [] });
+export const Fields = { PhoneNumbers: 'phoneNumbers', Image: 'image' };
+export const SortTypes = { FirstName: 'firstName' };

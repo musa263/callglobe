@@ -14,7 +14,8 @@ export function sessionOrganizationId(session: VocivoSession, config: PbxConfig)
 }
 
 export function numberOrganizationId(phoneNumber: string, config: PbxConfig) {
-  return config.numberAssignments[normalizeE164(phoneNumber)]?.organizationId || '';
+  const assignment = config.numberAssignments[normalizeE164(phoneNumber)];
+  return assignment && !assignment.disabled ? assignment.organizationId : '';
 }
 
 export function sessionCanAccessNumber(session: VocivoSession, phoneNumber: string, config: PbxConfig) {

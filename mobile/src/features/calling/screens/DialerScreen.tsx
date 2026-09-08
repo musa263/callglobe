@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ChevronDown, Delete, Globe2, Phone, Plus, RotateCw, UsersRound } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import { useLocales } from 'expo-localization';
 import { CallerIdPicker } from '../components/CallerIdPicker';
 import { Keypad } from '../components/Keypad';
@@ -87,7 +88,7 @@ export function DialerScreen({ onWallet, onConference, target }: {
 
   return <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
     <View style={styles.header}>
-      <Text style={styles.title}>Dial Pad</Text>
+      <View style={styles.title}><PageHeading /></View>
       <Pressable accessibilityRole="button" accessibilityLabel="Open calling balance" onPress={onWallet} style={styles.balance}><Text style={styles.balanceText}>{balance == null ? 'Managed' : `$${balance.toFixed(2)}`}</Text><Plus size={16} color={colors.mint} /></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Start conference" accessibilityHint="Add phone numbers or company colleagues" onPress={onConference} disabled={starting} style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}><UsersRound size={23} color={colors.blue} /></Pressable>
     </View>
@@ -123,7 +124,7 @@ const styles = StyleSheet.create({
   content: { flexGrow: 1, paddingHorizontal: 22, paddingBottom: 16 },
   header: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  title: { flex: 1, color: colors.text, fontSize: 21, fontWeight: '700' },
+  title: { flex: 1, minWidth: 0 },
   balance: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 6 },
   balanceText: { color: colors.textMuted, fontSize: 12, fontWeight: '700' },
   identity: { paddingTop: 16 },

@@ -6,7 +6,8 @@ import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { accessForSession } from '../../organizations/saas-access.js';
 import { telnyx } from '../../../shared/telnyx.js';
 import { sessionOrganizationId } from '../../organizations/tenancy.js';
-import { voiceIceServers } from '../voice-provider.js';
+import { voiceEdge, voiceIceServers } from '../voice-provider.js';
+import { telnyxTokenLifetime } from '../telnyx-token-lifetime.js';
 
 function normalizeToken(raw: string) {
   const value = raw.trim();
@@ -25,18 +26,6 @@ function normalizeToken(raw: string) {
   }
 }
 
-function tokenLifetime(token: string) {
-  try {
-    const encoded = token.split('../../../../telnyx')[1];
-    if (!encoded) return 3600;
-    const claims = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as { exp?: number };
-    if (typeof claims.exp !== 'number') return 3600;
-    return Math.max(60, Math.min(86_400, claims.exp - Math.floor(Date.now() / 1000)));
-  } catch {
-    return 3600;
-  }
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
@@ -48,6 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (access.superadmin === false && !access.features.internalCalling && !access.features.outboundCalling) {
       return res.status(403).json({ error: 'Calling is not enabled for this account.' });
     }
+    if (voiceEdge() === 'sip') return res.status(409).json({ error: 'Use Vocivo SIP device credentials for this calling engine.' });
     const extension = await getExtension(session.extensionId);
     if (extension.organizationId !== sessionOrganizationId(session, config)) return res.status(403).json({ error: 'This extension belongs to another organization.' });
     const credential = await getExtensionCredentials(session.extensionId, sessionOrganizationId(session, config));
@@ -58,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({
       token,
-      expires_in: tokenLifetime(token),
+      expires_in: telnyxTokenLifetime(token),
       ice_servers: voiceIceServers(`${credential.extension.organizationId}:${credential.extension.id}`),
     });
   } catch (error) {

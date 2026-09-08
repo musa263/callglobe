@@ -67,7 +67,7 @@ function internalHistory(id: string, values: StoredCallEvent[], viewer: HistoryV
   const destinationName = visibleName(first(values, 'destinationName')) || destination?.name || (destinationExtension ? `Extension ${destinationExtension}` : 'Colleague');
   const viewerIsSource = Boolean((viewer.extensionId && sourceId === viewer.extensionId) || (viewer.extension && sourceExtension === viewer.extension));
   const viewerIsDestination = Boolean((viewer.extensionId && destinationId === viewer.extensionId) || (viewer.extension && destinationExtension === viewer.extension));
-  if ((viewer.extensionId || viewer.extension) && !viewerIsSource && !viewerIsDestination) return null;
+  if (!viewer.viewAll && (viewer.extensionId || viewer.extension) && !viewerIsSource && !viewerIsDestination) return null;
   const direction = viewerIsDestination && !viewerIsSource ? 'incoming' as const : 'outgoing' as const;
   const peerName = direction === 'incoming' ? sourceName : destinationName;
   const peerExtension = direction === 'incoming' ? sourceExtension : destinationExtension;

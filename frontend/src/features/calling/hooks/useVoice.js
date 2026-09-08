@@ -19,16 +19,19 @@ import { useTelnyxVoice } from './useTelnyxVoice';
  * beginning a carrier log-in and then abandoning it left errors on screen that
  * belonged to a phone nobody was going to use.
  */
-export function useVoice(token, enabled, identity = {}) {
+export function useVoice(token, enabled, identity = {}, configurationKey = enabled ? token : null) {
   // `token` is a stable identity for the signed-in person (the profile id),
   // not a bearer token: requests authenticate with the session cookie. When
   // this really was the token, it was absent after every reload (the token is
   // deliberately kept out of storage) and the phone stayed on "Connecting…".
-  const [edge, setEdge] = useState(null);
-  const [configurationError, setConfigurationError] = useState('');
+  // Configuration is an authenticated read, so it can overlap profile loading.
+  // It never authorizes the phone: enabled/token still require a verified profile.
+  const [configuration, setConfiguration] = useState(null);
+  const currentConfiguration = configuration?.key === configurationKey ? configuration : null;
+  const edge = enabled && token ? currentConfiguration?.edge : null;
   useEffect(() => {
-    if (!enabled || !token) {
-      setEdge(null);
+    if (!configurationKey) {
+      setConfiguration(null);
       return undefined;
     }
     let cancelled = false;
@@ -36,21 +39,21 @@ export function useVoice(token, enabled, identity = {}) {
     const resolveEdge = () => {
       api('/api/voice/config').then((config) => {
         if (cancelled) return;
-        setConfigurationError('');
-        setEdge(config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx');
-      }).catch(() => {
+        setConfiguration({ key: configurationKey, edge: config.voice_edge === 'sip' || config.provider === 'sip' ? 'sip' : 'telnyx', error: '' });
+      }).catch((failure) => {
         if (cancelled) return;
-        setConfigurationError('Calling configuration is unavailable. Reconnecting...');
-        retry = setTimeout(resolveEdge, 5000);
+        const denied = [401, 403].includes(failure?.status);
+        setConfiguration({ key: configurationKey, edge: null, error: denied ? failure.message : 'Calling configuration is unavailable. Reconnecting...' });
+        if (!denied) retry = setTimeout(resolveEdge, 5000);
       });
     };
-    setEdge(null);
+    setConfiguration(null);
     resolveEdge();
     return () => { cancelled = true; clearTimeout(retry); };
-  }, [enabled, token]);
+  }, [configurationKey]);
   const telnyx = useTelnyxVoice(token, enabled && edge === 'telnyx', identity);
   const sip = useSipVoice(token, enabled && edge === 'sip', identity);
   if (edge === 'sip') return sip;
   if (edge === 'telnyx') return telnyx;
-  return { ...sip, ready: false, statusLabel: 'Connecting…', error: configurationError };
+  return { ...sip, ready: false, statusLabel: currentConfiguration?.error ? 'Calling unavailable' : 'Connecting…', error: currentConfiguration?.error || '' };
 }

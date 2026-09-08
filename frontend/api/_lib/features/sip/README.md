@@ -61,3 +61,49 @@ revalidated at REGISTER, and registrar contact revocation needs separate work.
 
 Run frontend tests/typecheck. `sip-config.test.ts` is a structural guard, not a
 Kamailio parser or real SIP-wire test; validate staged config in the pinned image.
+
+## Registration recovery and queue budgets
+
+The auth API distinguishes an invalid nonce from an expired, signed nonce. Only
+an otherwise valid Digest from a currently allowed credential receives
+`{ ok: false, reason: 'stale_nonce', stale: true }`. Kamailio turns that into a
+fresh `401` challenge with `stale=true`; the expired request is never registered
+and never consumes replay state. Invalid credentials and replayed Digests do not
+receive the stale hint. Challenge JSON state is reset before each lookup, so a
+missing nonce cannot reuse a previous request's nonce. Deploy the matching edge
+configuration before promoting the API to enable recovery.
+
+Queue bridge attempts share the configured `maxWait` ringing budget. The final
+attempt uses only the remainder (including a one-second remainder); an exhausted
+queue proceeds to its fallback without another bridge. Prompt playback and HTTP
+callback time are additional to this ringing budget, not a wall-clock guarantee.
+
+## SIP and relay renewal
+
+The credentials response expiry describes the complete SIP/ICE configuration and
+is capped at the earliest TURN REST deadline. Clients renew before that deadline;
+the stored Digest credential retains its seven-day validity so deferred renewal
+during an active call does not invalidate registration. Relay configuration is
+validated before replacing the device credential, so an invalid TURN deployment
+cannot rotate away a working password on a failed request.
+
+CDR timestamps must fit JavaScript's supported date range. Invalid microsecond
+values fall back to valid seconds; records without a valid start are unreadable,
+and invalid end timestamps fall back to the start instead of throwing a retryable
+server error. These boundaries are covered by the credentials-route and CDR tests.
+
+## Tenant carrier bridge authorization
+
+`voice-sip-dialplan` now handles signed outbound grants through
+`sip-outbound-dialplan` before applying the inbound feature flag. It rechecks
+current caller-ID ownership and the exact tenant/trunk/revision/gateway binding.
+A failed lookup cannot use the static Telnyx bridge. The XML declaration occupies
+its own line for FreeSWITCH preprocessing; effective caller-ID channel variables
+carry the authorized identity to the B leg. Codec lists are set outside the
+dial string. Per-gateway hash limits release with channel teardown.
+
+Kamailio strips incoming `X-Vocivo-Carrier-Source` and sets it from the admitted
+carrier socket. Imported national DIDs resolve only within the source-bound
+deployment and published assignment; disabled or unassigned DIDs do not answer.
+Company destinations remain in the existing API-rendered inbound dialplan.
+See the [BYOC rollout and acceptance gates](../../../../../docs/runbooks/tenant-carrier-trunks.md).

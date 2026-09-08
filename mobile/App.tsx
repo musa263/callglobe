@@ -1,5 +1,5 @@
 import React, { Component, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { ChevronUp, PhoneCall, PhoneOff } from 'lucide-react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import { MessagingProvider } from './src/features/messaging/MessagingContext';
 import { BusinessProvider } from './src/features/organizations/BusinessContext';
 import { BottomTabs } from './src/shared/components/BottomTabs';
 import { AuthScreen } from './src/features/auth/screens/AuthScreen';
+import { LaunchScreen } from './src/features/auth/screens/LaunchScreen';
 import { DialerScreen } from './src/features/calling/screens/DialerScreen';
 import { ActiveCallScreen } from './src/features/calling/screens/ActiveCallScreen';
 import { RecentsScreen } from './src/features/calling/screens/RecentsScreen';
@@ -23,7 +24,7 @@ import { colors } from './src/shared/theme';
 
 function AppContent() {
   const { loading, isAuthenticated } = useAuth();
-  if (loading) return <View style={styles.loading}><ActivityIndicator color={colors.mint} size="large" /></View>;
+  if (loading) return <LaunchScreen />;
   if (!isAuthenticated) return <AuthScreen />;
   return <BusinessProvider><MessagingProvider><AuthenticatedApp /></MessagingProvider></BusinessProvider>;
 }
@@ -107,7 +108,6 @@ export default function App() {
 const styles = StyleSheet.create({
   app: { flex: 1, backgroundColor: colors.ink },
   screen: { flex: 1 },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink },
   recovery: { flex: 1, paddingHorizontal: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink },
   recoveryBrand: { color: colors.blue, fontSize: 12, fontWeight: '900', marginBottom: 18 },
   recoveryTitle: { color: colors.text, fontSize: 24, fontWeight: '900', textAlign: 'center' },

@@ -1,5 +1,11 @@
 # Administration UI
 
+Company user creation includes email and a temporary web sign-in password for
+employees as well as administrators. The users table shows whether web sign-in
+is enabled. Existing QR-only users can enable it through Edit; role permissions
+remain enforced by the API. `scripts/test-company-user-form.mjs` mounts the real
+form and verifies employee credentials without granting an admin role.
+
 `AdminConsole.jsx` owns navigation, profile/access loading and page composition.
 It is no longer the implementation of every admin screen. Page folders are:
 
@@ -36,3 +42,27 @@ Regression: `node --import tsx scripts/test-admin-workspaces.mjs` from `frontend
 with `VOCIVO_TEST_ORIGIN` set to the local Vite URL and `PLAYWRIGHT_MODULE` set if
 Playwright is installed outside this project. All APIs are intercepted. This
 tests two real console tabs, not production carrier calls or production storage.
+
+Initial PBX and SaaS reads run concurrently. Once the workspace and entitlements
+are resolved, independent scoped reads also run concurrently; the generation
+guard still discards superseded responses before publishing state. Required-read
+failure retains the existing error path, and optional reads retain their fallbacks.
+`node --import tsx scripts/test-web-branding.mjs` holds the first read open to
+verify this dependency order and checks the shared top brand on all viewport sizes.
+
+`numbers/CarrierTrunksPanel.jsx` adds editable company carrier configuration to
+SIP trunks. It uses the captured workspace API and remounts when the company
+changes. Each number has its own destination selector and can remain unassigned.
+The panel labels saved configuration **Pending activation** because this form
+does not provision the SIP edge. Authentication is explicitly unconfirmed until
+the administrator selects the provider's method; the account reference is separate.
+Browser acceptance covers create, reopen, edit and retention of independent
+number destinations. Carrier call acceptance remains a separate gate.
+
+`CarrierTrunkDetails.jsx` displays every saved company carrier entry with General,
+Options and a complete DID table directly on the SIP trunks page. No edit dialog
+is needed to see account/server/authentication, public IP, capacity, call directions,
+or per-number caller IDs and destinations. `Add SIP trunk` opens the company
+carrier form; the separate external connection action is `Add PBX registration`.
+The scoped stylesheet keeps number rows readable on narrow screens. Confirm the
+saved entry remains visible after a fresh page load, including unassigned DIDs.

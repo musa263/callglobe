@@ -1,9 +1,10 @@
+import { isCompanyAdministrator } from '../../auth/company-account.js';
 import { randomUUID } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../../auth/auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { listExtensions } from '../pbx.js';
-import { PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
+import { defaultPbxConfig, organizationSettingsFrom, PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import {
   createSubscription, effectiveEntitlements, featureCatalog, publicTenantAdmin,
   readPlatformSaasState, readTenantSaasState, removeAllTenantAdmins, removeTenantAdmin,
@@ -37,7 +38,7 @@ async function responseFor(superadmin: boolean, organizationId?: string) {
         plan: access.plan,
         entitlements: access.features,
         featureOverrides: state.featureOverrides[organization.id] || {},
-        admins: state.tenantAdmins.filter((account) => account.organizationId === organization.id).map(publicTenantAdmin),
+        admins: state.tenantAdmins.filter((account) => account.organizationId === organization.id && isCompanyAdministrator(account.role)).map(publicTenantAdmin),
         usage: { seats: users.length, phoneNumbers: Object.values(config.numberAssignments).filter((assignment) => assignment.organizationId === organization.id).length },
       };
     });
@@ -82,7 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const accountType: 'business' | 'individual' = input.accountType === 'individual' ? 'individual' : 'business';
       if (!name) return res.status(400).json({ error: 'Company name is required.' });
       const incomingAdmin = req.body?.admin || {};
-      const existingAdmins = state.tenantAdmins.filter((account) => account.organizationId === id);
+      const existingAdmins = state.tenantAdmins.filter((account) => account.organizationId === id && isCompanyAdministrator(account.role));
       if (accountType === 'business' && !existingAdmins.length && !text(incomingAdmin.email, 160)) return res.status(400).json({ error: 'Business customers require a company owner or administrator.' });
       if (accountType === 'business' && text(incomingAdmin.email, 160)) {
         const email = text(incomingAdmin.email, 160).toLowerCase();
@@ -106,7 +107,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internalCallingEnabled: accountType === 'business' && input.internalCallingEnabled !== false,
         status: input.status === 'suspended' ? 'suspended' as const : 'active' as const,
       };
-      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization] }, { expectedUpdatedAt: config.updatedAt });
+      const newSettings = organizationSettingsFrom(defaultPbxConfig());
+      newSettings.company = { ...newSettings.company, name, callingMode: 'carrier' };
+      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization],
+        ...(!existing ? { organizationSettings: { ...config.organizationSettings, [id]: newSettings } } : {}),
+      }, { expectedUpdatedAt: config.updatedAt });
       state = await readPlatformSaasState(config);
       const planId = text(req.body?.subscription?.planId, 50) || (accountType === 'business' ? 'business' : 'starter');
       const subscription = createSubscription(id, planId, state, req.body?.subscription || {});
@@ -136,7 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const id = text(req.body?.id || req.query.id, 80);
       const account = state.tenantAdmins.find((item) => item.id === id);
       const organization = account ? config.organizations.find((item) => item.id === account.organizationId) : undefined;
-      const remainingAdmins = account ? state.tenantAdmins.filter((item) => item.organizationId === account.organizationId && item.status === 'active' && item.id !== id) : [];
+      const remainingAdmins = account ? state.tenantAdmins.filter((item) => item.organizationId === account.organizationId && item.status === 'active' && isCompanyAdministrator(item.role) && item.id !== id) : [];
       if (account && organization?.accountType === 'business' && !remainingAdmins.length) return res.status(409).json({ error: 'Assign another company administrator before deleting this account.' });
       if (account) await removeTenantAdmin(id, account.organizationId, config);
     } else {

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { CheckCircle2, ExternalLink, LockKeyhole, QrCode } from 'lucide-react';
 import './enroll.css';
+import { BrandHeader } from '../../shared/components/BrandHeader';
 
 function EnrollmentPage() {
   const [opened, setOpened] = useState(false);
@@ -23,4 +24,4 @@ function EnrollmentPage() {
   </main>;
 }
 
-ReactDOM.createRoot(document.getElementById('enroll-root')).render(<EnrollmentPage />);
+ReactDOM.createRoot(document.getElementById('enroll-root')).render(<><BrandHeader /><EnrollmentPage /></>);

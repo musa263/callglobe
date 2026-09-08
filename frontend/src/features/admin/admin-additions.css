@@ -4,6 +4,12 @@
   gap: 7px;
 }
 
+.application-frame .admin-console { min-height:calc(100dvh - var(--vocivo-header-height)); }
+.application-frame .admin-brand { display:none; }
+@media (min-width:761px) {
+  .application-frame .admin-console > aside { top:var(--vocivo-header-height); height:calc(100dvh - var(--vocivo-header-height)); }
+}
+
 .voice-select .secondary {
   min-height: 38px;
 }

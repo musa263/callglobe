@@ -5,6 +5,7 @@ import { getLocales } from 'expo-localization';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
 import { ContactRound, MessageSquareText, Phone, Search, ShieldCheck, Video } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import type { ContactPhone } from '../../../shared/types';
 import { colors } from '../../../shared/theme';
 import { useAuth } from '../../auth/AuthContext';
@@ -61,7 +62,7 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
 
   return (
     <View style={[styles.page, { paddingTop: Math.max(insets.top, 18) }]}>
-      <View style={styles.header}><View><Text style={styles.eyebrow}>PHONE BOOK</Text><Text style={styles.title}>Contacts</Text></View><View style={styles.headerActions}><View style={styles.count}><Text style={styles.countText}>{contacts.length + team.length}</Text></View><Pressable accessibilityLabel="Open video meetings" onPress={onVideoMeeting} style={styles.searchButton}><Video size={19} color={colors.blue} /></Pressable><Pressable accessibilityLabel="Search contacts" onPress={() => searchRef.current?.focus()} style={styles.searchButton}><Search size={19} color={colors.textMuted} /></Pressable></View></View>
+      <View style={styles.header}><PageHeading title="Contacts" /><View style={styles.headerActions}><View style={styles.count}><Text style={styles.countText}>{contacts.length + team.length}</Text></View><Pressable accessibilityLabel="Open video meetings" onPress={onVideoMeeting} style={styles.searchButton}><Video size={19} color={colors.blue} /></Pressable><Pressable accessibilityLabel="Search contacts" onPress={() => searchRef.current?.focus()} style={styles.searchButton}><Search size={19} color={colors.textMuted} /></Pressable></View></View>
       <View style={styles.search}><Search size={18} color={colors.textFaint} /><TextInput ref={searchRef} value={query} onChangeText={setQuery} placeholder="Search name or number" placeholderTextColor={colors.textFaint} style={styles.searchInput} autoCorrect={false} returnKeyType="search" /></View>
 
       {permission === 'loading' && !team.length ? <View style={styles.center}><ActivityIndicator color={colors.mint} /><Text style={styles.loadingText}>Loading your contacts...</Text></View> : permission === 'denied' && !team.length ? (

@@ -7,6 +7,9 @@ import { isLocalOrigination, parseXmlCurlRequest, renderSipDialplan, xmlCurlNotF
 import { sipEdgeAuthorized } from '../sip-edge-auth.js';
 import { normalizeE164 } from '../../organizations/tenancy.js';
 import { sipInboundEnabled } from '../../calling/voice-provider.js';
+import { carrierTrunks } from '../../numbers/carrier-trunk-store.js';
+import { carrierReadiness, resolveInboundNumber, resolveCarrierOutbound } from '../../numbers/carrier-runtime.js';
+import { outboundUnavailable, renderSipOutbound } from '../sip-outbound-dialplan.js';
 
 /**
  * mod_xml_curl dialplan binding for the self-hosted SIP edge.
@@ -30,9 +33,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const request = parseXmlCurlRequest(req.body);
     if (request.section !== 'dialplan') return sendXml(res, xmlCurlNotFound());
-    if (!sipInboundEnabled() || isLocalOrigination(request)) return sendXml(res, xmlCurlNotFound());
-
     const config = await readPbxConfig();
+    if (request.vocivoFlowHeader === 'outbound') {
+      try { return sendXml(res, await renderSipOutbound(request, config)); }
+      catch { return sendXml(res, outboundUnavailable()); }
+    }
+    if (!sipInboundEnabled() || isLocalOrigination(request)) return sendXml(res, xmlCurlNotFound());
     let organizationId: string;
     let did: string;
     if (request.stage) {
@@ -40,13 +46,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       did = normalizeE164(request.did);
       if (!organizationId || !config.organizations.some((item) => item.id === organizationId)) return sendXml(res, xmlCurlNotFound());
     } else {
-      did = normalizeE164(request.destinationNumber);
+      did = resolveInboundNumber(config, request.destinationNumber, request.carrierSourceIp || '');
       const assignment = config.numberAssignments[did];
-      if (!assignment?.organizationId) return sendXml(res, xmlCurlNotFound());
+      if (!assignment?.organizationId || assignment.disabled) return sendXml(res, xmlCurlNotFound());
       organizationId = assignment.organizationId;
     }
     const organization = config.organizations.find((item) => item.id === organizationId);
     if (!organization || organization.status !== 'active') return sendXml(res, xmlCurlNotFound());
+    const assignment = config.numberAssignments[did];
+    if (!assignment || assignment.disabled || assignment.organizationId !== organizationId) return sendXml(res, xmlCurlNotFound());
+    let trunkGateway = 'telnyx';
+    let carrierCapacity: { gateway: string; limit: number } | undefined;
+    if (assignment.source === 'carrier') {
+      const trunk = (await carrierTrunks.list(organizationId)).find(item => item.id === assignment.carrierTrunkId);
+      if (!trunk || trunk.revision !== assignment.carrierTrunkRevision || trunk.inboundEnabled !== true || !assignment.destinationType
+        || !carrierReadiness(trunk).deployment) return sendXml(res, xmlCurlNotFound());
+      if (!trunk.channelLimit) return sendXml(res, xmlCurlNotFound());
+      carrierCapacity = { gateway: carrierReadiness(trunk).deployment!.gateway, limit: trunk.channelLimit };
+      // Outbound forwarding must never fall back to the platform carrier.
+      try { trunkGateway = (await resolveCarrierOutbound(config, organizationId, did))!.gateway; }
+      catch { trunkGateway = 'byoc_unavailable'; }
+    }
 
     const [business, extensions] = await Promise.all([
       readBusinessVoiceConfig(organizationId),
@@ -63,7 +83,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       secret: requiredEnv('SIP_EDGE_SECRET'),
       promptFormat: process.env.TTS_SERVICE_URL?.trim() ? 'wav' : 'mp3',
       recordingsDir: process.env.VOCIVO_SIP_RECORDINGS_DIR?.trim() || '/var/lib/vocivo/recordings',
-      trunkGateway: 'telnyx',
+      trunkGateway,
+      carrierCapacity,
       now: new Date(),
     });
     return sendXml(res, xml);

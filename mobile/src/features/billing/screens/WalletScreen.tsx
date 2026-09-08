@@ -3,6 +3,7 @@ import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-na
 import { ArrowLeft, ArrowUpRight, Building2, CircleCheck, RefreshCw, ShieldCheck } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import { useAuth } from '../../auth/AuthContext';
 import { colors, shadow } from '../../../shared/theme';
 
@@ -12,7 +13,7 @@ export function WalletScreen({ onBack }: { onBack: () => void }) {
   const organizationManaged = profile?.balance == null;
   return (
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 18) }]} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}><Pressable accessibilityLabel="Back to dialer" onPress={onBack} style={styles.back}><ArrowLeft size={21} color={colors.text} /></Pressable><View><Text style={styles.eyebrow}>VOCIVO BILLING</Text><Text style={styles.title}>{organizationManaged ? 'Service plan' : 'Balance'}</Text></View></View>
+      <View style={styles.header}><Pressable accessibilityLabel="Back to dialer" onPress={onBack} style={styles.back}><ArrowLeft size={21} color={colors.text} /></Pressable><PageHeading title={organizationManaged ? 'Service plan' : 'Balance'} /></View>
       <LinearGradient colors={['#17486A', '#10243D']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.balanceCard}>
         <View style={styles.balanceTop}><Text style={styles.balanceLabel}>AVAILABLE CALLING CREDIT</Text><View style={styles.currency}><Text style={styles.currencyText}>{profile?.currency || 'USD'}</Text></View></View>
         <Text adjustsFontSizeToFit numberOfLines={1} style={styles.balance}>{organizationManaged ? (profile?.organization_name || 'Organization managed') : `$${Number(profile?.balance).toFixed(2)}`}</Text>

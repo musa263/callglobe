@@ -1,3 +1,7 @@
+> Current tenant-owned carrier setup and activation are documented in the
+> [BYOC runbook](runbooks/tenant-carrier-trunks.md). The managed integration
+> notes below describe the legacy path.
+
 # Production Voice Architecture
 
 Vocivo uses Telnyx as its managed signaling, media, ICE/TURN, native push, PSTN, and DID provider. The production control plane consists of the Vercel Node.js API and the Postgres-backed multi-tenant data layer.

@@ -24,7 +24,8 @@
       },
       "entitlements": {
         "aps-environment": "production"
-      }
+      },
+      "buildNumber": "65"
     },
     "android": {
       "package": "app.vocivo.mobile",
@@ -46,7 +47,8 @@
       "blockedPermissions": [
         "android.permission.WRITE_CONTACTS",
         "android.permission.READ_PHONE_NUMBERS"
-      ]
+      ],
+      "versionCode": 65
     },
     "plugins": [
       [

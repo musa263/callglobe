@@ -22,6 +22,7 @@
       <param name="extension-in-contact" value="true"/>
       <param name="ping" value="30"/>
     </gateway>
+    <X-PRE-PROCESS cmd="include" data="carriers/*.xml"/>
   </gateways>
   <settings>
     <param name="sip-ip" value="$${PUBLIC_IP}"/>

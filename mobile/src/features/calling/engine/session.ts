@@ -6,8 +6,9 @@ import type { VoiceLoginConfig, VoiceTokenResponse } from './contracts';
 
 export function voiceLoginConfig(response: VoiceTokenResponse, ringtone: string): VoiceLoginConfig {
   if (!response.token?.trim()) throw new Error('A calling session token was not returned.');
-  const requestedLifetime = Number(response.expires_in || 3600);
-  const lifetimeSeconds = Number.isFinite(requestedLifetime) ? Math.max(60, requestedLifetime) : 3600;
+  const requestedLifetime = Number(response.expires_in ?? 3600);
+  if (!Number.isFinite(requestedLifetime) || requestedLifetime <= 0) throw new Error('The calling session has expired.');
+  const lifetimeSeconds = requestedLifetime;
   const iceServers = Array.isArray(response.ice_servers) && response.ice_servers.length
     ? response.ice_servers
     : undefined;

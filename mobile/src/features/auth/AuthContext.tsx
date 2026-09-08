@@ -6,6 +6,7 @@ import type { CallerNumber, CallLog, CallRate, Profile } from '../../shared/type
 import { fallbackRates } from '../billing/data/fallbackRates';
 import { setVoiceSignedIn, signOutVoiceDevice } from '../calling/runtime/voipClient';
 import { normalizeHistoryIdentity } from '../calling/engine/historyIdentity';
+import { clearSessionSnapshot, readSessionSnapshot, saveSessionSnapshot } from './sessionSnapshot';
 
 type AuthContextValue = {
   loading: boolean;
@@ -109,8 +110,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const directoryRef = useRef<DirectoryResponse['users']>([]);
   const activeUserIdRef = useRef<string | null>(null);
   const [nativeBridgeError, setNativeBridgeError] = useState<Error | null>(null);
+  const authEpochRef = useRef(0);
+  const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logFailure = (operation: string, failure: unknown) => console.warn(`[Vocivo Auth] ${operation}`, { name: failure instanceof Error ? failure.name : 'UnknownError' });
 
   useEffect(() => {
+    if (loading) return;
     setVoiceSignedIn(isAuthenticated)
       .then(() => setNativeBridgeError(null))
       .catch((failure) => {
@@ -118,7 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('[Vocivo Auth] native voice state synchronization failed', { message: error.message, stack: error.stack });
         setNativeBridgeError(error);
       });
-  }, [isAuthenticated]);
+  }, [isAuthenticated, loading]);
 
   const refreshServerHistory = useCallback(async (userId: string, directory: DirectoryResponse['users']) => {
     const server = await api.get<HistoryResponse>('/api/voice/history');
@@ -135,14 +140,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loadAccount = useCallback(async (baseProfile?: Omit<Profile, 'balance'>) => {
     if (!baseProfile) throw new Error('Account identity was not returned.');
     const basicProfile = initialProfile(baseProfile);
+    const epoch = authEpochRef.current;
     activeUserIdRef.current = baseProfile.id;
     try {
       const bootstrap = await api.get<BootstrapResponse>('/api/mobile/bootstrap');
+      if (epoch !== authEpochRef.current || activeUserIdRef.current !== baseProfile.id) return;
       const mergedProfile = { ...baseProfile, ...bootstrap.profile };
       setProfile({ ...mergedProfile, balance: bootstrap.account.balance == null ? null : Number(bootstrap.account.balance), can_call: bootstrap.account.can_call !== false, currency: bootstrap.account.currency });
       if (bootstrap.account.rates?.length) setRates(normalizeRates(bootstrap.account.rates));
       setCallerNumbers(bootstrap.numbers ?? []);
       const storedHistory = await readHistory(mergedProfile.id);
+      if (epoch !== authEpochRef.current || activeUserIdRef.current !== baseProfile.id) return;
       directoryRef.current = bootstrap.directory || [];
       const mergedHistory = mergeHistory(
         storedHistory.map((call) => normalizeHistoryIdentity(call, directoryRef.current)),
@@ -151,11 +159,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       historyRef.current = mergedHistory;
       setHistory(mergedHistory);
       await AsyncStorage.setItem(historyKey(mergedProfile.id), JSON.stringify(mergedHistory));
-      setTimeout(() => refreshServerHistory(mergedProfile.id, bootstrap.directory || []).catch(() => undefined), 5_000);
+      if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = setTimeout(() => {
+        if (epoch === authEpochRef.current) void refreshServerHistory(mergedProfile.id, bootstrap.directory || []).catch(failure => logFailure('history refresh', failure));
+      }, 5_000);
       return;
-    } catch {
+    } catch (failure) {
+      logFailure('account refresh', failure);
       const storedHistory = await readHistory(baseProfile.id);
-      if (activeUserIdRef.current !== baseProfile.id) return;
+      if (epoch !== authEpochRef.current || activeUserIdRef.current !== baseProfile.id) return;
       setProfile({ ...basicProfile, can_call: false });
       setCallerNumbers([]);
       historyRef.current = storedHistory;
@@ -165,32 +177,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refreshServerHistory]);
 
   useEffect(() => {
+    const epoch = ++authEpochRef.current;
+    let cached = false;
     const restore = async () => {
       try {
-        if (!await api.getSessionToken()) return;
+        const token = await api.getSessionToken();
+        if (!token || epoch !== authEpochRef.current) return;
+        const snapshot = await readSessionSnapshot(token).catch(failure => { logFailure('read account snapshot', failure); return null; });
+        if (epoch !== authEpochRef.current) return;
+        if (snapshot) {
+          cached = true;
+          activeUserIdRef.current = snapshot.id;
+          setProfile(initialProfile(snapshot));
+          setAuthenticated(true);
+          setLoading(false);
+        }
         const session = await api.get<SessionResponse>('/api/auth/session');
+        if (epoch !== authEpochRef.current) return;
         setProfile(initialProfile(session.profile));
         setAuthenticated(true);
-        void loadAccount(session.profile).catch(() => undefined);
+        setLoading(false);
+        void saveSessionSnapshot(token, session.profile).catch(failure => logFailure('save account snapshot', failure));
+        void loadAccount(session.profile).catch(failure => logFailure('account bootstrap', failure));
       } catch (restoreError) {
+        if (epoch !== authEpochRef.current) return;
         // Only discard the stored token when the server rejected it; a network
         // or server outage at launch must not sign the user out.
         const status = (restoreError as { status?: number } | null)?.status;
-        if (status === 401 || status === 403) await api.clearSessionToken();
+        if (status !== 401 && status !== 403 && cached) { logFailure('session revalidation deferred', restoreError); return; }
+        activeUserIdRef.current = null;
         setAuthenticated(false);
         setProfile(null);
+        if (status === 401 || status === 403) {
+          ++authEpochRef.current;
+          await Promise.all([api.clearSessionToken(), clearSessionSnapshot()]);
+        }
       } finally {
-        setLoading(false);
+        if (epoch === authEpochRef.current || !cached) setLoading(false);
       }
     };
     restore();
+    return () => { ++authEpochRef.current; if (historyTimerRef.current) clearTimeout(historyTimerRef.current); };
   }, [loadAccount]);
 
   const signIn = useCallback(async (email: string, password: string) => {
+    ++authEpochRef.current;
     setLoading(true);
     try {
       const result = await api.post<LoginResponse>('/api/auth/login', { email: email.trim(), password });
       await api.saveSessionToken(result.token);
+      void saveSessionSnapshot(result.token, result.profile).catch(failure => logFailure('save account snapshot', failure));
       setProfile(initialProfile(result.profile));
       setAuthenticated(true);
       setLoading(false);
@@ -206,10 +242,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccount]);
 
   const enrollWithQr = useCallback(async (token: string) => {
+    ++authEpochRef.current;
     setLoading(true);
     try {
       const result = await api.post<LoginResponse>('/api/auth/enroll', { token });
       await api.saveSessionToken(result.token);
+      void saveSessionSnapshot(result.token, result.profile).catch(failure => logFailure('save account snapshot', failure));
       setProfile(initialProfile(result.profile));
       setAuthenticated(true);
       setLoading(false);
@@ -226,6 +264,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await signOutVoiceDevice();
+    ++authEpochRef.current;
+    if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
     setAuthenticated(false);
     setProfile(null);
     activeUserIdRef.current = null;
@@ -233,13 +273,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     historyRef.current = [];
     setHistory([]);
     await api.clearSessionToken();
+    await clearSessionSnapshot();
   }, []);
 
   const signInWithPhone = useCallback(async (challengeId: string, code: string) => {
+    ++authEpochRef.current;
     const result = await api.post<LoginResponse>('/api/auth/phone', { step: 'verify', challengeId, code });
     if (result.profile.account_type !== 'individual' || result.profile.role !== 'individual') throw new Error('Individual account verification failed.');
     const next = initialProfile(result.profile);
     await api.saveSessionToken(result.token);
+    void saveSessionSnapshot(result.token, result.profile).catch(failure => logFailure('save account snapshot', failure));
     setProfile(next);
     setAuthenticated(true);
     void loadAccount(result.profile).catch(() => console.warn('[Vocivo Auth] Account refresh failed.'));

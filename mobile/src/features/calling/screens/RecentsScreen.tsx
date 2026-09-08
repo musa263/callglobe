@@ -3,6 +3,7 @@ import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput
 import { Clock3, Pause, Phone, PhoneMissed, Play, Search, Trash2, Voicemail } from 'lucide-react-native';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeading } from '../../../shared/components/PageHeading';
 import { useAuth } from '../../auth/AuthContext';
 import { api } from '../../../shared/api';
 import type { CallLog, VoicemailMessage } from '../../../shared/types';
@@ -89,7 +90,7 @@ export function RecentsScreen({ onRedial }: { onRedial: (call: CallLog) => void 
   return (
     <View style={[styles.page, { paddingTop: Math.max(insets.top, 18) }]}>
       <View style={styles.header}>
-        <View><Text style={styles.eyebrow}>CALL ACTIVITY</Text><Text style={styles.title}>Recents</Text></View>
+        <PageHeading title="Recents" />
         <Pressable accessibilityLabel="Search activity" onPress={() => { setSearching((value) => !value); if (searching) setQuery(''); }} style={styles.search}><Search size={21} color={colors.textMuted} /></Pressable>
       </View>
       {searching && <TextInput autoFocus value={query} onChangeText={setQuery} placeholder="Search name or number" placeholderTextColor={colors.textFaint} style={styles.searchInput} />}

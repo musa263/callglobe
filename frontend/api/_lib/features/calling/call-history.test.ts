@@ -82,3 +82,10 @@ test('unclassified SIP identities never appear as phone numbers in server histor
   assert.equal(call.destination_number, '');
   assert.equal(call.destination_name, 'Unknown caller');
 });
+
+test('authorized admin with an extension can view colleagues internal calls', () => {
+  const events = [event({ flow:'internal', sourceExtensionId:'alice', destinationExtensionId:'bob', sourceExtension:'2001', destinationExtension:'2002' })];
+  assert.equal(callHistoryFromEvents(events, 'primary', 100, {viewAll:true, extensionId:'admin'}).length, 1);
+  assert.equal(callHistoryFromEvents(events, 'primary', 100, {viewAll:false, extensionId:'admin'}).length, 0);
+  assert.equal(callHistoryFromEvents(events, 'another', 100, {viewAll:true, extensionId:'admin'}).length, 0);
+});

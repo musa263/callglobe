@@ -58,3 +58,16 @@ test('a nonce the API issued is accepted for its user until it expires, and for 
     if (previous === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = previous;
   }
 });
+
+test('nonce expiry is exclusive at the deadline', () => {
+  const previous = process.env.AUTH_SECRET;
+  process.env.AUTH_SECRET = 'auth-secret-for-tests';
+  try {
+    const issued = new Date('2026-09-03T12:00:00Z');
+    const nonce = issueSipNonce('alice', issued);
+    assert.equal(sipNonceIsValid(nonce, 'alice', new Date('2026-09-03T12:04:59.999Z')), true);
+    assert.equal(sipNonceIsValid(nonce, 'alice', new Date('2026-09-03T12:05:00Z')), false);
+  } finally {
+    if (previous === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = previous;
+  }
+});

@@ -45,9 +45,32 @@ UDP, TCP and WebSocket probes cover valid requests, missing required headers,
 CSeq errors, exhausted hop counts and the WebSocket Content-Length exception.
 The temporary container is removed on success or failure. Ports must be free.
 
-This gate does not exercise authentication, registration, downstream call
-routing, media, transaction retransmission timers or native client behavior.
-It needs no production credentials and does not deploy anything.
+The delivery phase also exercises registrar and transaction routing with local
+SIP peers, including delayed registration, answer/ACK/BYE, cancellation, and
+expiry. It replaces admission and media with fixtures; it does not prove live
+authentication, RTP, carrier routing, or native behavior. It needs no production
+credentials and does not deploy anything.
+
+## Extension ringback and answer delivery
+
+An already-registered receiver is relayed immediately. Only calls with no
+contact are suspended while push wakes a device. REGISTER drains the AOR's
+bounded pending-transaction queue and calls `t_continue` before forwarding the
+invitation; active transactions use TSILO for additional device contacts.
+The AOR lock covers contact lookup through transaction storage, so registration
+cannot fall between them. Each waiting entry has its own 45-second deadline;
+the queue expires independently and retains simultaneous callers.
+
+Never append receiver branches to a transaction left in `t_suspend`:
+Kamailio 5.8.4 discards responses while `T_ASYNC_SUSPENDED` remains set. That
+loses both the 180 that starts web/mobile caller ringback and the receiver's
+200 answer. The resumed route must not rerun `rtpengine_manage` in its failure
+context, which would delete the already-created media offer.
+
+WebRTC offers/answers use `rtcp-mux-offer rtcp-mux-require` and
+`UDP/TLS/RTP/SAVPF`. The old `RTCP-MUX` flag was rejected by the running
+rtpengine and did not enforce the requested multiplexing behavior.
+
 
 ## Clients
 
@@ -120,3 +143,81 @@ originate a call on the account.
 The list is rendered into `/etc/kamailio/trunk-sources.cfg` at container start
 and included by `kamailio.cfg`, so `docker compose logs kamailio` reports how
 many entries were accepted and names any it could not parse.
+
+## Diagnostic accuracy and expired authentication
+
+Use `gh workflow run ops-sip-edge.yml -f action=call-trace -f host=sip`.
+The default window is two hours; `-f since=30m` changes the container-log window.
+FreeSWITCH file output is a bounded tail and can contain older startup entries.
+The action does not query the database or automatically correlate a SIP Call-ID.
+Its Kamailio filter includes ACK/UPDATE/PRACK and preserves rejections from the
+listed carrier/loopback sources without using unsupported grep lookahead.
+
+For media diagnostics use `docker compose logs --since 10m rtpengine coturn`
+from the deployed SIP directory. RTPEngine performs WebRTC/carrier media
+interoperation; coturn provides STUN/TURN relay connectivity. No matching errors
+is not evidence of two-way RTP. The `internal` FreeSWITCH profile is disabled;
+inspect `sofia status` and trace the active `external` or `trunk` profile for the
+leg under investigation. Packet capture, profile tracing, and two-way audio
+acceptance require a bounded reproduction on the host and actual clients.
+
+The matching auth API reports a verified expired Digest with `stale: true`.
+Kamailio returns a fresh nonce with `stale=true`, allowing SIP.js's bounded stale
+challenge retry. It resets challenge variables for each request and rejects
+missing/malformed nonce responses with 503. Replay, identity, and current-access
+checks remain enforced. This is local code coverage until the changed config has
+passed the pinned Kamailio parser and a REGISTER/401/REGISTER/200 wire test.
+
+## WSS connectivity diagnostics
+
+Run `gh workflow run sip-connectivity.yml` for read-only proxy directives,
+listener/firewall status and aggregate Nginx/Kamailio error categories. It excludes
+credentials and raw SIP packets. Transport correlation uses the last REGISTER on
+each worker and is diagnostic evidence, not proof of client identity. DigitalOcean
+cloud firewall rules need separate access. `call-trace` continues past empty or
+unavailable service logs and labels those sections, rather than aborting before
+Kamailio output. An empty section must not be read as a healthy service.
+
+## Inbound audio diagnostics
+
+The `Inbound audio diagnostics` workflow accepts a FreeSWITCH channel UUID.
+It reads the retained call log, receptionist stages, runtime RTP port range,
+selected SDP media fields and PCM statistics for the exact greeting files used.
+It does not place calls, restart services, alter routing or export caller audio.
+Missing retained logs are reported as missing evidence. File energy and playback
+commands do not establish that RTP reached the caller; confirm with a handset
+and, where necessary, live media counters or a scoped capture.
+
+## Shared carrier IP connectivity
+
+`Carrier connectivity diagnostics` accepts the carrier IPv4/UDP port and the
+customer's expected public IPv4. It sends at most two SIP OPTIONS requests per
+target from the deployed edge, reports the socket source address and matching
+SIP response code, then checks whether the configured operations SSH identity can
+access the customer host. It places no calls and changes no services, DNS, trunk
+permissions or PBX routes. No response can mean carrier filtering or lack of
+OPTIONS support; a response does not prove authorized calls or two-way media.
+An expected IP in the portal cannot change the network source IP of another host.
+
+Set `customer_ssh_via_edge=true` when customer SSH is restricted to the existing
+Vocivo edge. The runner uses that edge as an SSH jump host; its private operations
+key stays on the runner and SSH agent forwarding is not enabled. A reachable
+host can still reject that identity. Provisioning access or changing a firewall
+requires separate authorization; the diagnostic workflow does neither.
+
+Run `python3 -m unittest discover -s services/sip/tests -p test_carrier_connectivity.py`
+for the bounded-probe tests; those tests use socket fixtures.
+
+## Tenant-owned carriers
+
+The authenticated XML binding now selects outbound gateways from a signed tenant
+route, including when inbound SIP is disabled. Static outbound fallback returns
+503. Operator gateway files live in `/opt/vocivo/carriers`, outside source sync,
+and are loaded under the public trunk profile. Company forms alone cannot
+activate them. FreeSWITCH is pinned to the previously deployed 1.10.12 image.
+
+See [tenant carrier activation](../../docs/runbooks/tenant-carrier-trunks.md) for
+IP ownership, registration/TLS, inbound-port requirements, deployment records,
+rollback and real-carrier acceptance. The Docker tenant-carriers workflow checks
+actual SIP, RTP echo, caller ID, gateway isolation and capacity against loopback
+peers. It does not certify Go Telecom, physical devices or inbound deployment.

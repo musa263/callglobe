@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../../auth/auth.js';
-import { listCallEvents } from '../call-event-store.js';
+import { listCompleteTenantCallEvents } from '../call-event-store.js';
 import { callHistoryFromEvents } from '../call-history.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
@@ -13,7 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const organizationId = sessionOrganizationId(session, await readPbxConfig());
-    const [directory, events] = await Promise.all([listExtensions(organizationId), listCallEvents(250, organizationId)]);
+    const [directory, events] = await Promise.all([listExtensions(organizationId), listCompleteTenantCallEvents(organizationId)]);
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({
       calls: callHistoryFromEvents(events, organizationId, 100, {

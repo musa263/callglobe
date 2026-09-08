@@ -70,23 +70,24 @@ export function MessagingProvider({ children }: { children: React.ReactNode }) {
     if (transport === 'internal' && !/^\d{2,5}$/.test(normalized)) throw new Error('Use a valid company extension.');
     if (!body) throw new Error('Write a message before sending.');
     if (body.length > 1600) throw new Error('Messages can contain up to 1,600 characters.');
-    const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const retry = messages.find(message => message.status === 'failed' && message.text === body && message.to === (transport === 'internal' ? `extension:${normalized}` : normalized) && message.id.startsWith('local-'));
+    const localId = retry?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const destination = transport === 'internal' ? `extension:${normalized}` : normalized;
     const draft: SmsMessage = { id: localId, to: destination, contactName, text: body, status: 'sending', direction: 'outbound', transport, createdAt: new Date().toISOString() };
-    persist((current) => [draft, ...current]);
+    persist((current) => [draft, ...current.filter(message => message.id !== localId)]);
     try {
       const sender = callerNumbers.find((number) => number.source === 'owned' && number.messaging_enabled);
       if (transport === 'sms' && !sender) throw new Error('External SMS needs an SMS-enabled number assigned by your administrator. You can still message company extensions.');
       const result = await api.post<{ id: string; status?: string; created_at?: string }>('/api/telnyx/messages', transport === 'internal'
         ? { to_extension: normalized, text: body }
-        : { to: normalized, text: body, from: sender?.phone_number });
-      persist((current) => current.map((message) => message.id === localId ? { ...message, id: result.id || localId, status: 'sent', createdAt: result.created_at || message.createdAt } : message));
+        : { to: normalized, text: body, from: sender?.phone_number, operationId: localId });
+      persist((current) => current.map((message) => message.id === localId ? { ...message, id: result.id || localId, status: result.status === 'sending' ? 'sending' : 'sent', createdAt: result.created_at || message.createdAt } : message));
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Message could not be sent.';
       persist((current) => current.map((message) => message.id === localId ? { ...message, status: 'failed', error: reason } : message));
       throw error;
     }
-  }, [callerNumbers, persist]);
+  }, [callerNumbers, persist, messages]);
 
   const suggestReplies = useCallback(async (input: { draft: string; recipient: string; companyName?: string; tone?: string; context?: string[] }) => {
     const result = await api.post<{ suggestions: string[] }>('/api/ai/replies', {

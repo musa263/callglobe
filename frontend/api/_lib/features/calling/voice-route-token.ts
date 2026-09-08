@@ -6,6 +6,9 @@ export type VoiceRouteAuthorization = {
   organizationId: string;
   destination: string;
   callerId?: string;
+  carrierTrunkId?: string;
+  carrierRevision?: number;
+  carrierGateway?: string;
   callerName?: string;
   callerPhotoUrl?: string;
   callerExtension?: string;
@@ -28,6 +31,9 @@ export function createVoiceRouteToken(route: Omit<VoiceRouteAuthorization, 'expi
     o: route.organizationId,
     d: route.destination,
     c: route.callerId || '',
+    t: route.carrierTrunkId,
+    v: route.carrierRevision,
+    g: route.carrierGateway,
     n: route.callerName || '',
     p: route.callerPhotoUrl || '',
     x: route.callerExtension || '',
@@ -67,6 +73,13 @@ export function verifyVoiceRouteToken(token: string, options: { allowExpired?: b
       expiresAt: decoded.e,
     };
     if (typeof decoded.c === 'string' && decoded.c) authorization.callerId = decoded.c;
+    if (decoded.t !== undefined || decoded.v !== undefined || decoded.g !== undefined) {
+      if (typeof decoded.t !== 'string' || !decoded.t || !Number.isSafeInteger(decoded.v) || Number(decoded.v) < 1
+        || typeof decoded.g !== 'string' || !/^byoc_[a-f0-9]{32}$/.test(decoded.g) || decoded.f !== 'outbound') return null;
+      authorization.carrierTrunkId = decoded.t;
+      authorization.carrierRevision = Number(decoded.v);
+      authorization.carrierGateway = decoded.g;
+    }
     if (typeof decoded.n === 'string' && decoded.n) authorization.callerName = decoded.n;
     if (typeof decoded.p === 'string' && decoded.p) authorization.callerPhotoUrl = decoded.p;
     if (typeof decoded.x === 'string' && decoded.x) authorization.callerExtension = decoded.x;

@@ -1,7 +1,8 @@
+import { SignJWT } from 'jose';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { VercelRequest } from '@vercel/node';
-import { createSession, requireOwner, requireSession } from './auth.js';
+import { requireOwner, requireSession } from './auth.js';
 
 test('owner authentication fails closed when its revocation store is unavailable', async () => {
   const previous = { DATABASE_URL: process.env.DATABASE_URL, POSTGRES_URL: process.env.POSTGRES_URL, AUTH_SECRET: process.env.AUTH_SECRET };
@@ -10,7 +11,7 @@ test('owner authentication fails closed when its revocation store is unavailable
   delete process.env.POSTGRES_URL;
   process.env.AUTH_SECRET = 'local-test-secret-not-a-production-key';
   try {
-    const token = await createSession('owner@example.invalid');
+    const token = await new SignJWT({role:'superadmin'}).setSubject('vocivo-owner').setIssuer('vocivo-vercel').setAudience('vocivo-mobile').setIssuedAt().setExpirationTime('1h').setProtectedHeader({alg:'HS256'}).sign(new TextEncoder().encode(process.env.AUTH_SECRET));
     const req = { headers: { authorization: `Bearer ${token}` } } as VercelRequest;
     await assert.rejects(requireOwner(req), /session verification is temporarily unavailable/);
     // A failed lookup must not cache zero and authorize the following request.

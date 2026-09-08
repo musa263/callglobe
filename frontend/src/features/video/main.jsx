@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { initialize } from '@telnyx/video';
 import { Camera, CameraOff, Mic, MicOff, PhoneOff, RefreshCw } from 'lucide-react';
 import './video.css';
+import { BrandHeader } from '../../shared/components/BrandHeader';
 
 const values = new URLSearchParams(location.hash.replace(/^#/, ''));
 
@@ -40,4 +41,4 @@ function VideoRoom() {
   return <main className="video-room"><video ref={remoteRef} className="remote-video" autoPlay playsInline /><video ref={localRef} className={`local-video ${cameraOff ? 'hidden' : ''}`} autoPlay playsInline muted />{cameraOff && <div className="local-avatar">{photo ? <img src={photo} alt={name} /> : <span>{name.charAt(0).toUpperCase()}</span>}</div>}<div className="video-status"><span />{status}</div><div className="video-controls"><button className={muted ? 'active' : ''} onClick={toggleMute}>{muted ? <MicOff /> : <Mic />}</button><button className={cameraOff ? 'active' : ''} onClick={toggleCamera}>{cameraOff ? <CameraOff /> : <Camera />}</button><button onClick={switchCamera}><RefreshCw /></button><button className="leave" onClick={leave}><PhoneOff /></button></div></main>;
 }
 
-ReactDOM.createRoot(document.getElementById('video-root')).render(<VideoRoom />);
+ReactDOM.createRoot(document.getElementById('video-root')).render(<><BrandHeader /><VideoRoom /></>);

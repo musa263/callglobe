@@ -59,8 +59,6 @@ async function responseFor() {
       accountType: organization?.accountType || 'business',
     };
   });
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const recent = state.entries.filter((entry) => Date.parse(entry.createdAt) >= cutoff);
   const customerLiabilityMinor = wallets.reduce((total, wallet) => total + wallet.availableMinor + wallet.reservedMinor, 0);
   const carrierFunds = treasury.balanceMinor === null ? null : Math.max(0, treasury.balanceMinor) + Math.max(0, treasury.availableCreditMinor || 0);
   return {
@@ -68,8 +66,8 @@ async function responseFor() {
     summary: {
       customerLiabilityMinor,
       reservedMinor: wallets.reduce((total, wallet) => total + wallet.reservedMinor, 0),
-      credits30dMinor: recent.filter((entry) => entry.direction === 'credit').reduce((total, entry) => total + entry.amountMinor, 0),
-      debits30dMinor: recent.filter((entry) => entry.direction === 'debit').reduce((total, entry) => total + entry.amountMinor, 0),
+      credits30dMinor: state.totals30d.credits,
+      debits30dMinor: state.totals30d.debits,
       coveragePercent: carrierFunds === null || customerLiabilityMinor === 0 ? null : Math.round(carrierFunds / customerLiabilityMinor * 10_000) / 100,
     },
     wallets,

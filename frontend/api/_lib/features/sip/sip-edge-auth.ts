@@ -71,9 +71,14 @@ export function issueSipNonce(username: string, now = new Date()) {
 }
 
 export function sipNonceIsValid(nonce: string, username: string, now = new Date()) {
+  return sipNonceStatus(nonce, username, now) === 'valid';
+}
+
+/** Expiry is recoverable only for a nonce whose signature and owner verify. */
+export function sipNonceStatus(nonce: string, username: string, now = new Date()): 'valid' | 'expired' | 'invalid' {
   const match = /^(\d{1,12})\.([A-Za-z0-9_-]{20,})$/.exec(nonce);
-  if (!match) return false;
+  if (!match) return 'invalid';
   const expiresAt = Number(match[1]);
-  if (!Number.isFinite(expiresAt) || expiresAt * 1000 < now.getTime()) return false;
-  return secretMatches(signedSipNonce(username, expiresAt), match[2]);
+  if (!Number.isFinite(expiresAt) || !secretMatches(signedSipNonce(username, expiresAt), match[2])) return 'invalid';
+  return expiresAt * 1000 <= now.getTime() ? 'expired' : 'valid';
 }

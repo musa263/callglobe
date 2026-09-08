@@ -27,7 +27,7 @@ export type SmsMessage = {
   from?: string;
   contactName?: string;
   text: string;
-  status: 'sending' | 'sent' | 'received' | 'failed';
+  status: 'sending' | 'sent' | 'received' | 'delivered' | 'failed';
   direction: 'inbound' | 'outbound';
   transport?: 'sms' | 'internal';
   createdAt: string;
@@ -51,7 +51,7 @@ export type CallerNumber = {
   status: string;
   receives_calls: boolean;
   messaging_enabled?: boolean;
-  source?: 'owned' | 'verified';
+  source?: 'owned' | 'verified' | 'carrier';
 };
 
 export type CallLog = {

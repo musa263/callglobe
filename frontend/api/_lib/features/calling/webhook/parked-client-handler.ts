@@ -3,7 +3,7 @@ import { listExtensionSipUsernames } from '../../organizations/pbx.js';
 import { accessForOrganization } from '../../organizations/saas-access.js';
 import { destinationSipUrisForInternalDial, isAllowedInternalSipDestination, voiceDestinationsMatch } from '../internal-sip.js';
 import { saveOutboundCallPair } from '../outbound-call-store.js';
-import { terminateOutboundPair } from '../outbound-cancel.js';
+import { terminateOutboundPair, hangupCallControlIds } from '../outbound-cancel.js';
 import { parkedDestinationDialInput, parkedFlowUsesNativeBridge, parkedInternalDialTargets } from '../parked-destination-dial.js';
 import { callAction, dialCall, dialCallLegs, primaryVoiceCallerId } from '../voice-control.js';
 import { isVoiceRouteId } from '../voice-route-id.js';
@@ -41,8 +41,9 @@ function invalidReservationReason(input: {
 }
 
 async function rejectParkedCall(callControlId: string, eventId: string, command: string, operation: string) {
-  await callAction(callControlId, 'hangup', { command_id: `${eventId}-${command}` })
-    .catch((error) => logWebhookFailure(operation, error));
+  if (!await hangupCallControlIds([callControlId], `${eventId}-${command}`)) {
+    throw new Error(`${operation}: carrier termination is pending.`);
+  }
 }
 
 export async function handleParkedClientInitiated({ callControlId, eventId, parkedFlow, payload }: ParkedClientInput) {
@@ -184,6 +185,6 @@ export async function handleParkedClientInitiated({ callControlId, eventId, park
   await saveOutboundCallPair(pair);
   const updatedRoute = await updateVoiceRoute(routeId, { phase: 'ringing' });
   if (updatedRoute && ['ended', 'failed'].includes(updatedRoute.phase)) {
-    await terminateOutboundPair(pair, `${eventId}-canceled`);
+    if (!(await terminateOutboundPair(pair, `${eventId}-canceled`)).complete) throw new Error('Canceled call termination is pending.');
   }
 }

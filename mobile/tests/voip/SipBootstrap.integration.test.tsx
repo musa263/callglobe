@@ -62,6 +62,34 @@ test('foreground and push boot share one in-flight registration', async () => {
   expect(stack.start).toHaveBeenCalledTimes(1);
 });
 
+test('secure cache reads overlap session restoration but cannot register before authentication', async () => {
+  cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
+  let finish!: (token: string) => void;
+  (api.getSessionToken as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const boot = ensureSipRegistration();
+  expect(SecureStore.getItemAsync).toHaveBeenCalledWith('vocivo.secure.sip-session.v1');
+  expect(stack.start).not.toHaveBeenCalled();
+  finish('signed-session-a');
+  await boot;
+  expect(api.post).not.toHaveBeenCalled();
+  expect(stack.start).toHaveBeenCalledTimes(1);
+});
+
+test('a fresh cached credential cannot start signaling without a signed-in session', async () => {
+  cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
+  (api.getSessionToken as jest.Mock).mockResolvedValueOnce(null);
+  await expect(ensureSipRegistration()).rejects.toThrow('Sign in before receiving calls.');
+  expect(api.post).not.toHaveBeenCalled();
+  expect(stack.start).not.toHaveBeenCalled();
+});
+
+test('changing the session during secure bootstrap rejects the otherwise fresh cache', async () => {
+  cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
+  (api.getSessionToken as jest.Mock).mockResolvedValueOnce('signed-session-a').mockResolvedValueOnce('signed-session-b');
+  await expect(ensureSipRegistration()).rejects.toThrow('Calling session changed.');
+  expect(stack.start).not.toHaveBeenCalled();
+});
+
 test('logout invalidates a pending bootstrap before it can open a signaling socket', async () => {
   const client = createSipVoiceClient();
   let finish!: (value: typeof response) => void;
@@ -86,4 +114,38 @@ test.each(['ios', 'android'])('%s registration persists its installation identit
   expect(api.delete).toHaveBeenCalledWith(`/api/voice/sip-credentials?deviceId=${device.deviceId}&credentialId=${device.credentialId}`);
   expect(secureValues.has('vocivo.secure.sip-session.v1')).toBe(false);
   expect(secureValues.get('vocivo.secure.sip-device.v1')).toBe(device.deviceId);
+});
+
+test('an old week-long SIP cache with expired TURN is renewed before bootstrap', async () => {
+  const expiredIce = [{ urls: 'turn:relay.example:3478', username: `${Math.floor(Date.now() / 1000) - 1}:employee`, credential: 'old-turn' }];
+  cache({ sessionToken: 'signed-session-a', config: { ...config, iceServers: expiredIce }, expiresAt: Date.now() + 7 * 86400_000 });
+  await ensureSipRegistration();
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(createSipJsStack).toHaveBeenCalledWith(expect.objectContaining({ iceServers: config.iceServers }), expect.anything());
+});
+
+test('cached TURN expiry bounds the next scheduled configuration refresh', async () => {
+  const expiry = Math.floor(Date.now() / 1000) + 120;
+  const iceServers = [{ urls: 'turn:relay.example:3478', username: `${expiry}:employee`, credential: 'turn' }];
+  cache({ sessionToken: 'signed-session-a', config: { ...config, iceServers }, expiresAt: Date.now() + 7 * 86400_000 });
+  const lifetime = await ensureSipRegistration();
+  expect(api.post).not.toHaveBeenCalled();
+  expect(lifetime).toBeLessThanOrEqual(120);
+  expect(lifetime).toBeGreaterThan(100);
+});
+
+
+test('a forced network renewal is not lost behind cached foreground bootstrap', async () => {
+  cache({sessionToken:'signed-session-a',config,expiresAt:Date.now()+3600_000});
+  let started!: () => void;
+  const starting = new Promise<void>(resolve => { started = resolve; });
+  let finish!: () => void;
+  stack.start.mockImplementationOnce(() => { started(); return new Promise<void>(resolve => { finish = resolve; }); });
+  const boot = ensureSipRegistration();
+  await starting;
+  const renewal = ensureSipRegistration(true);
+  const repeated = ensureSipRegistration(true);
+  finish();
+  await Promise.all([boot,renewal,repeated]);
+  expect(api.post).toHaveBeenCalledTimes(1);
 });
