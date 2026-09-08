@@ -22,6 +22,15 @@ permissions:
   contents: read
 
 jobs:
+  temporary-relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate temporary carrier restrictions and isolated Digest/RTP
+        run: |
+          python3 -m unittest discover -s services/sip/tests -p 'test_*carrier*.py'
+          python3 services/sip/tests/validate_relay.py
   ingress:
     runs-on: ubuntu-latest
     timeout-minutes: 10

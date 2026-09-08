@@ -43,6 +43,12 @@ persistence and real route logic; they do not connect to a carrier.
 
 ## Tenant BYOC calling
 
+Operator deployment records may include a canonical UTC `expiresAt` deadline
+for a temporary test. Expired records stop outbound grant/bridge admission and
+inbound resolution; invalid deadlines fail closed. An empty `inboundSources`
+array permits an outbound-only test and explicitly reports inbound as undeployed.
+It must not be used to claim an incoming carrier route exists.
+
 `carrier-number-service` publishes canonical ownership and disabled tombstones.
 `carrier-runtime` checks the operator deployment allowlist, source-bound inbound
 aliases, current revisions and explicit call direction. `carrier-gateway-config`

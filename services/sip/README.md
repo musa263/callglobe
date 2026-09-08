@@ -261,6 +261,33 @@ for the bounded-probe tests; those tests use socket fixtures.
 
 ## Tenant-owned carriers
 
+For a temporary carrier egress test beside an existing PBX,
+`tests/temporary_carrier_relay.py` renders a separate outbound-only FreeSWITCH
+profile. It requires Digest authentication, the exact Vocivo peer address, and
+the published tenant caller IDs before bridging to the specified carrier.
+It anchors RTP on the actual relay host, disables REGISTER, bounds calls to
+180 seconds, and never modifies 3CX or any existing DID destination.
+
+`tests/relay_operations.py` implements fixed install/remove actions. The
+`Temporary carrier relay` workflow uses the existing operations SSH identity
+and private `VOCIVO_TEMP_CARRIER_TEST` JSON. Authorize that identity on the
+relay with an expiry and a source restriction before using it. The original
+prepared isolated Docker runtime must be stopped. Use unused SIP/ESL ports and
+a dedicated RTP range outside the existing PBX range; permit only the Vocivo
+peer for new relay SIP traffic. Timers are armed before listeners/gateways are
+installed. Activation requires the matching API expiry support and an
+outbound-only operator deployment record with the same deadline. Remove the
+record, temporary gateway, relay, SSH entry, cloud firewall exceptions and
+temporary repository secret when done. Retain private evidence only as needed.
+No workflow here claims carrier or handset acceptance, or moves the public IP.
+
+Run `python3 services/sip/tests/validate_relay.py` with local Docker. It uses
+network-isolated loopback fixtures to test Digest, invalid passwords, source
+and caller-ID rejection, destination normalization and actual RTP echo. The
+core needs to finish startup before INVITEs; an early 503 is not readiness.
+Reference: [Sofia profiles](https://developer.signalwire.com/freeswitch/users-and-endpoints/sip-profiles/)
+and [gateway authentication](https://developer.signalwire.com/freeswitch/users-and-endpoints/gateways/).
+
 The authenticated XML binding now selects outbound gateways from a signed tenant
 route, including when inbound SIP is disabled. Static outbound fallback returns
 503. Operator gateway files live in `/opt/vocivo/carriers`, outside source sync,

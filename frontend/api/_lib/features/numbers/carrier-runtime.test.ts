@@ -56,3 +56,27 @@ test('operator gateway artifacts bind the real public IP and cannot activate a f
   assert.throws(() => carrierDeployments(JSON.stringify([{ ...deployment, gateway: 'telnyx' }])));
   assert.throws(() => carrierDeployments(JSON.stringify([deployment, deployment])));
 });
+
+test('temporary carrier deadlines stop both outbound grants and inbound resolution', async () => {
+  const { trunk, config, deployment, did } = carrierFixture();
+  const active = { ...deployment, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const expired = { ...deployment, expiresAt: new Date(Date.now() - 1).toISOString() };
+  assert.equal(carrierReadiness(trunk, [active]).status, 'ready');
+  assert.equal((await resolveCarrierOutbound(config, 'primary', did, [trunk], [active]))?.gateway, deployment.gateway);
+  assert.equal(carrierReadiness(trunk, [expired]).status, 'pending_activation');
+  await assert.rejects(resolveCarrierOutbound(config, 'primary', did, [trunk], [expired]), /temporary carrier test has ended/);
+  assert.equal(resolveInboundNumber(config, did, trunk.server, [active]), did);
+  assert.equal(resolveInboundNumber(config, did, trunk.server, [expired]), '');
+  for (const expiresAt of [null, '', '2026-02-30T00:00:00.000Z', 'tomorrow', 123]) {
+    assert.throws(() => carrierDeployments(JSON.stringify([{ ...deployment, expiresAt }])), /Invalid carrier deployment/);
+  }
+  assert.deepEqual(carrierDeployments(JSON.stringify([active])), [active]);
+});
+
+test('an outbound-only deployment admits outbound without claiming inbound activation', async () => {
+  const { trunk, config, deployment, did } = carrierFixture();
+  const outboundOnly = { ...deployment, inboundSources: [] };
+  assert.match(carrierReadiness(trunk, [outboundOnly]).reason, /Inbound calling has not been deployed/);
+  assert.equal((await resolveCarrierOutbound(config, 'primary', did, [trunk], [outboundOnly]))?.gateway, deployment.gateway);
+  assert.equal(resolveInboundNumber(config, did, trunk.server, [outboundOnly]), '');
+});

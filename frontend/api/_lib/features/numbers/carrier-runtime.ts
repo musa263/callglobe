@@ -7,7 +7,15 @@ import { pbxForOrganization, type PbxConfig } from '../organizations/pbx-config-
 export type CarrierDeployment = {
   organizationId: string; trunkId: string; revision: number; publicIp: string;
   gateway: string; inboundSources: string[];
+  /** Optional operator deadline for a temporary deployment, in UTC. */
+  expiresAt?: string;
 };
+
+const validDeadline = (value: unknown): value is string => typeof value === 'string'
+  && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+  && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+const deploymentExpired = (item: CarrierDeployment) => item.expiresAt !== undefined
+  && (!validDeadline(item.expiresAt) || Date.parse(item.expiresAt) <= Date.now());
 
 export function carrierGateway(trunk: Pick<CarrierTrunk, 'organizationId' | 'id' | 'revision' | 'connectionRevision'>) {
   return `byoc_${createHash('sha256').update(JSON.stringify([trunk.organizationId, trunk.id, trunk.connectionRevision || trunk.revision])).digest('hex').slice(0, 32)}`;
@@ -18,6 +26,7 @@ export function carrierDeployments(raw = process.env.VOCIVO_CARRIER_DEPLOYMENTS 
   if (!Array.isArray(entries) || entries.some(item => !item || typeof item.organizationId !== 'string' || !item.organizationId
     || typeof item.trunkId !== 'string' || !Number.isSafeInteger(item.revision) || item.revision < 1
     || isIP(item.publicIp) !== 4 || !Array.isArray(item.inboundSources) || item.inboundSources.some(ip => isIP(ip) !== 4)
+    || item.expiresAt !== undefined && !validDeadline(item.expiresAt)
     || item.gateway !== carrierGateway({ organizationId: item.organizationId, id: item.trunkId, revision: item.revision }))) {
     throw new Error('Invalid carrier deployment configuration.');
   }
@@ -30,8 +39,11 @@ export function carrierReadiness(trunk: CarrierTrunk, deployments = carrierDeplo
   if (trunk.authentication === 'unconfirmed') return { status: 'pending_activation', reason: 'Confirm the carrier authentication method.' };
   if (trunk.authentication === 'registration' && (!trunk.username || !trunk.hasPassword)) return { status: 'pending_activation', reason: 'Add the SIP username and password supplied by your carrier.' };
   if (!deployment) return { status: 'pending_activation', reason: `The PBX connection for ${trunk.publicIp} has not been deployed. Your carrier must allow calls from that address.` };
+  if (deploymentExpired(deployment)) return { status: 'pending_activation', reason: 'The temporary carrier test has ended. Deploy the permanent PBX connection before calling.' };
   if (deployment.revision !== (trunk.connectionRevision || trunk.revision) || deployment.publicIp !== trunk.publicIp) return { status: 'pending_activation', reason: 'The saved connection has changed. Apply this revision to the SIP edge before calling.' };
-  return { status: 'ready', reason: 'PBX connection configured. Verify inbound and outbound calls with two-way audio.', deployment };
+  return { status: 'ready', reason: deployment.inboundSources.length
+    ? 'PBX connection configured. Verify inbound and outbound calls with two-way audio.'
+    : 'Outbound PBX connection configured. Inbound calling has not been deployed. Verify outbound calls with two-way audio.', deployment };
 }
 
 export async function resolveCarrierOutbound(config: PbxConfig, organizationId: string, callerId: string, trunks?: CarrierTrunk[], deployments = carrierDeployments()) {
@@ -58,7 +70,7 @@ export function resolveInboundNumber(config: PbxConfig, supplied: string, source
     if (assignment.disabled || !assignment.organizationId) return false;
     if (assignment.source !== 'carrier') return did === `+${digits}`;
     if (!assignment.destinationType || (did !== `+${digits}` && assignment.inboundNumber !== digits)) return false;
-    return deployments.some(item => item.organizationId === assignment.organizationId && item.trunkId === assignment.carrierTrunkId
+    return deployments.some(item => !deploymentExpired(item) && item.organizationId === assignment.organizationId && item.trunkId === assignment.carrierTrunkId
       && item.revision === (assignment.carrierConnectionRevision || assignment.carrierTrunkRevision) && item.inboundSources.includes(sourceIp));
   });
   return matches.length === 1 ? matches[0][0] : '';
