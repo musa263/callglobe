@@ -292,6 +292,9 @@ Temporary gateway proxy and From domain name the relay, so OPTIONS as well as
 INVITEs target that host. Carrier Digest realm and carrier egress remain on the
 relay. After `remove`, the explicit `archive` action verifies removal and retains
 closed test evidence before a fresh bounded test can be installed.
+The `diagnose` action reads at most six temporary relay call records and emits
+only UUIDs, hangup/codec fields and SDP media descriptions. It excludes SIP
+credentials, ICE credentials, media keys and unrelated PBX records.
 
 Gateway deployment verifies the exact gateway name and its `trunk` profile after
 rescan; a successful reload response alone is insufficient. Keep an included
