@@ -85,17 +85,44 @@ test('carrier edits use revisions, preserve parallel creates and tolerate create
   await assert.rejects(store.save('tenant-a', { ...input, revision: 0, name: 'Different retry' }), /another tab/);
 });
 
+test('registration passwords stay encrypted and hidden, and route edits keep the connection revision', async () => {
+  const { store, objects } = memoryStore();
+  const input = { ...draft(), authentication: 'registration', username: 'sip-user', password: ' Private&secret123 ' };
+  const first = await store.save('tenant-a', input);
+  assert.equal(first.hasPassword, true);
+  assert.equal('password' in first, false);
+  assert.equal(JSON.stringify(await store.list('tenant-a')).includes(input.password), false);
+  assert.ok([...objects.values()].every(body => !body.includes(Buffer.from(input.password))));
+  const edited = await store.save('tenant-a', { ...first, notes: 'Edited destination details', password: '' });
+  assert.equal(edited.connectionRevision, first.connectionRevision);
+  assert.equal((await store.provisioning('tenant-a', edited.id, edited.revision)).password, input.password);
+  await assert.rejects(store.provisioning('tenant-b', edited.id, edited.revision));
+  await assert.rejects(store.provisioning('tenant-a', edited.id, first.revision));
+  const changed = await store.save('tenant-a', { ...edited, username: 'different-user' });
+  assert.equal(changed.hasPassword, false);
+  assert.notEqual(changed.connectionRevision, edited.connectionRevision);
+  const ip = await store.save('tenant-a', { ...changed, authentication: 'ip', password: 'unused' });
+  assert.equal((await store.provisioning('tenant-a', ip.id, ip.revision)).password, '');
+});
+
 function routeFixture(session: VocivoSession = { sub: 'company-admin', role: 'company_admin', organizationId: 'primary', accountId: 'admin-a' }, featureEnabled = true) {
   const config = defaultPbxConfig();
   config.organizations.push({ ...config.organizations[0], id: 'second', name: 'Second tenant', slug: 'second' });
   config.callHandling.ringGroups.push({ id: 'primary-group', name: 'Primary group', extension: '3000', strategy: 'ring_all', members: [], timeout: 20, fallback: '' });
   const { store } = memoryStore();
+  const operations: Array<{ organizationId: string; action: string; limit?: number }> = [];
   const handler = createCarrierTrunksHandler({
     requireAdmin: async () => ({ session, superadmin: session.role === 'superadmin', organizationId: session.organizationId }),
     readPbxConfig: async () => config,
     requireFeature: async () => { if (!featureEnabled) throw new Error('Feature not enabled'); return { superadmin: true }; },
     listExtensions: async org => [{ id: `${org}-extension` }] as Awaited<ReturnType<NonNullable<Parameters<typeof createCarrierTrunksHandler>[0]>['listExtensions']>>,
     store,
+  }, {
+    removeCompanyNumber: async organizationId => { operations.push({ organizationId, action: 'remove' }); },
+    useCarrierNumbers: async (organizationId, id, revision, limit) => {
+      operations.push({ organizationId, action: 'publish', limit });
+      return { ...normalizeCarrierTrunk({ ...draft(), id }, organizationId), revision, updatedAt: new Date().toISOString() };
+    },
   });
   async function request(method: string, body?: unknown, organizationId?: string) {
     let status = 200, result: any;
@@ -103,8 +130,22 @@ function routeFixture(session: VocivoSession = { sub: 'company-admin', role: 'co
     await handler({ method, body, query: organizationId ? { organizationId } : {}, headers: {} } as VercelRequest, res as unknown as VercelResponse);
     return { status, result };
   }
-  return { request, config, store };
+  return { request, config, store, operations };
 }
+
+test('publishing and removing carrier numbers require company scope and entitlements', async () => {
+  const fixture = routeFixture();
+  const body = { action: 'use-carrier-numbers', id: draft().id, revision: 1 };
+  assert.equal((await fixture.request('PATCH', body, 'second')).status, 403);
+  assert.equal((await fixture.request('PATCH', { ...body, organizationId: 'second' })).status, 409);
+  assert.equal(fixture.operations.length, 0);
+  assert.equal((await fixture.request('PATCH', body)).status, 200);
+  assert.deepEqual(fixture.operations[0], { action: 'publish', organizationId: 'primary', limit: 10000 });
+  assert.equal((await fixture.request('PATCH', { action: 'remove-company-number', phoneNumber: '+12025550000' })).status, 200);
+  assert.equal(fixture.operations[1].organizationId, 'primary');
+  assert.equal((await routeFixture(undefined, false).request('PATCH', body)).status, 403);
+  assert.equal((await routeFixture({ sub: 'vocivo-owner', role: 'superadmin' }).request('PATCH', body)).status, 400);
+});
 
 test('carrier API denies tenant overrides and stores unassigned numbers only in the authenticated company', async () => {
   const { request, store, config } = routeFixture();

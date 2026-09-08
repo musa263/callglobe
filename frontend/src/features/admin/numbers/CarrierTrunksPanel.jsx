@@ -8,9 +8,10 @@ import './carrier-trunks.css';
 const emptyNumber = () => ({ inboundNumber: '', callerId: '', destinationType: 'unassigned', destinationId: '' });
 const newDraft = () => ({ id: crypto.randomUUID(), revision: 0, name: '', provider: '', accountReference: '', server: '', port: 5060, transport: 'UDP', publicIp: '', hostingProvider: '', authentication: 'unconfirmed', username: '', mainNumber: '', outboundProxy: '', outboundProxyPort: 5060, channelLimit: null, inboundEnabled: null, outboundEnabled: null, numbers: [], notes: '' });
 
-export function CarrierTrunksPanel({ api, config, extensions }) {
+export function CarrierTrunksPanel({ api, config, extensions, onInventoryChange }) {
   const [trunks, setTrunks] = useState([]), [draft, setDraft] = useState(null);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   useEffect(() => {
     let current = true;
     setLoading(true);
@@ -34,14 +35,25 @@ export function CarrierTrunksPanel({ api, config, extensions }) {
       const result = await api('/api/admin/carrier-trunks', { method: 'PUT', body: draft });
       setTrunks(current => [...current.filter(item => item.id !== result.trunk.id), result.trunk]);
       setDraft(null);
+      await onInventoryChange?.();
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  }
+  async function useNumbers(trunk) {
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await api('/api/admin/carrier-trunks', { method: 'PATCH', body: { action: 'use-carrier-numbers', id: trunk.id, revision: trunk.revision } });
+      setNotice(`${trunk.name} numbers selected for this company. Their connection status is shown below.`);
+      await onInventoryChange?.();
     } catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   }
   return <section className="band carrier-trunks-panel">
     <div className="section-title"><div><h2>Company SIP trunks</h2><p>All carrier entries, connection details and DID destinations for {config.company.name}.</p></div><button className="primary" disabled={loading} onClick={() => { setError(''); setDraft(newDraft()); }}><Plus /> Add SIP trunk</button></div>
     {error && <div className="error-banner" role="alert">{error}</div>}
+    {notice && <p role="status">{notice}</p>}
     {loading ? <p role="status">Loading carrier trunks…</p> : trunks.length ? trunks.map(item =>
-      <CarrierTrunkDetails key={item.id} trunk={item} companyName={config.company.name} targets={targets} onEdit={trunk => { setError(''); setDraft(structuredClone(trunk)); }} />
+      <CarrierTrunkDetails key={item.id} trunk={item} companyName={config.company.name} targets={targets} busy={busy} onUseNumbers={useNumbers} onEdit={trunk => { setError(''); setDraft(structuredClone(trunk)); }} />
     ) : <p>No carrier configurations have been added for this company.</p>}
     <p className="hint">Saving keeps these details in this company workspace. Carrier authentication and SIP edge activation are required before this trunk carries calls.</p>
     {draft && <Modal wide title={draft.revision ? `Edit ${draft.name}` : 'Add SIP trunk'} subtitle={config.company.name} onClose={() => { if (!busy) setDraft(null); }}><form className="modal-form form-grid" onSubmit={save}>
@@ -59,6 +71,7 @@ export function CarrierTrunksPanel({ api, config, extensions }) {
       <Field label="Hosting provider"><input maxLength={100} value={draft.hostingProvider} onChange={e => field('hostingProvider', e.target.value)} /></Field>
       <Field label="Authentication method"><select value={draft.authentication} onChange={e => field('authentication', e.target.value)}><option value="unconfirmed">Awaiting carrier confirmation</option><option value="ip">IP authentication</option><option value="registration">SIP registration</option></select></Field>
       {draft.authentication === 'registration' && <Field label="SIP username" help="Credentials must be provisioned securely before activation."><input maxLength={100} value={draft.username} onChange={e => field('username', e.target.value)} autoComplete="off" /></Field>}
+      {draft.authentication === 'registration' && <Field label="SIP password" help={draft.hasPassword ? 'Password saved securely. Leave blank to keep it.' : 'Use the SIP password supplied by your carrier.'}><input type="password" maxLength={256} value={draft.password || ''} onChange={e => field('password', e.target.value)} autoComplete="new-password" /></Field>}
       <h3 className="wide carrier-editor-heading">Options</h3>
       <Field label="Simultaneous call limit" help="Saved carrier capacity; applied when the trunk is activated."><input type="number" min={1} max={10000} value={draft.channelLimit ?? ''} onChange={e => field('channelLimit', e.target.value === '' ? null : Number(e.target.value))} placeholder="Not specified" /></Field>
       {[['inboundEnabled', 'Inbound calls'], ['outboundEnabled', 'Outbound calls']].map(([key, label]) => <Field key={key} label={label}><select value={draft[key] == null ? '' : String(draft[key])} onChange={e => field(key, e.target.value === '' ? null : e.target.value === 'true')}><option value="">Not specified</option><option value="true">Allowed</option><option value="false">Disabled</option></select></Field>)}

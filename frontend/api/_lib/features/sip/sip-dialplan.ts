@@ -28,6 +28,8 @@ export type XmlCurlRequest = {
   vocivoCallerIdHeader: string;
   /** `X-Vocivo-Flow`, which Kamailio sets to `inbound` on a call the carrier delivered. */
   vocivoFlowHeader: string;
+  routeToken?: string;
+  carrierSourceIp?: string;
   stage: string;
   organizationId: string;
   did: string;
@@ -68,6 +70,8 @@ export function parseXmlCurlRequest(body: unknown): XmlCurlRequest {
     switchAddr: field(source, 'FreeSWITCH-IPv4'),
     vocivoCallerIdHeader: field(source, 'variable_sip_h_X-Vocivo-Caller-ID'),
     vocivoFlowHeader: field(source, 'variable_sip_h_X-Vocivo-Flow').toLowerCase(),
+    routeToken: field(source, 'variable_sip_h_X-Vocivo-Route-Token'),
+    carrierSourceIp: field(source, 'variable_sip_h_X-Vocivo-Carrier-Source'),
     stage: field(source, 'variable_vocivo_stage').toLowerCase(),
     organizationId: field(source, 'variable_vocivo_org'),
     did: field(source, 'variable_vocivo_did'),
@@ -115,6 +119,7 @@ export type SipDialplanInput = {
   promptFormat: 'wav' | 'mp3';
   recordingsDir: string;
   trunkGateway: string;
+  carrierCapacity?: { gateway: string; limit: number };
   /**
    * host:port of Vocivo's own receptionist, which FreeSWITCH reaches over the
    * Event Socket. Loopback on the SIP edge, because the receptionist runs on
@@ -283,7 +288,7 @@ function contact(extension: ExtensionUser) {
 function trunkLeg(input: SipDialplanInput, destination: string) {
   const callerId = e164.test(input.did) ? input.did : '';
   const variables = callerId
-    ? `{origination_caller_id_number=${callerId},origination_caller_id_name=Vocivo,sip_cid_type=pid,nolocal:sip_h_P-Asserted-Identity=<sip:${callerId}@sip.telnyx.com>}`
+    ? `{origination_caller_id_number=${callerId},origination_caller_id_name=Vocivo,sip_cid_type=pid${input.trunkGateway === 'telnyx' ? `,nolocal:sip_h_P-Asserted-Identity=<sip:${callerId}@sip.telnyx.com>` : ''}}`
     : '';
   return `${variables}sofia/gateway/${input.trunkGateway}/${destination}`;
 }
@@ -587,8 +592,11 @@ function fsCauseToVocivo(disposition: string) {
 function entryActions(input: SipDialplanInput) {
   const pbx = input.pbx;
   const assignment = pbx.numberAssignments[input.did];
+  if (!assignment || assignment.disabled || assignment.organizationId !== input.organizationId
+    || assignment.source === 'carrier' && !assignment.destinationType) return [action('respond', '480 Number unavailable'), action('hangup', 'NO_ROUTE_DESTINATION')];
   const caller = callerVars(input);
   const prelude = [
+    ...(input.carrierCapacity ? [action('limit', `hash vocivo-carrier ${input.carrierCapacity.gateway} ${input.carrierCapacity.limit} !NORMAL_CIRCUIT_CONGESTION`)] : []),
     action('answer'),
     // The carrier's media takes a moment to arrive after the answer; a prompt
     // that starts before it does loses its first word or two.

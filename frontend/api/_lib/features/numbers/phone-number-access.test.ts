@@ -26,3 +26,23 @@ test('builds the login caller-ID list without querying carrier inventory', () =>
     { phone: '+966535548337', source: 'verified', inbound: false, sms: false },
   ]);
 });
+
+test('detached numbers cannot authorize calls or reappear in the phone list', () => {
+  const config = defaultPbxConfig();
+  config.numberAssignments['+12025550123'] = { organizationId: 'primary', source: 'owned', disabled: true };
+  assert.equal(callerIdBelongsToOrganization('+12025550123', 'primary', config.numberAssignments), false);
+  assert.deepEqual(assignedNumbersForOrganization(config, 'primary'), []);
+});
+
+test('own-carrier mode excludes legacy caller IDs and labels imported DIDs as pending', () => {
+  const config = defaultPbxConfig();
+  config.company.callingMode = 'carrier';
+  config.numberAssignments = {
+    '+12025550123': { organizationId: 'primary', source: 'owned' },
+    '+966135110000': { organizationId: 'primary', source: 'carrier', carrierTrunkId: 'test' },
+  };
+  const numbers = assignedNumbersForOrganization(config, 'primary');
+  assert.deepEqual(numbers.map(item => item.phone_number), ['+966135110000']);
+  assert.equal(numbers[0].status, 'pending_activation');
+  assert.equal(numbers[0].receives_calls, false);
+});

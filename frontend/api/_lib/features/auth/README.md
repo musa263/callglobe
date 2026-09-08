@@ -34,3 +34,7 @@ Test with the owner-password regression suite and `bash verify.sh`. Hash equalit
 proves password preservation; a real signed-in browser remains a separate
 acceptance check. The web uses an HttpOnly `vocivo_session` cookie, mobile uses
 SecureStore, and both use the Vercel API's signed `vocivo-vercel` sessions.
+
+Mobile bootstrap resolves current tenant carrier records when the company uses
+BYOC, exposing only its published numbers and connection status. No carrier
+password or Telnyx inventory lookup is part of that response.

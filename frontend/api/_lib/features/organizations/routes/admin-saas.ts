@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAdmin } from '../../auth/auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { listExtensions } from '../pbx.js';
-import { PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
+import { defaultPbxConfig, organizationSettingsFrom, PbxConfigConflictError, readPbxConfig, savePbxConfig } from '../pbx-config-store.js';
 import {
   createSubscription, effectiveEntitlements, featureCatalog, publicTenantAdmin,
   readPlatformSaasState, readTenantSaasState, removeAllTenantAdmins, removeTenantAdmin,
@@ -106,7 +106,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         internalCallingEnabled: accountType === 'business' && input.internalCallingEnabled !== false,
         status: input.status === 'suspended' ? 'suspended' as const : 'active' as const,
       };
-      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization] }, { expectedUpdatedAt: config.updatedAt });
+      const newSettings = organizationSettingsFrom(defaultPbxConfig());
+      newSettings.company = { ...newSettings.company, name, callingMode: 'carrier' };
+      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization],
+        ...(!existing ? { organizationSettings: { ...config.organizationSettings, [id]: newSettings } } : {}),
+      }, { expectedUpdatedAt: config.updatedAt });
       state = await readPlatformSaasState(config);
       const planId = text(req.body?.subscription?.planId, 50) || (accountType === 'business' ? 'business' : 'starter');
       const subscription = createSubscription(id, planId, state, req.body?.subscription || {});

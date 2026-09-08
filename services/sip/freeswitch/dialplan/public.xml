@@ -10,23 +10,12 @@
         <action application="hangup" data="CALL_REJECTED"/>
       </condition>
     </extension>
-    <extension name="vocivo-outbound-pstn">
-      <condition field="network_addr" expression="^(PUBLIC_IP_REGEX|127\.0\.0\.1)$"/>
-      <condition field="${sip_h_X-Vocivo-Caller-ID}" expression="^\+[1-9]\d{6,14}$"/>
-      <!-- The route id is quoted into a shell command below, and it arrives as
-           a SIP header. Kamailio now replaces whatever the client sent with
-           the id the API vouched for, and this condition is the second lock on
-           the same door: an id that is not the shape /api/voice/route issues
-           does not match, so the call falls through to the unroutable
-           extension instead of reaching /bin/sh. Before both, a header of
-           "x; curl … | sh" ran as root on the media host. -->
-      <condition field="${sip_h_X-Vocivo-Route-ID}" expression="^[A-Za-z0-9_-]{16,80}$"/>
-      <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
-        <action application="set" data="hangup_after_bridge=true"/>
-        <action application="set" data="inherit_codec=true"/>
-        <action application="set" data="session_in_hangup_hook=true"/>
-        <action application="set" data="api_hangup_hook=system /bin/sh /opt/vocivo-fs/sip-hangup.sh ${sip_h_X-Vocivo-Route-ID} ${uuid} ${billsec}"/>
-        <action application="bridge" data="{origination_caller_id_number=${sip_h_X-Vocivo-Caller-ID},origination_caller_id_name=Vocivo,sip_cid_type=pid,absolute_codec_string=PCMU,PCMA,OPUS,nolocal:sip_h_P-Asserted-Identity=&lt;sip:${sip_h_X-Vocivo-Caller-ID}@sip.telnyx.com&gt;}sofia/gateway/telnyx/+$1"/>
+    <!-- The authenticated XML binding selects the current tenant carrier.
+         Missing/stale configuration must not fall back to a platform gateway. -->
+    <extension name="vocivo-outbound-unavailable">
+      <condition field="${sip_h_X-Vocivo-Flow}" expression="^outbound$">
+        <action application="respond" data="503 Call route unavailable"/>
+        <action application="hangup" data="CALL_REJECTED"/>
       </condition>
     </extension>
     <extension name="vocivo-telnyx-registered-client">

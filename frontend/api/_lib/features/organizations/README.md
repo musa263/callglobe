@@ -87,3 +87,8 @@ Regressions: `pbx-tenancy.test.ts`, `routes/admin-pbx.test.ts`,
 `request-organization.test.ts`, and `vocivo-extensions.test.ts` cover tenant
 defaults, stable legacy ownership, denied platform/foreign-tenant mutations,
 explicit workspace scope and the shared Vocivo directory lifecycle.
+
+New customer workspaces start in `company.callingMode: carrier`; existing
+workspaces retain their configured mode until an explicit carrier publication.
+Number assignments record trunk, configuration/connection revisions and national
+DID aliases. Disabled assignments are excluded from inbound tenant lookup.

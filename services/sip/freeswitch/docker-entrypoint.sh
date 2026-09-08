@@ -12,6 +12,17 @@ cp /opt/vocivo-fs/autoload_configs/console.conf.xml /etc/freeswitch/autoload_con
 cp /opt/vocivo-fs/sip_profiles/external.xml /etc/freeswitch/sip_profiles/external.xml
 cp /opt/vocivo-fs/sip_profiles/internal.xml /etc/freeswitch/sip_profiles/internal.xml
 cp /opt/vocivo-fs/sip_profiles/trunk.xml /etc/freeswitch/sip_profiles/trunk.xml
+mkdir -p /etc/freeswitch/sip_profiles/carriers
+for gateway_file in /etc/freeswitch/sip_profiles/carriers/byoc_*.xml; do
+  [ -f "$gateway_file" ] || continue
+  rm "$gateway_file"
+done
+if [ -d /opt/vocivo-carriers ]; then
+  for gateway_file in /opt/vocivo-carriers/byoc_*.xml; do
+    [ -f "$gateway_file" ] || continue
+    cp "$gateway_file" /etc/freeswitch/sip_profiles/carriers/
+  done
+fi
 cp /opt/vocivo-fs/dialplan/public.xml /etc/freeswitch/dialplan/public.xml
 cp /opt/vocivo-fs/dialplan/default.xml /etc/freeswitch/dialplan/default.xml
 cp /opt/vocivo-fs/directory/default.xml /etc/freeswitch/directory/default.xml
@@ -52,7 +63,7 @@ fi
 modules_conf=/etc/freeswitch/autoload_configs/modules.conf.xml
 cp "$vanilla/autoload_configs/modules.conf.xml" "$modules_conf"
 sed -i -e '/<load module="mod_verto"\/>/d' -e '/<load module="mod_signalwire"\/>/d' "$modules_conf"
-wanted="mod_http_cache mod_shout mod_curl mod_flite"
+wanted="mod_http_cache mod_shout mod_curl mod_flite mod_hash"
 if [ -n "${SIP_EDGE_SECRET:-}" ]; then
   # Call records go to the API whether inbound is on this edge or not: the
   # outbound and internal legs are here either way.
@@ -67,7 +78,7 @@ else
   rm -f /etc/freeswitch/autoload_configs/json_cdr.conf.xml
   echo "Vocivo: SIP_EDGE_SECRET is not set; call records are not posted to the API" >&2
 fi
-if [ "${VOCIVO_SIP_INBOUND:-0}" = "1" ]; then
+if [ -n "${SIP_EDGE_SECRET:-}" ]; then
   : "${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required for the inbound dialplan binding}"
   cp /opt/vocivo-fs/autoload_configs/xml_curl.conf.xml /etc/freeswitch/autoload_configs/xml_curl.conf.xml
   sed -i \
@@ -75,11 +86,11 @@ if [ "${VOCIVO_SIP_INBOUND:-0}" = "1" ]; then
     -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET}"'#g' \
     /etc/freeswitch/autoload_configs/xml_curl.conf.xml
   wanted="mod_xml_curl $wanted"
-  echo "Vocivo: inbound DIDs are routed by the Vocivo API dialplan (VOCIVO_SIP_INBOUND=1)."
+  echo "Vocivo: SIP call routes are authorized by the Vocivo API dialplan."
 else
   # No binding at all while the flag is off, so ordinary calls never wait on an API round trip.
   rm -f /etc/freeswitch/autoload_configs/xml_curl.conf.xml
-  echo "Vocivo: inbound DIDs stay on Telnyx Call Control (VOCIVO_SIP_INBOUND=0)."
+  echo "Vocivo: SIP_EDGE_SECRET is missing; outbound calls cannot be authorized."
 fi
 extra=""
 for module in $wanted; do

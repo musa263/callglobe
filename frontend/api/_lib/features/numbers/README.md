@@ -12,7 +12,7 @@ Test ownership, internal tag filtering and trunk policy through frontend `npm te
 
 ## Company carrier configurations
 
-`/api/admin/carrier-trunks` exposes GET/PUT for company administrators in their
+`/api/admin/carrier-trunks` exposes GET/PUT/PATCH for company administrators in their
 authenticated organization, or a platform administrator with an explicit customer
 workspace. The route checks the `sipTrunks` entitlement and validates extension,
 ring group, queue and IVR destinations against that company. Unassigned destinations
@@ -24,11 +24,11 @@ It stores encrypted, tenant-specific objects using the shared transactional stor
 Revisions reject stale edits with 409; repeated identical creates are idempotent.
 Malformed or moved encrypted data fails closed instead of resetting configuration.
 
-These records are drafts, displayed as **Pending activation**. Saving does not
-provision SIP credentials, modify number assignments, authorize a carrier source,
-or change a FreeSWITCH gateway. Provider authentication, secure credential
-provisioning when required, edge integration and real carrier call verification
-remain activation gates. An account reference is not treated as a SIP username.
+An unpublished record remains a draft. PATCH `use-carrier-numbers` atomically
+publishes its DIDs and sets company carrier mode. PUT edits to a published trunk
+also update its destinations. Passwords remain encrypted; company responses expose
+only `hasPassword`. No company request can authorize a carrier source or declare
+a gateway deployed. Connection status comes from the operator deployment record.
 The existing `/api/admin/trunks` Telnyx external-PBX registration contract is separate.
 
 Carrier drafts also support a main trunk number, optional outbound proxy/port,
@@ -40,3 +40,13 @@ calling. These fields remain configuration data until SIP edge activation.
 Regression: `node --import tsx --test api/_lib/features/numbers/carrier-trunk-store.test.ts`
 from `frontend`, then root `bash verify.sh`. The tests use encrypted in-memory
 persistence and real route logic; they do not connect to a carrier.
+
+## Tenant BYOC calling
+
+`carrier-number-service` publishes canonical ownership and disabled tombstones.
+`carrier-runtime` checks the operator deployment allowlist, source-bound inbound
+aliases, current revisions and explicit call direction. `carrier-gateway-config`
+exports a deterministic per-tenant gateway; it does not activate it. See the
+[activation runbook](../../../../../docs/runbooks/tenant-carrier-trunks.md).
+Run carrier store/runtime/number-service regressions and the SIP outbound XML
+regressions, then root `bash verify.sh` and the Docker carrier workflow.

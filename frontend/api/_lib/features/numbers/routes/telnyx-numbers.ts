@@ -4,6 +4,10 @@ import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv
 import { telnyx, telnyxPstnConnectionId } from '../../../shared/telnyx.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { sessionCanAccessNumber } from '../../organizations/tenancy.js';
+import { sessionOrganizationId } from '../../organizations/tenancy.js';
+import { carrierMode } from '../carrier-number-service.js';
+import { assignedNumbersForOrganization } from '../phone-number-access.js';
+import { carrierTrunks } from '../carrier-trunk-store.js';
 
 type TelnyxNumber = {
   id: string;
@@ -21,13 +25,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
     const session = await requireSession(req);
+    const config = await readPbxConfig();
+    const organizationId = session.sub === 'vocivo-owner' ? '' : sessionOrganizationId(session, config);
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (organizationId && carrierMode(config, organizationId)) return res.status(200).json({ numbers: assignedNumbersForOrganization(config, organizationId, await carrierTrunks.list(organizationId)) });
     const connectionId = requiredEnv('TELNYX_CONNECTION_ID');
     const callControlApplicationId = requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
     const pstnConnectionId = telnyxPstnConnectionId();
-    const config = await readPbxConfig();
     const response = await telnyx('/phone_numbers?page[size]=250&filter[status]=active');
     const payload = await response.json() as { data?: TelnyxNumber[] };
-    const numbers = (payload.data ?? []).filter((number) => sessionCanAccessNumber(session, number.phone_number, config)).map((number) => ({
+    const numbers = (payload.data ?? []).filter((number) => !config.numberAssignments[number.phone_number]?.disabled && sessionCanAccessNumber(session, number.phone_number, config)).map((number) => ({
       id: number.id,
       phone_number: number.phone_number,
       label: config.numberAssignments[number.phone_number]?.label || number.connection_name || 'Vocivo number',

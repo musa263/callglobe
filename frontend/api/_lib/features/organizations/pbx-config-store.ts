@@ -6,7 +6,7 @@ import { validOfficeTime, validTimeZone } from './office-hours.js';
 
 export type PbxConfig = {
   version: number;
-  company: { name: string; timezone: string; defaultCallerId: string; emergencyAddress: string };
+  company: { name: string; timezone: string; defaultCallerId: string; emergencyAddress: string; callingMode?: 'managed' | 'carrier' };
   activeOrganizationId: string;
   // Pins which organization owns the legacy Telnyx-tag-based settings that
   // predate multi-tenancy (see number-config.ts). Old records are pinned during
@@ -20,7 +20,12 @@ export type PbxConfig = {
   numberAssignments: Record<string, {
     organizationId: string;
     label?: string;
-    source?: 'owned' | 'verified';
+    source?: 'owned' | 'verified' | 'carrier';
+    carrierTrunkId?: string;
+    carrierTrunkRevision?: number;
+    carrierConnectionRevision?: number;
+    inboundNumber?: string;
+    disabled?: boolean;
     destinationType?: 'main' | 'extension' | 'ring_group' | 'queue' | 'ivr';
     destinationId?: string;
     messagingEnabled?: boolean;

@@ -22,3 +22,9 @@ managed provider has conference control code.
 Test route authorization, duplicate/late events, first-answer arbitration,
 cancel failure and history accounting with frontend `npm test`. Browser state is
 tested separately under `frontend/scripts/test-sip-ui.mjs`.
+
+Carrier routes contain signed `carrierTrunkId`, `carrierRevision` and
+`carrierGateway` claims. `/voice/route` selects these from the tenant caller ID,
+skips Telnyx credit calls for BYOC, and preserves platform policy/wallet checks.
+The FreeSWITCH XML bridge revalidates them against current configuration. Legacy
+managed APIs cannot accept a carrier caller ID and silently use Telnyx.

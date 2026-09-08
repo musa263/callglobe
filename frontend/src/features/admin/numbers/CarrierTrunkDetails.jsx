@@ -14,14 +14,14 @@ function Details({ entries }) {
   )}</dl>;
 }
 
-export function CarrierTrunkDetails({ trunk, companyName, targets, onEdit }) {
+export function CarrierTrunkDetails({ trunk, companyName, targets, onEdit, onUseNumbers, busy }) {
   const destination = number => targets.find(([value]) => value === (number.destinationId ? `${number.destinationType}:${number.destinationId}` : number.destinationType))?.[1]
     || `Unavailable destination (${number.destinationType})`;
   return <article className="carrier-trunk-entry" aria-label={`${trunk.name} trunk details`}>
     <header className="carrier-entry-header">
       <span className="object-icon"><Server /></span>
       <div><h3>{trunk.name}</h3><p>{companyName} · {trunk.provider}</p></div>
-      <Status warn>Pending activation</Status>
+      <Status good={trunk.connectionStatus === 'ready'} warn={trunk.connectionStatus !== 'ready'}>{trunk.connectionStatus === 'ready' ? 'Ready for call test' : 'Pending activation'}</Status>
       <button className="secondary" onClick={() => onEdit(trunk)}><Pencil /> Edit trunk</button>
     </header>
     <section aria-label="General trunk details">
@@ -31,6 +31,7 @@ export function CarrierTrunkDetails({ trunk, companyName, targets, onEdit }) {
         ['Registrar / SIP server', trunk.server], ['SIP port', trunk.port], ['Transport', trunk.transport],
         ['Authentication', authenticationLabels[trunk.authentication]],
         ['SIP user ID', trunk.username || (trunk.authentication === 'ip' ? 'Not required for IP authentication' : 'Not configured')],
+        ['SIP password', trunk.authentication === 'ip' ? 'Not required' : trunk.hasPassword ? 'Stored securely' : 'Not configured'],
         ['Public IP for allowlisting', trunk.publicIp], ['Hosting provider', trunk.hostingProvider],
         ['Outbound proxy', trunk.outboundProxy || 'Not configured'], ['Outbound proxy port', trunk.outboundProxyPort ?? 5060],
       ]} />
@@ -54,6 +55,7 @@ export function CarrierTrunkDetails({ trunk, companyName, targets, onEdit }) {
       </table>
     </section>
     <section className="carrier-notes"><h4>Notes</h4><p>{trunk.notes || 'No notes added.'}</p></section>
-    <p className="carrier-activation-note">Saved configuration. Carrier activation is still required before these settings carry calls.</p>
+    {onUseNumbers && <button className="primary" disabled={busy || !trunk.numbers.length} onClick={() => onUseNumbers(trunk)}>Use these carrier numbers</button>}
+    <p className="carrier-activation-note">{trunk.connectionMessage || 'Saved configuration. Carrier activation is required before this trunk carries calls.'}</p>
   </article>;
 }

@@ -87,6 +87,18 @@ function actions(xml: string) {
   return [...xml.matchAll(/<action application="([^"]+)"(?: data="([^"]*)")?\/>/g)].map((match) => ({ app: match[1], data: (match[2] || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'") }));
 }
 
+test('removed and unassigned carrier numbers never answer or start the receptionist', () => {
+  for (const assignment of [undefined, { organizationId: 'acme', disabled: true, destinationType: 'main' as const },
+    { organizationId: 'acme', source: 'carrier' as const }, { organizationId: 'globex', destinationType: 'main' as const }]) {
+    const config = pbx();
+    config.ai.enabled = true;
+    if (assignment) config.numberAssignments[did] = assignment; else delete config.numberAssignments[did];
+    const xml = renderSipDialplan(input({ pbx: config }));
+    assert.doesNotMatch(xml, /application="(?:answer|socket|bridge)"/);
+    assert.match(xml, /480 Number unavailable/);
+  }
+});
+
 test('queue retries spend only the configured ringing budget and stop at exhaustion', () => {
   for (const maxWait of [15, 46, 100, 181]) {
     const config = pbx();

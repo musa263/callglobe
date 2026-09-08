@@ -258,3 +258,17 @@ requires separate authorization; the diagnostic workflow does neither.
 
 Run `python3 -m unittest discover -s services/sip/tests -p test_carrier_connectivity.py`
 for the bounded-probe tests; those tests use socket fixtures.
+
+## Tenant-owned carriers
+
+The authenticated XML binding now selects outbound gateways from a signed tenant
+route, including when inbound SIP is disabled. Static outbound fallback returns
+503. Operator gateway files live in `/opt/vocivo/carriers`, outside source sync,
+and are loaded under the public trunk profile. Company forms alone cannot
+activate them. FreeSWITCH is pinned to the previously deployed 1.10.12 image.
+
+See [tenant carrier activation](../../docs/runbooks/tenant-carrier-trunks.md) for
+IP ownership, registration/TLS, inbound-port requirements, deployment records,
+rollback and real-carrier acceptance. The Docker tenant-carriers workflow checks
+actual SIP, RTP echo, caller ID, gateway isolation and capacity against loopback
+peers. It does not certify Go Telecom, physical devices or inbound deployment.

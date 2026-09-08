@@ -3,6 +3,8 @@ import { requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { listExtensions } from '../../organizations/pbx.js';
 import { assignedNumbersForOrganization } from '../../numbers/phone-number-access.js';
+import { carrierTrunks } from '../../numbers/carrier-trunk-store.js';
+import { carrierMode } from '../../numbers/carrier-number-service.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { readUserProfile, readUserProfiles } from '../profile-store.js';
 import { mobileRates } from '../../billing/rates.js';
@@ -35,7 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stored = profiles.get(`vocivo-extension:${id}`);
       return { id, extension, name: stored?.fullName || name, department: stored?.department || department, role, sipUsername, photoUrl: stored?.photoUrl, jobTitle: stored?.jobTitle };
     });
-    const assignedNumbers = assignedNumbersForOrganization(config, organizationId);
+    const assignedNumbers = assignedNumbersForOrganization(config, organizationId, carrierMode(config, organizationId) ? await carrierTrunks.list(organizationId) : []);
     const baseProfile = {
       id: session.sub || '',
       email: session.email || '',

@@ -10,11 +10,13 @@ export type CarrierTrunk = {
   name: string; provider: string; accountReference: string; server: string; port: number;
   transport: 'UDP' | 'TCP' | 'TLS'; publicIp: string; hostingProvider: string;
   authentication: 'unconfirmed' | 'ip' | 'registration'; username: string;
+  hasPassword?: boolean;
+  connectionRevision?: number;
   mainNumber?: string; outboundProxy?: string; outboundProxyPort?: number;
   channelLimit?: number | null; inboundEnabled?: boolean | null; outboundEnabled?: boolean | null;
   numbers: CarrierNumber[]; notes: string; updatedAt: string;
 };
-type State = { version: 1; organizationId: string; trunks: CarrierTrunk[] };
+type State = { version: 1; organizationId: string; trunks: CarrierTrunk[]; passwords?: Record<string, string> };
 export class CarrierTrunkError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
@@ -89,8 +91,17 @@ export function createCarrierTrunkStore(deps: Storage = { readObject, transactOb
   };
   return {
     async list(organizationId: string) { return decode(await deps.readObject(path(organizationId)), organizationId).trunks; },
+    /** Deployment tooling only. No HTTP company route exposes this value. */
+    async provisioning(organizationId: string, id: string, revision: number) {
+      const state = decode(await deps.readObject(path(organizationId)), organizationId);
+      const trunk = state.trunks.find(item => item.id === id && item.revision === revision);
+      if (!trunk) throw new CarrierTrunkError(409, 'The requested trunk revision is not current.');
+      return { trunk, password: state.passwords?.[id] || '' };
+    },
     async save(organizationId: string, input: Record<string, unknown>) {
       const draft = normalizeCarrierTrunk(input, organizationId);
+      const password = input.password === undefined || input.password === '' ? undefined : input.password;
+      if (password !== undefined && (typeof password !== 'string' || password.length > 256 || /[\r\n\0]|\$\{/.test(password))) throw new CarrierTrunkError(400, 'Invalid SIP password.');
       const expected = Number(input.revision);
       if (!Number.isInteger(expected) || expected < 0) throw new CarrierTrunkError(400, 'A configuration revision is required.');
       let saved: CarrierTrunk | undefined;
@@ -98,11 +109,19 @@ export function createCarrierTrunkStore(deps: Storage = { readObject, transactOb
         const state = decode(body, organizationId), current = state.trunks.find(item => item.id === draft.id);
         if ((current?.revision || 0) !== expected) {
           // Retrying the same create request is safe; another edit still conflicts.
-          if (expected === 0 && current && JSON.stringify(normalizeCarrierTrunk(current, organizationId)) === JSON.stringify(draft)) { saved = current; return encrypt(state); }
+          if (expected === 0 && current && JSON.stringify(normalizeCarrierTrunk(current, organizationId)) === JSON.stringify(draft)
+            && (password === undefined || password === state.passwords?.[draft.id])) { saved = current; return encrypt(state); }
           throw new CarrierTrunkError(409, 'This trunk was changed in another tab. Reload before saving.');
         }
         if (!current && state.trunks.length >= 100) throw new CarrierTrunkError(400, 'This company already has 100 carrier trunks.');
-        saved = { ...draft, revision: expected + 1, updatedAt: new Date().toISOString() };
+        state.passwords ||= {};
+        const oldPassword = state.passwords[draft.id];
+        if (draft.authentication !== 'registration') delete state.passwords[draft.id];
+        else if (password !== undefined) state.passwords[draft.id] = password;
+        else if (current?.username !== draft.username) delete state.passwords[draft.id];
+        const connection = (item: typeof draft) => JSON.stringify([item.server, item.port, item.transport, item.publicIp, item.authentication, item.username, item.outboundProxy, item.outboundProxyPort]);
+        const sameConnection = current && connection(current) === connection(draft) && oldPassword === state.passwords[draft.id];
+        saved = { ...draft, hasPassword: Boolean(state.passwords[draft.id]), connectionRevision: sameConnection ? current.connectionRevision || current.revision : expected + 1, revision: expected + 1, updatedAt: new Date().toISOString() };
         state.trunks = [...state.trunks.filter(item => item.id !== draft.id), saved];
         return encrypt(state);
       }, { access: 'private', contentType: 'application/octet-stream' });

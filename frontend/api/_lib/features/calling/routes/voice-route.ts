@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireSession } from '../../auth/auth.js';
 import { assertCallerIdForSession } from '../../numbers/phone-number-access.js';
+import { CarrierTrunkError } from '../../numbers/carrier-trunk-store.js';
+import { resolveCarrierOutbound } from '../../numbers/carrier-runtime.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { authorizeOutboundCall } from '../../billing/outbound-policy.js';
 import { getExtension, listExtensions } from '../../organizations/pbx.js';
@@ -32,6 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await requireFeature(session, requestedFlow === 'internal' ? 'internalCalling' : 'outboundCalling', config);
     const organizationId = sessionOrganizationId(session, config);
     let callerId: string | undefined;
+    let carrier: Awaited<ReturnType<typeof resolveCarrierOutbound>> = null;
     let callerName: string | undefined;
     let callerPhotoUrl: string | undefined;
     let callerExtension: string | undefined;
@@ -71,10 +74,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : profile?.outboundCallerId || tenant.company.defaultCallerId;
       if (!preferredCallerId) return res.status(409).json({ error: 'No caller ID is assigned to this account. Ask your administrator to assign a phone number or verified caller ID.' });
       const [resolvedCallerId, extension] = await Promise.all([
-        assertCallerIdForSession(session, preferredCallerId),
+        assertCallerIdForSession(session, preferredCallerId, { allowCarrier: voiceEdge() === 'sip' }),
         session.extensionId ? getExtension(session.extensionId, organizationId) : Promise.resolve(undefined),
       ]);
       callerId = resolvedCallerId;
+      carrier = await resolveCarrierOutbound(config, organizationId, callerId);
+      if (carrier && voiceEdge() !== 'sip') throw new CarrierTrunkError(409, 'Company SIP trunks require the Vocivo SIP calling engine.');
       authorizeOutboundCall(tenant, {
         extension: extension?.extension,
         department: extension?.department,
@@ -83,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     // Tenant wallets do not fund internal calls. Telnyx park still needs a live
     // carrier wallet. SIP-edge internal calls fork locally and must not wait on /balance.
-    if (voiceRouteNeedsTelnyxCredit(requestedFlow)) {
+    if (!carrier && voiceRouteNeedsTelnyxCredit(requestedFlow)) {
       try {
         await assertTelnyxVoiceReady();
       } catch (error) {
@@ -109,6 +114,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       organizationId,
       destination,
       callerId,
+      carrierTrunkId: carrier?.trunkId,
+      carrierRevision: carrier?.revision,
+      carrierGateway: carrier?.gateway,
       callerName,
       callerPhotoUrl,
       callerExtension,
@@ -128,6 +136,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       organizationId: route.organizationId,
       destination: route.destination,
       callerId: route.callerId,
+      carrierTrunkId: route.carrierTrunkId,
+      carrierRevision: route.carrierRevision,
+      carrierGateway: route.carrierGateway,
       callerName: route.callerName,
       callerPhotoUrl: route.callerPhotoUrl,
       callerExtension: route.callerExtension,
@@ -150,6 +161,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       destination: route.destination,
     });
   } catch (error) {
+    if (error instanceof CarrierTrunkError) return res.status(error.status).json({ error: error.message });
     if (error instanceof TelnyxCarrierUnavailableError) return res.status(503).json({ error: error.message });
     if (error instanceof Error && /wallet is frozen|Calling credit/i.test(error.message)) return res.status(402).json({ error: error.message });
     if (writeAuthError(res, error)) return;

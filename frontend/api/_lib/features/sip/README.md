@@ -97,3 +97,19 @@ It uses the existing schema without running SaaS bootstrap/DDL and fails closed
 if persisted subscription data is missing. Current identity and uncached session
 revocation checks remain mandatory. Slow auth requests (at least 1500 ms) log
 phase durations and status only, without Digest material or user identifiers.
+
+## Tenant carrier bridge authorization
+
+`voice-sip-dialplan` now handles signed outbound grants through
+`sip-outbound-dialplan` before applying the inbound feature flag. It rechecks
+current caller-ID ownership and the exact tenant/trunk/revision/gateway binding.
+A failed lookup cannot use the static Telnyx bridge. The XML declaration occupies
+its own line for FreeSWITCH preprocessing; effective caller-ID channel variables
+carry the authorized identity to the B leg. Codec lists are set outside the
+dial string. Per-gateway hash limits release with channel teardown.
+
+Kamailio strips incoming `X-Vocivo-Carrier-Source` and sets it from the admitted
+carrier socket. Imported national DIDs resolve only within the source-bound
+deployment and published assignment; disabled or unassigned DIDs do not answer.
+Company destinations remain in the existing API-rendered inbound dialplan.
+See the [BYOC rollout and acceptance gates](../../../../../docs/runbooks/tenant-carrier-trunks.md).

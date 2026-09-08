@@ -1,33 +1,45 @@
-import { useState } from "react";
-import { CircleDot, FileClock, PhoneIncoming, RefreshCw, Search, ShieldCheck, Trash2 } from "lucide-react";
-import { countryOptions } from '../configuration.js';
-import { Status, PageHeader, Field, Empty } from '../components/ui.jsx';
+import { useState } from 'react';
+import { PhoneIncoming, RefreshCw, Trash2 } from 'lucide-react';
+import { Empty, Modal, PageHeader } from '../components/ui.jsx';
+import { CarrierTrunksPanel } from './CarrierTrunksPanel.jsx';
 
-export function NumbersPage({ data, config, extensions, onRefresh, isSuperadmin, api }) {
-  const [form, setForm] = useState({ country: 'US', areaCode: '', locality: '', type: 'local', features: 'voice' });
-  const [results, setResults] = useState([]), [routingDrafts, setRoutingDrafts] = useState({}), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const search = async (event) => { event.preventDefault(); setBusy(true); setError(''); try { const query = new URLSearchParams(form); const response = await api(`/api/admin/numbers?mode=search&${query}`); setResults(response.numbers || []); } catch (err) { setError(err.message); } finally { setBusy(false); } };
-  const buy = async (item) => {
-    const price = `${item.currency} ${item.upfrontCost} now and ${item.monthlyCost}/month`;
-    if (!confirm(`Purchase ${item.phoneNumber} for ${price}? ${isSuperadmin ? 'This will charge the connected carrier account.' : 'This will be added to the company Vocivo service.'}`)) return;
+export function NumbersPage({ data, config, extensions, onRefresh, api }) {
+  const [removing, setRemoving] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const ownCarrier = data?.callingMode === 'carrier' || config.company.callingMode === 'carrier';
+  const legacyNumbers = ownCarrier ? data?.legacyNumbers || [] : data?.numbers || [];
+  async function removeNumber() {
     setBusy(true); setError('');
-    try { await api('/api/admin/numbers', { method: 'POST', body: { phoneNumbers: [item.phoneNumber], confirmPurchase: true, customerReference: 'Vocivo admin purchase' } }); setResults((current) => current.filter((number) => number.phoneNumber !== item.phoneNumber)); await onRefresh(); }
-    catch (err) { setError(err.message); } finally { setBusy(false); }
-  };
-  const assignmentFor = (item) => routingDrafts[item.id] || { ...(item.assignment || { organizationId: config.activeOrganizationId, destinationType: 'main', destinationId: '' }), messagingProfileId: item.messagingProfileId || '' };
-  const updateAssignment = (item, change) => setRoutingDrafts((current) => ({ ...current, [item.id]: { ...assignmentFor(item), ...change } }));
-  const routeTargets = (type) => type === 'extension'
-    ? extensions.map((item) => ({ id: item.id, label: `${item.extension} · ${item.name}` }))
-    : type === 'ring_group' ? config.callHandling.ringGroups.map((item) => ({ id: item.id, label: `${item.extension || 'No ext'} · ${item.name}` }))
-      : type === 'queue' ? config.callHandling.queues.map((item) => ({ id: item.id, label: `${item.extension || 'No ext'} · ${item.name}` }))
-        : type === 'ivr' ? config.callHandling.ivrs.map((item) => ({ id: item.id, label: `${item.extension || 'No ext'} · ${item.name}` })) : [];
-  const assign = async (item) => { const assignment = assignmentFor(item); setBusy(true); setError(''); try { await api('/api/admin/numbers', { method: 'PATCH', body: { id: item.id, assignToVocivo: true, organizationId: assignment.organizationId, destinationType: assignment.destinationType, destinationId: assignment.destinationId || '', messagingProfileId: assignment.messagingProfileId || '' } }); setRoutingDrafts((current) => { const next = { ...current }; delete next[item.id]; return next; }); await onRefresh(); } catch (err) { setError(err.message); } finally { setBusy(false); } };
-  const release = async (item) => { if (!confirm(`Release ${item.phoneNumber}? This permanently removes the number from the company account and it may not be recoverable.`)) return; setBusy(true); setError(''); try { await api('/api/admin/numbers', { method: 'DELETE', body: { id: item.id, phoneNumber: item.phoneNumber, confirmRelease: true } }); await onRefresh(); } catch (err) { setError(err.message); } finally { setBusy(false); } };
-  return <div className="page"><PageHeader eyebrow="NUMBER MANAGEMENT" title="Phone numbers" subtitle="Search global inventory, review pricing, purchase and monitor provisioning."><button className="secondary" onClick={onRefresh}><RefreshCw /> Refresh</button></PageHeader>
-    <section className="band"><div className="section-title"><div><h2>Buy a number</h2><p>Availability, capabilities and pricing come directly from the carrier inventory.</p></div></div><form className="form-grid" onSubmit={search}><Field label="Country"><select value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })}>{countryOptions.map((country) => <option key={country.country_code} value={country.country_code}>{country.country_name} ({country.country_code})</option>)}</select></Field><Field label="Number type"><select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}><option value="local">Local</option><option value="toll-free">Toll-free</option><option value="mobile">Mobile</option><option value="national">National</option><option value="shared-cost">Shared cost</option></select></Field><Field label="Area code"><input value={form.areaCode} onChange={(e) => setForm({ ...form, areaCode: e.target.value.replace(/\D/g, '') })} placeholder="Optional" /></Field><Field label="City or locality"><input value={form.locality} onChange={(e) => setForm({ ...form, locality: e.target.value })} placeholder="Optional" /></Field><Field label="Required feature"><select value={form.features} onChange={(e) => setForm({ ...form, features: e.target.value })}><option value="voice">Voice</option><option value="sms">SMS</option><option value="fax">Fax</option><option value="emergency">Emergency capable</option></select></Field><div className="field"><span>&nbsp;</span><button className="primary" disabled={busy}><Search /> Search inventory</button></div></form>{error && <div className="info-strip"><ShieldCheck /><span>{error}</span></div>}
-      {results.length > 0 && <div className="table-shell number-results"><table><thead><tr><th>Number</th><th>Type / locality</th><th>Features</th><th>Upfront</th><th>Monthly</th><th /></tr></thead><tbody>{results.map((item) => <tr key={item.phoneNumber}><td><strong>{item.phoneNumber}</strong></td><td>{item.type}<small>{item.locality || 'Global inventory'}</small></td><td>{item.features.join(', ') || 'Voice'}</td><td>{item.currency} {item.upfrontCost}</td><td>{item.currency} {item.monthlyCost}</td><td><button className="primary" onClick={() => buy(item)} disabled={busy}>Purchase</button></td></tr>)}</tbody></table></div>}
-    </section>
-    <section className="band"><div className="section-title"><div><h2>Owned numbers</h2><p>Active numbers, managed connection and explicit inbound destination.</p></div><Status good>{data?.numbers?.length || 0} active</Status></div>{data?.numbers?.length ? <div className="table-shell"><table><thead><tr><th>Number</th><th>Connection</th><th>Organization</th><th>Inbound destination</th><th>Messaging</th><th /></tr></thead><tbody>{data.numbers.map((item) => { const assignment = assignmentFor(item); const targets = routeTargets(assignment.destinationType); return <tr key={item.id}><td><strong>{item.phoneNumber}</strong><small>{item.country || '-'} · {item.status || 'unknown'}</small></td><td>{isSuperadmin ? item.connectionName || item.connectionId || 'Unassigned' : 'Vocivo managed'}</td><td><select value={assignment.organizationId} onChange={(event) => updateAssignment(item, { organizationId: event.target.value })}>{config.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></td><td><div className="number-routing"><select value={assignment.destinationType || 'main'} onChange={(event) => updateAssignment(item, { destinationType: event.target.value, destinationId: '' })}><option value="main">Main line</option><option value="extension">Extension</option><option value="ring_group">Ring group</option><option value="queue">Queue</option><option value="ivr">Voice menu</option></select>{targets.length > 0 && <select value={assignment.destinationId || ''} onChange={(event) => updateAssignment(item, { destinationId: event.target.value })}><option value="">Choose destination</option>{targets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}</select>}</div></td><td><select value={assignment.messagingProfileId || ''} onChange={(event) => updateAssignment(item, { messagingProfileId: event.target.value })}><option value="">Messaging off</option>{(data.messagingProfiles || []).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></td><td><div className="number-actions"><button className="secondary" onClick={() => assign(item)} disabled={busy || (targets.length > 0 && !assignment.destinationId)}>Save route</button><button className="danger icon-button" onClick={() => release(item)} disabled={busy} title={`Release ${item.phoneNumber}`}><Trash2 /></button></div></td></tr>; })}</tbody></table></div> : <Empty icon={PhoneIncoming} title="No active phone numbers" copy="Search carrier inventory to add the first number." />}</section>
-    <section className="band"><div className="section-title"><div><h2>Recent orders</h2><p>Orders that need documents remain pending until regulatory review is complete.</p></div></div>{data?.orders?.length ? <div className="event-list">{data.orders.slice(0, 10).map((item) => <div key={item.id}><CircleDot /><strong>{item.count || 0} number order</strong><span>{item.status}{item.requirementsMet === false ? ' · requirements pending' : ''}</span><time>{item.createdAt ? new Date(item.createdAt).toLocaleString() : ''}</time></div>)}</div> : <Empty icon={FileClock} title="No recent number orders" copy="Completed purchases will appear here." />}</section>
+    try {
+      await api('/api/admin/carrier-trunks', { method: 'PATCH', body: {
+        action: 'remove-company-number', phoneNumber: removing.phoneNumber,
+      } });
+      setRemoving(null);
+      await onRefresh();
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="page">
+    <PageHeader eyebrow="NUMBER MANAGEMENT" title="Phone numbers" subtitle="Bring your carrier's SIP trunk and numbers, then choose a destination for each line.">
+      <button className="secondary" onClick={onRefresh}><RefreshCw /> Refresh</button>
+    </PageHeader>
+    {error && <div className="error-banner" role="alert">{error}</div>}
+    <CarrierTrunksPanel api={api} config={config} extensions={extensions} onInventoryChange={onRefresh} />
+    {legacyNumbers.length > 0 && <section className="band">
+      <div className="section-title"><div><h2>{ownCarrier ? 'Previous company numbers' : 'Existing company numbers'}</h2>
+        <p>{ownCarrier ? 'These numbers are excluded from calling through your own carrier.' : 'Numbers already assigned to this workspace.'}</p></div></div>
+      <div className="table-shell"><table><thead><tr><th>Number</th><th>Company</th><th>Calling route</th><th /></tr></thead>
+        <tbody>{legacyNumbers.map(item => <tr key={item.id}><td><strong>{item.phoneNumber}</strong></td><td>{config.company.name}</td>
+          <td>{ownCarrier ? 'Not selected' : 'Existing managed service'}</td><td><button className="secondary" disabled={busy}
+            onClick={() => { setError(''); setRemoving(item); }} aria-label={`Remove ${item.phoneNumber} from company`}><Trash2 /> Remove from company</button></td></tr>)}</tbody>
+      </table></div>
+    </section>}
+    {!legacyNumbers.length && !data?.numbers?.length && <Empty icon={PhoneIncoming} title="Add your existing carrier numbers" copy="Enter your provider's SIP details and DID numbers above. Each number can have its own destination." />}
+    {removing && <Modal title="Remove company number" onClose={() => { if (!busy) setRemoving(null); }}>
+      <p>Remove <strong>{removing.phoneNumber}</strong> from this company's caller IDs and inbound routing?</p>
+      <p>The carrier account keeps the number. This does not purchase or release a carrier number.</p>
+      {error && <div className="error-banner" role="alert">{error}</div>}
+      <footer><button className="secondary" disabled={busy} onClick={() => setRemoving(null)}>Cancel</button>
+        <button className="danger" disabled={busy} onClick={removeNumber}>{busy ? 'Removing…' : 'Remove number'}</button></footer>
+    </Modal>}
   </div>;
 }

@@ -51,7 +51,7 @@ export type CallerNumber = {
   status: string;
   receives_calls: boolean;
   messaging_enabled?: boolean;
-  source?: 'owned' | 'verified';
+  source?: 'owned' | 'verified' | 'carrier';
 };
 
 export type CallLog = {

@@ -9,6 +9,9 @@ export type ReservedVoiceRoute = {
   organizationId: string;
   destination: string;
   callerId?: string;
+  carrierTrunkId?: string;
+  carrierRevision?: number;
+  carrierGateway?: string;
   callerName?: string;
   callerPhotoUrl?: string;
   callerExtension?: string;

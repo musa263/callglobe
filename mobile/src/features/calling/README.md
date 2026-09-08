@@ -172,3 +172,11 @@ Regenerate native projects with `npx expo prebuild --no-install --platform all`,
 compare copied sources, and compile both platforms. Build 64 compiled and passed
 signature verification; Android debug compiled. Physical ringing, locked/killed
 answer, two-way speech and sustained calls are still release gates.
+
+## Tenant carrier numbers
+
+Bootstrap can return `source: carrier` numbers with `ready` or
+`pending_activation` status. Incoming-call transfer selection can use a ready
+carrier number. The API authorizes its current trunk at call time; UI selection
+is not carrier activation. These client type/selection changes need a mobile
+release; backend number publication is available independently.

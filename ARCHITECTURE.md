@@ -16,7 +16,7 @@ Vercel API -> PostgreSQL
     |
     +-- VOCIVO_VOICE_EDGE=sip -> SIP.js -> Kamailio -> RTPEngine
                                            |
-                                           +-> FreeSWITCH -> Telnyx trunk -> PSTN
+                                           +-> FreeSWITCH -> tenant carrier / managed trunk -> PSTN
                                                   |
                                                   +-> Python receptionist / TTS
 ```
@@ -119,3 +119,9 @@ Strict registration changes require the matching SIP config before Vercel
 promotion. Use the pinned Kamailio image's parser on staged configuration, retain
 the prior server backup, and inspect live container health before promoting HTTP
 changes. Vercel does not ship a TestFlight or APK update.
+
+Tenant BYOC connection records are encrypted and company-scoped. Operator
+deployment records bind a gateway and real edge IP; signed outbound grants and
+the XML bridge prevent fallback to another carrier. Configuration, publication,
+deployment and real call acceptance are separate states. See the
+[tenant carrier runbook](docs/runbooks/tenant-carrier-trunks.md).

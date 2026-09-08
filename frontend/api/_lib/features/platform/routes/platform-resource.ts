@@ -13,6 +13,9 @@ import { assignNumberToOrganization, numberOrganizationId } from '../../organiza
 import { decodeVoiceState } from '../../calling/voice-control.js';
 import { get, storageHealth } from '../../../shared/object-store.js';
 import { voiceEdge } from '../../calling/voice-provider.js';
+import { carrierMode } from '../../numbers/carrier-number-service.js';
+import { assignedNumbersForOrganization } from '../../numbers/phone-number-access.js';
+import { carrierTrunks, CarrierTrunkError } from '../../numbers/carrier-trunk-store.js';
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 const publicStoragePrefixes = ['vocivo/profile-photos/', 'vocivo/branding/'];
@@ -114,6 +117,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ data: { callControlId, action, accepted: true } });
     }
     if (resource === 'numbers' && method === 'GET') {
+      const config = await readPbxConfig();
+      if (carrierMode(config, apiKey.organizationId)) return res.status(200).json({ data: assignedNumbersForOrganization(config, apiKey.organizationId, await carrierTrunks.list(apiKey.organizationId)) });
       const country = text(req.query.country, 2).toUpperCase();
       const path = country
         ? `/available_phone_numbers?filter[country_code]=${encodeURIComponent(country)}&page[size]=30`
@@ -121,7 +126,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const response = await telnyx(path);
       const payload = await response.json() as { data?: Array<Record<string, any>> };
       if (country) return res.status(200).json(payload);
-      const config = await readPbxConfig();
       return res.status(200).json({ ...payload, data: (payload.data ?? []).filter((item) => numberOrganizationId(item.phone_number || '', config) === apiKey.organizationId) });
     }
     if (resource === 'numbers' && method === 'POST') {
@@ -132,6 +136,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Buying through a key was a way around that, and every number bought is
       // a monthly charge to Vocivo.
       const purchaseConfig = await readPbxConfig();
+      if (carrierMode(purchaseConfig, apiKey.organizationId)) return res.status(409).json({ error: 'This company brings its own carrier numbers. Add them in company SIP trunks.' });
       const access = await accessForOrganization(apiKey.organizationId, purchaseConfig).catch(() => null);
       if (!access) return res.status(403).json({ error: 'This company is not active.' });
       const held = Object.values(purchaseConfig.numberAssignments).filter((assignment) => assignment.organizationId === apiKey.organizationId).length;
@@ -152,6 +157,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     return res.status(404).json({ error: 'Not found' });
   } catch (error) {
+    if (error instanceof CarrierTrunkError) return res.status(error.status).json({ error: error.message });
     if (error instanceof Error && error.message === 'Unauthorized') return res.status(401).json({ error: 'Invalid API key or scope.' });
     if (error instanceof CallNotPermittedError) return res.status(error.status).json({ error: error.message });
     if (error instanceof Error && /Caller ID|owned|verified/i.test(error.message)) return res.status(403).json({ error: error.message });
