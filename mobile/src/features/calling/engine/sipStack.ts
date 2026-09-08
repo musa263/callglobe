@@ -75,7 +75,7 @@ export type SipStack = {
    * cheap when everything is already fine.
    */
   refresh(): Promise<void>;
-  /** Update authentication for the same identity without closing live dialogs. */
+  /** Update same-identity authentication and future-call ICE without replacing the contact or live dialogs. */
   updateCredentials?(config: SipStackConfig): Promise<void>;
   invite(target: string, headers: VoiceInviteHeader[]): Promise<SipSessionHandle>;
   /** Audio route. Implemented by the platform module, not by SIP.js. */

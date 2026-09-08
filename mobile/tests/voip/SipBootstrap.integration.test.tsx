@@ -122,6 +122,30 @@ test('a forced network renewal is not lost behind cached foreground bootstrap', 
   expect(api.post).toHaveBeenCalledTimes(1);
 });
 
+test('renewal before a pushed call INVITE preserves its registered contact and can answer the late invitation', async () => {
+  const client = createSipVoiceClient();
+  cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
+  await ensureSipRegistration();
+  const incoming = stack.onInvitation.mock.calls[0][0];
+  (api.post as jest.Mock).mockResolvedValueOnce({ ...response, password: 'renewed', credentialId: 'new-generation' });
+  await ensureSipRegistration(true);
+  expect(stack.stop).not.toHaveBeenCalled();
+  expect(createSipJsStack).toHaveBeenCalledTimes(1);
+  const accept = jest.fn(async () => undefined);
+  const terminate = jest.fn(async () => undefined);
+  incoming({
+    id: 'push-before-invite', incoming: true, headers: [], remoteDisplayName: 'Colleague',
+    remoteUser: '2000', remoteTarget: 'sip:2000@sip.example', onStateChange: jest.fn(),
+    disposition: () => ({}), peerConnection: () => undefined, accept, terminate,
+    dispose: jest.fn(async () => undefined),
+  });
+  const call = client.currentCalls[0];
+  expect(call).toBeDefined();
+  await call!.answer!();
+  expect(accept).toHaveBeenCalledTimes(1);
+  expect(terminate).not.toHaveBeenCalled();
+});
+
 test('a credential response arriving after an incoming call cannot replace its live stack', async () => {
   cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
   await ensureSipRegistration();
@@ -149,11 +173,11 @@ test('a credential response arriving after an incoming call cannot replace its l
   expect(createSipJsStack).toHaveBeenCalledTimes(1);
   expect(stack.updateCredentials).toHaveBeenCalledWith(expect.objectContaining({ password: 'rotated-password' }));
   expect(retryLifetime).toBeGreaterThan(0);
-  expect(retryLifetime).toBeLessThanOrEqual(30);
+  expect(retryLifetime).toBeGreaterThan(3500);
 
   stateChanged('Terminated');
   await ensureSipRegistration();
-  expect(createSipJsStack).toHaveBeenCalledTimes(2);
-  expect(createSipJsStack).toHaveBeenLastCalledWith(expect.objectContaining({ password: 'rotated-password' }), expect.anything());
+  expect(createSipJsStack).toHaveBeenCalledTimes(1);
+  expect(stack.updateCredentials).toHaveBeenLastCalledWith(expect.objectContaining({ password: 'rotated-password' }));
   expect(api.post).toHaveBeenCalledTimes(1);
 });
