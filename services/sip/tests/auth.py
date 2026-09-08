@@ -10,30 +10,42 @@ PORT = 15062
 HTTP_PORT = 18081
 
 
-def auth_config(source):
+def auth_config(source, *, forward_to_fs=False):
     start = source.index('route[CHALLENGE] {')
     end = source.index('# What the edge decides', start)
     routes = source[start:end]
     routes += source[source.index('route[READ_ROUTE] {'):source.index('# A call between two extensions')]
     routes += source[source.index('route[ROUTE_CHECK] {'):source.index('route[INVITE] {')]
     routes = routes.replace('127.0.0.1:8081', f'127.0.0.1:{HTTP_PORT}')
+    forward = ''
+    if forward_to_fs:
+        forward = source[source.index('route[FORK_FS] {'):source.index('route[WAKEUP_NOW] {')]
+        # Use the isolated listener socket and omit dialog bookkeeping only.
+        # Credential consumption and target rewriting are production code.
+        forward = forward.replace('    dlg_manage();\n', '').replace('udp:0.0.0.0:5060', f'udp:127.0.0.1:{PORT}')
+        forward += '\nroute[RELAY] { if (!t_relay()) sl_reply_error(); exit; }\nfailure_route[MANAGE_FAILURE] { return; }'
+    invite = '''if (!is_present_hf("Authorization")) { route(CHALLENGE); exit; }
+                if (!route(AUTH)) { route(CHALLENGE); exit; }
+                route(FORK_FS); exit;''' if forward_to_fs else '''if (!route(ROUTE_CHECK)) { send_reply("403", "Forbidden"); exit; }
+                send_reply("200", "OK"); exit;'''
     return '\n'.join([
         '#!KAMAILIO', 'debug=2', 'children=1', f'listen=udp:127.0.0.1:{PORT}',
-        *[f'loadmodule "{name}.so"' for name in ['sl', 'pv', 'xlog', 'textops', 'siputils', 'jansson', 'http_client']],
+        '#!define FLT_FS 6',
+        *[f'loadmodule "{name}.so"' for name in ['tm', 'sl', 'pv', 'xlog', 'textops', 'siputils', 'jansson', 'http_client']],
         'modparam("http_client", "connection_timeout", 1)',
         '''route {
             if (is_method("OPTIONS")) { send_reply("200", "OK"); exit; }
+            if (is_method("ACK")) { if (t_check_trans()) t_relay(); exit; }
             $var(auth_stale) = 0;
             $var(rtok) = "fixture";
             if (is_method("INVITE")) {
-                if (!route(ROUTE_CHECK)) { send_reply("403", "Forbidden"); exit; }
-                send_reply("200", "OK"); exit;
+                __INVITE_ROUTE__
             }
             if (!is_present_hf("Authorization")) { route(CHALLENGE); exit; }
             if (!route(AUTH)) { route(CHALLENGE); exit; }
             send_reply("200", "OK");
         }
-        ''', routes,
+        '''.replace('__INVITE_ROUTE__', invite), routes, forward,
     ])
 
 

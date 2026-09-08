@@ -281,6 +281,18 @@ record, temporary gateway, relay, SSH entry, cloud firewall exceptions and
 temporary repository secret when done. Retain private evidence only as needed.
 No workflow here claims carrier or handset acceptance, or moves the public IP.
 
+Ingress Digest credentials terminate at Kamailio after admission. Both
+`Authorization` and `Proxy-Authorization` are consumed before the loopback
+FreeSWITCH hop; signed Vocivo route headers remain for API authorization.
+FreeSWITCH otherwise challenges credentials from the previous hop even with
+`auth-calls=false`. Run `python3 services/sip/tests/validate_forward_auth.py`
+for the isolated real-protocol regression and ingress rejection checks.
+
+Temporary gateway proxy and From domain name the relay, so OPTIONS as well as
+INVITEs target that host. Carrier Digest realm and carrier egress remain on the
+relay. After `remove`, the explicit `archive` action verifies removal and retains
+closed test evidence before a fresh bounded test can be installed.
+
 Gateway deployment verifies the exact gateway name and its `trunk` profile after
 rescan; a successful reload response alone is insufficient. Keep an included
 gateway's `<include>` wrapper on separate lines: FreeSWITCH's preprocessor can

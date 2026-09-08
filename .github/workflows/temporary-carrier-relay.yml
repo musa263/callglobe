@@ -5,7 +5,7 @@ on:
       action:
         description: Fixed temporary outbound test operation
         type: choice
-        options: [public-key, deploy, repair-gateway, remove]
+        options: [public-key, deploy, repair-gateway, remove, archive]
         required: true
 permissions:
   contents: read
@@ -35,7 +35,7 @@ jobs:
             ssh-keygen -y -f "$HOME/.ssh/ops_key"
             exit 0
           fi
-          case "$ACTION" in deploy|repair-gateway|remove) ;; *) exit 2 ;; esac
+          case "$ACTION" in deploy|repair-gateway|remove|archive) ;; *) exit 2 ;; esac
           python3 - <<'PY'
           import json, os, sys
           from pathlib import Path
@@ -67,6 +67,11 @@ jobs:
           done
           if [ "$ACTION" = repair-gateway ]; then
             edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py repair-gateway
+            exit 0
+          fi
+          if [ "$ACTION" = archive ]; then
+            edge python3 /opt/vocivo-carrier-relay-ops/relay_operations.py archive-gateway
+            relay python3 /opt/vocivo-carrier-relay-ops/relay_operations.py archive-relay
             exit 0
           fi
           relay_ready=0

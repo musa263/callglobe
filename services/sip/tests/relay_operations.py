@@ -134,10 +134,10 @@ def install_gateway(cfg):
 def gateway_xml(cfg):
     root = ET.Element('include')
     gateway = ET.SubElement(root, 'gateway', name=cfg['gateway'])
-    params = {'proxy': f'{cfg["carrier_ip"]}:{cfg["carrier_port"]}', 'realm': cfg['carrier_ip'],
+    params = {'proxy': f'{cfg["public_ip"]}:{cfg["sip_port"]}', 'realm': cfg['carrier_ip'],
               'outbound-proxy': f'{cfg["public_ip"]}:{cfg["sip_port"]}',
               'username': cfg['username'], 'password': cfg['password'], 'register': 'false',
-              'register-transport': 'udp', 'caller-id-in-from': 'true', 'from-domain': cfg['carrier_ip'],
+              'register-transport': 'udp', 'caller-id-in-from': 'true', 'from-domain': cfg['public_ip'],
               'extension-in-contact': 'true', 'ping': '30'}
     for name, value in params.items():
         ET.SubElement(gateway, 'param', name=name, value=value)
@@ -193,6 +193,27 @@ def remove(role):
     print('Temporary ' + role + ' stopped/removed. Existing PBX services were not stopped.')
 
 
+def archive(role):
+    # Explicit operator step before a new test; normal install still refuses an
+    # existing root. Preserve prior evidence without replacing another attempt.
+    if not (ROOT / 'removed').is_file():
+        raise RuntimeError('Remove the previous temporary test first')
+    cfg = config(json.loads((ROOT / 'settings.json').read_text()))
+    if role == 'relay':
+        if run('systemctl', 'is-active', DAEMON + '.service', check=False).stdout.strip() == 'active':
+            raise RuntimeError('Relay daemon is still active')
+    else:
+        if (Path('/opt/vocivo/carriers') / (cfg['gateway'] + '.xml')).exists():
+            raise RuntimeError('Gateway file still exists')
+        if 'Invalid Gateway' not in fs('fs_cli', '-x', 'sofia status gateway ' + cfg['gateway']).stdout:
+            raise RuntimeError('Gateway is still loaded or status unavailable')
+    unit = 'vocivo-temporary-' + role + '-expiry'
+    run('systemctl', 'stop', unit + '.timer', unit + '.service', check=False)
+    run('systemctl', 'reset-failed', unit + '.timer', unit + '.service', check=False)
+    ROOT.rename(ROOT.with_name(ROOT.name + '-closed-' + secrets.token_hex(6)))
+    print('Closed temporary ' + role + ' evidence archived; existing PBX services were not changed.')
+
+
 def install(role, cfg):
     owned = not ROOT.exists()
     try:
@@ -211,6 +232,8 @@ if __name__ == '__main__':
     try:
         if action in ('remove-relay', 'remove-gateway'):
             remove(action.split('-', 1)[1])
+        elif action in ('archive-relay', 'archive-gateway'):
+            archive(action.split('-', 1)[1])
         elif action == 'repair-gateway':
             repair_gateway()
         elif action in ('install-relay', 'install-gateway'):
