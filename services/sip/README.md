@@ -111,6 +111,14 @@ Other things `kamailio.cfg` gets right that are easy to break:
 hangups and Kamailio's INVITE/ACK/BYE path for the last calls; `logs` is the
 general log. GitHub keeps ten annotations per step, so both are kept compact.
 
+Kamailio persists extension-call events in the SQLite outbox at
+`/var/lib/kamailio/cdr.db` on its existing data volume. Startup initializes the
+table in WAL mode. The timer reads up to 50 due events, removes only HTTP 2xx
+deliveries, and defers failed deliveries for 60 seconds. Restarting the process
+does not discard queued events. Keep this private call metadata on the host;
+the outbox is not an indication that the API has accepted a record. Run
+`test_cdr_outbox.py` and the pinned-image ingress gate after changing this path.
+
 ## Inbound over the trunk
 
 Kamailio tags a call it accepted from the carrier with `X-Vocivo-Flow: inbound` and forwards it to FreeSWITCH

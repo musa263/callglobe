@@ -116,10 +116,10 @@ The Telnyx adapter remains in `runtime/voipClient` for the managed edge.
 `runtime/managedVoiceRuntime` lazily loads the SDK; `VoiceRoot` mounts it only
 for an authenticated, explicitly selected managed engine after session preparation.
 SIP startup and sign-out do not instantiate a managed client. Missing/invalid
-configuration fails closed. `runtime/nativeVoiceBridge` calls the installed
-VoicePnBridge without importing the SDK's JavaScript; this is a compatibility
-boundary, and the patched Telnyx native plugin is still required until those
-controls move to Vocivo-owned native modules.
+configuration fails closed. `runtime/nativeVoiceBridge` reads push tokens and
+sign-in state through VocivoSip without importing the SDK's JavaScript. Managed
+call UI and Android ringtone methods still use the installed VoicePnBridge
+compatibility boundary; the patched Telnyx native plugin remains required.
 
 “Refresh incoming calls” on SIP renews SIP registration and sends the native push
 token to `/api/voice/devices`, without a carrier token request/login. Failures set
