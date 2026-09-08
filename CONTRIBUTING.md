@@ -40,6 +40,10 @@ the feature README whenever introducing a behavior or changing an interface.
 
 ## Local Validation
 
+`frontend/tsconfig.json` is the canonical API compiler configuration. Keep its
+target, module and strict settings explicit: Vercel applies defaults before
+resolving inherited configuration. `tsconfig.api.json` extends it for local checks.
+
 ```bash
 bash verify.sh
 cd frontend
