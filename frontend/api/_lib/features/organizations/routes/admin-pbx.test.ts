@@ -4,7 +4,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createAdminPbxHandler } from './admin-pbx.js';
 import { defaultPbxConfig, organizationSettingsFrom, pbxForOrganization, PbxConfigConflictError, type PbxConfig } from '../pbx-config-store.js';
 
-function fixture(companyAdmin = false) {
+function fixture(companyAdmin = false, extensionIds: string[] = []) {
   let config = defaultPbxConfig();
   config.company.name = 'Global Heritage';
   config.organizations[0].name = 'Global Heritage';
@@ -23,7 +23,7 @@ function fixture(companyAdmin = false) {
       config = { ...config, ...(typeof update === 'function' ? update(config) : update), updatedAt: new Date().toISOString() };
       return structuredClone(config);
     },
-    listExtensions: async () => [],
+    listExtensions: async () => extensionIds.map(id => ({ id, organizationId: 'primary', status: 'active' })) as any,
     requireFeature: async () => ({ superadmin: true }),
   });
   return {
@@ -37,6 +37,26 @@ function fixture(companyAdmin = false) {
     },
   };
 }
+
+test('both company and platform admins can assign only enabled numbers from the selected company', async () => {
+  for (const companyAdmin of [true, false]) {
+    const f = fixture(companyAdmin, ['employee']);
+    f.config.numberAssignments = {
+      '+12025550123': { organizationId: 'primary', source: 'owned' },
+      '+442079460018': { organizationId: 'second', source: 'owned' },
+      '+12025550124': { organizationId: 'primary', source: 'owned', disabled: true },
+    };
+    const loaded = await f.request('GET', 'primary');
+    for (const outboundCallerId of ['+442079460018', '+12025550124', '+12025550199']) {
+      loaded.body.config.userProfiles.employee = { outboundCallerId };
+      assert.equal((await f.request('PUT', 'primary', loaded.body.config)).status, 400);
+    }
+    assert.equal(f.writes, 0);
+    loaded.body.config.userProfiles.employee = { outboundCallerId: '+12025550123' };
+    assert.equal((await f.request('PUT', 'primary', loaded.body.config)).status, 200);
+    assert.equal(f.writes, 1);
+  }
+});
 
 test('two superadmin tabs save only their own workspace without changing platform selection', async () => {
   const f = fixture();

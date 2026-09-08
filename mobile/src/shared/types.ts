@@ -1,6 +1,7 @@
 export type AppTab = 'dial' | 'contacts' | 'recents' | 'messages' | 'settings';
 
 export type ContactPhone = {
+  presence?: 'online' | 'busy' | 'offline';
   id: string;
   name: string;
   number: string;
@@ -77,6 +78,8 @@ export type VoicemailMessage = {
 };
 
 export type Profile = {
+  outbound_caller_id?: string | null;
+  dialing_country?: string | null;
   id: string;
   email: string;
   full_name: string | null;

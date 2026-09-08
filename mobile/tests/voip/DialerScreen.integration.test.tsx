@@ -19,7 +19,7 @@ jest.mock('../../src/features/calling/VoiceContext', () => ({ useVoice: () => ({
 const mockStartCall = jest.fn<Promise<void>, any[]>();
 const mockStartInternalCall = jest.fn<Promise<void>, any[]>();
 const mockDirectory = jest.fn<Promise<any>, unknown[]>();
-let mockProfile = { id: 'self', organization_id: 'company-a', extension: '2000', account_type: 'business', organization_name: 'Test Company', balance: null };
+let mockProfile = { id: 'self', organization_id: 'company-a', extension: '2000', account_type: 'business', organization_name: 'Test Company', balance: null, outbound_caller_id: '+12025550123', dialing_country: 'SA' };
 import { DialerScreen } from '../../src/features/calling/screens/DialerScreen';
 
 let renderer: TestRenderer.ReactTestRenderer;
@@ -30,7 +30,7 @@ const button = (label: string) => {
   return found;
 };
 beforeEach(() => {
-  mockProfile = { ...mockProfile, id: 'self', organization_id: 'company-a', account_type: 'business' };
+  mockProfile = { ...mockProfile, id: 'self', organization_id: 'company-a', account_type: 'business', outbound_caller_id: '+12025550123', dialing_country: 'SA' };
   mockDirectory.mockReset().mockResolvedValue({ users: [
     { id: 'colleague', extension: '2001', name: 'Colleague' },
     { id: 'second', extension: '2002', name: 'Second Colleague' },
@@ -44,6 +44,45 @@ test('pasted international number is not prefixed with the device country code',
   act(() => renderer.root.findByType(TextInput).props.onChangeText('+44 20 7946 0018'));
   await act(async () => { await button('Start call').props.onPress(); });
   expect(mockStartCall.mock.calls[0]?.[0]).toBe('+442079460018');
+});
+
+test('dial pad hides line and country selectors and blocks unassigned outbound calls', async () => {
+  mockProfile = { ...mockProfile, outbound_caller_id: '' };
+  await act(async () => { renderer = TestRenderer.create(<DialerScreen {...props} />); });
+  act(() => renderer.root.findByType(TextInput).props.onChangeText('+442079460018'));
+  expect(button('Start call').props.disabled).toBe(true);
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).not.toContain('Company line');
+  expect(text).not.toContain('Choose outgoing caller ID');
+  expect(text).not.toContain('Choose destination country');
+  act(() => renderer.root.findByType(TextInput).props.onChangeText('2001'));
+  expect(button('Start call').props.disabled).toBe(false);
+});
+
+test('colleague presence refreshes and its timer is removed on unmount', async () => {
+  jest.useFakeTimers();
+  const appState = require('react-native').AppState;
+  const previous = appState.currentState;
+  appState.currentState = 'active';
+  const schedules = jest.spyOn(global, 'setTimeout');
+  const clears = jest.spyOn(global, 'clearTimeout');
+  try {
+    mockDirectory.mockResolvedValueOnce({ users: [{ id: 'colleague', extension: '2001', name: 'Colleague', presence: 'online' }] });
+    await act(async () => { renderer = TestRenderer.create(<DialerScreen {...props} />); });
+    act(() => renderer.root.findByType(TextInput).props.onChangeText('2001'));
+    expect(JSON.stringify(renderer.toJSON())).toContain('Online');
+    mockDirectory.mockResolvedValue({ users: [{ id: 'colleague', extension: '2001', name: 'Colleague', presence: 'busy' }] });
+    await act(async () => { jest.advanceTimersByTime(20_000); });
+    expect(JSON.stringify(renderer.toJSON())).toContain('Busy');
+    const index = schedules.mock.calls.map(call => call[1]).lastIndexOf(20_000);
+    expect(index).toBeGreaterThanOrEqual(0);
+    const pollTimer = schedules.mock.results[index]!.value;
+    act(() => renderer.unmount());
+    expect(clears).toHaveBeenCalledWith(pollTimer);
+    const requests = mockDirectory.mock.calls.length;
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(mockDirectory).toHaveBeenCalledTimes(requests);
+  } finally { schedules.mockRestore(); clears.mockRestore(); appState.currentState = previous; jest.useRealTimers(); }
 });
 
 test('Dial Pad exposes the keypad and one conference icon without a Home or recent-calls panel', async () => {
@@ -72,7 +111,7 @@ test('national contact number uses its country and retains its identity', async 
   expect(mockStartCall.mock.calls[0]?.[0]).toBe('+442079460018');
   expect(mockStartCall.mock.calls[0]?.[3]).toBe('Alex');
 });
-test('local digits use the device region and duplicate taps place only one call', async () => {
+test('local digits use the assigned trunk country, not device region, and duplicate taps place only one call', async () => {
   let finish!: () => void;
   mockStartCall.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
   await act(async () => { renderer = TestRenderer.create(<DialerScreen {...props} />); });
@@ -80,7 +119,7 @@ test('local digits use the device region and duplicate taps place only one call'
   let pending!: Promise<void>;
   act(() => { const press = button('Start call').props.onPress; pending = press(); void press(); });
   expect(mockStartCall).toHaveBeenCalledTimes(1);
-  expect(mockStartCall.mock.calls[0]?.[0]).toBe('+971501234567');
+  expect(mockStartCall.mock.calls[0]?.[0]).toBe('+966501234567');
   expect(button('Starting call').props.disabled).toBe(true);
   await act(async () => { finish(); await pending; });
 });

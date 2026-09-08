@@ -6,6 +6,7 @@ import { readUserProfiles } from '../../auth/profile-store.js';
 import { readPbxConfig } from '../pbx-config-store.js';
 import { requireFeature } from '../saas-access.js';
 import { sessionOrganizationId } from '../tenancy.js';
+import { presenceStore } from '../../calling/presence-store.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
@@ -20,11 +21,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const requestedExtension = typeof req.query.extension === 'string' ? req.query.extension.replace(/\D/g, '').slice(0, 5) : '';
     const extensions = (await listExtensions(organizationId)).filter((item) => item.status === 'active' && (!requestedExtension || item.extension === requestedExtension));
     const profiles = await readUserProfiles(extensions.map((item) => `vocivo-extension:${item.id}`));
+    const presence = await presenceStore.read(organizationId, extensions.map(item => item.id)).catch(() => {
+      console.warn('[voice-presence] Directory availability lookup failed.');
+      return new Map<string, 'offline'>();
+    });
     const users = extensions.map(({ id, extension, name, department, role, sipUsername }) => {
       const profile = profiles.get(`vocivo-extension:${id}`);
-      return { id, extension, name: profile?.fullName || name, department: profile?.department || department, role, sipUsername, photoUrl: profile?.photoUrl, jobTitle: profile?.jobTitle };
+      return { id, extension, name: profile?.fullName || name, department: profile?.department || department, role, sipUsername, photoUrl: profile?.photoUrl, jobTitle: profile?.jobTitle, presence: presence.get(id) || 'offline' };
     });
-    res.setHeader('Cache-Control', 'private, max-age=30');
+    res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ users, organization });
   } catch (error) {
     if (writeAuthError(res, error)) return;

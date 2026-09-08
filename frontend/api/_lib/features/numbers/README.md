@@ -56,3 +56,13 @@ exports a deterministic per-tenant gateway; it does not activate it. See the
 [activation runbook](../../../../../docs/runbooks/tenant-carrier-trunks.md).
 Run carrier store/runtime/number-service regressions and the SIP outbound XML
 regressions, then root `bash verify.sh` and the Docker carrier workflow.
+# Administrator-assigned outgoing line
+
+`dialing-defaults.ts` resolves a user's saved caller ID, then the company default,
+only against enabled same-tenant number assignments. Carrier mode excludes managed
+numbers. Its country comes from the matching published trunk's main DID/caller ID
+pair, with the assigned E.164 number as fallback. No device locale guesses are used
+for business calls. Mobile bootstrap and number inventory publish these defaults.
+`voice-route` chooses them server-side, and `assertCallerIdForSession` also rejects
+unassigned overrides on conference/call paths. Admin PBX saves validate changed
+user/default lines against current ownership before the existing CAS save.

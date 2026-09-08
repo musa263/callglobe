@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState } from 'react';
 import type { ActiveCall } from '../../src/shared/types';
 
-const profile = { id: 'fixture', full_name: 'Alex Morgan', account_type: 'business', organization_name: 'Northstar Studio', extension: '2000', balance: null };
+const profile = { id: 'fixture', full_name: 'Alex Morgan', account_type: 'business', organization_id: 'fixture-company', organization_name: 'Northstar Studio', extension: '2000', balance: null, outbound_caller_id: '+442079460018', dialing_country: 'GB' };
 const callerNumbers = [{ id: 'fixture', phone_number: '+442079460018', label: 'Studio line', source: 'owned', status: 'active' }];
 const rates = [
   { id: 'ae', country_code: 'AE', country_name: 'United Arab Emirates', dial_code: '+971', rate_per_min: null },
@@ -21,8 +21,9 @@ export function FixtureProvider({ children }: { children: React.ReactNode }) {
 export const useVoice = () => useContext(Context);
 export const useBusiness = () => ({ ...useContext(Context), profile: { enabled: true, companyName: 'Northstar Studio', departments: ['Design', 'Operations'], greeting: 'Welcome to Northstar Studio.', waitingMessage: 'Please hold.', voicemailEnabled: false, voicemailDelaySeconds: 25, voicemailGreeting: '', voice: 'AWS.Polly.Joanna-Neural', backgroundImageUrl: '', aiTone: 'professional' } });
 export const api = { get: async () => ({ voicemails: [], users: [
-  { id: 'jamie', name: 'Jamie Roberts', extension: '2001', department: 'Design' },
-  { id: 'sam', name: 'Sam Lee', extension: '2002', department: 'Operations' },
+  { id: 'jamie', name: 'Jamie Roberts', extension: '2001', department: 'Design', presence: 'online' },
+  { id: 'sam', name: 'Sam Lee', extension: '2002', department: 'Operations', presence: 'busy' },
+  { id: 'lee', name: 'Lee Morgan', extension: '2003', department: 'Design', presence: 'offline' },
 ] }), post: async () => ({}) };
 export const findPhoneContact = async () => null;
 export const useMessaging = () => ({ messages: [], loading: false, refreshMessages: async () => undefined, sendMessage: async () => undefined, suggestReplies: async () => [] });

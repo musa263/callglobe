@@ -5,6 +5,7 @@ import { listExtensions } from '../../organizations/pbx.js';
 import { assignedNumbersForOrganization } from '../../numbers/phone-number-access.js';
 import { carrierTrunks } from '../../numbers/carrier-trunk-store.js';
 import { carrierMode } from '../../numbers/carrier-number-service.js';
+import { dialingDefaults } from '../../numbers/dialing-defaults.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { readUserProfile, readUserProfiles } from '../profile-store.js';
 import { mobileRates } from '../../billing/rates.js';
@@ -37,7 +38,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stored = profiles.get(`vocivo-extension:${id}`);
       return { id, extension, name: stored?.fullName || name, department: stored?.department || department, role, sipUsername, photoUrl: stored?.photoUrl, jobTitle: stored?.jobTitle };
     });
-    const assignedNumbers = assignedNumbersForOrganization(config, organizationId, carrierMode(config, organizationId) ? await carrierTrunks.list(organizationId) : []);
+    const trunks = carrierMode(config, organizationId) ? await carrierTrunks.list(organizationId) : [];
+    const assignedNumbers = assignedNumbersForOrganization(config, organizationId, trunks);
+    const dialing = dialingDefaults(config, organizationId, session.extensionId, trunks);
     const baseProfile = {
       id: session.sub || '',
       email: session.email || '',
@@ -53,6 +56,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     const profile = {
       ...baseProfile,
+      outbound_caller_id: dialing.callerId,
+      dialing_country: dialing.country,
       ...(storedProfile ? {
         full_name: storedProfile.fullName || baseProfile.full_name,
         job_title: storedProfile.jobTitle,

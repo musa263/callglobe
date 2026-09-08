@@ -25,7 +25,7 @@
       "entitlements": {
         "aps-environment": "production"
       },
-      "buildNumber": "65"
+      "buildNumber": "66"
     },
     "android": {
       "package": "app.vocivo.mobile",

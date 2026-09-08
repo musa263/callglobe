@@ -4,6 +4,7 @@ import { telnyx } from '../../shared/telnyx.js';
 import { normalizeE164, sessionCanAccessNumber, sessionOrganizationId } from '../organizations/tenancy.js';
 import { CarrierTrunkError, type CarrierTrunk } from './carrier-trunk-store.js';
 import { carrierReadiness, resolveCarrierOutbound } from './carrier-runtime.js';
+import { dialingDefaults } from './dialing-defaults.js';
 
 export type AccountPhoneNumber = {
   id: string;
@@ -96,5 +97,7 @@ export async function assertCallerIdForSession(session: VocivoSession, phoneNumb
   const normalized = normalizeE164(phoneNumber);
   if (!sessionCanAccessNumber(session, normalized, config)) throw new Error('Caller ID is not assigned to your organization.');
   const organizationId = sessionOrganizationId(session, config);
+  if (config.organizations.find(item => item.id === organizationId)?.accountType === 'business'
+    && dialingDefaults(config, organizationId, session.extensionId).callerId !== normalized) throw new Error('Caller ID must match the line assigned by your administrator.');
   return assertCallerIdForOrganization(normalized, organizationId, options);
 }

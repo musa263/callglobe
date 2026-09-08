@@ -103,3 +103,19 @@ separate records: failed creation attempts compensate by deleting the new
 extension; an inconsistent edit fails current-identity authorization.
 The injectable admin-user handler tests tenant denial, credential validation,
 role escalation, reset and removal without touching production accounts.
+# Calling defaults and directory availability
+
+Company and platform administrators select a user's outgoing line from enabled
+numbers in that customer's workspace. Employee call routes enforce the saved line;
+the client UI is not the security boundary. This applies equally to every tenant.
+
+Directory responses include `presence` (online, busy, offline). The authenticated
+`POST /api/voice/presence` endpoint derives ownership from the signed session and
+current extension, never from body IDs. `calling/presence-store.ts` atomically
+updates a private per-tenant/per-extension object containing bounded device leases.
+Sequence checks ignore delayed updates; busy wins across devices; offline on one
+device cannot clear another. Leases last 60 seconds and directory polling adds up
+to 20 seconds of display delay. Short tombstones block stale resurrection.
+Presence cannot grant a call or prove RTP/push reachability. Failed presence reads
+return offline without disabling the directory. New clients/backend must be
+released together for indicators; old clients do not publish availability.

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../shared/api.js';
 
 type CallerNumber = { id: string; phone_number: string; label: string; source: string; status: string };
-type Inventory = { scope: string; numbers: CallerNumber[]; busy: boolean; error: string };
+type Inventory = { scope: string; numbers: CallerNumber[]; dialing?: { callerId: string | null; country: string | null }; busy: boolean; error: string };
 
 /** A lightweight refresh must not remount the registered phone or wait for wallet/rates. */
 export function useCallerNumbers(scope: string) {
@@ -13,11 +13,11 @@ export function useCallerNumbers(scope: string) {
   const refresh = useCallback(() => {
     if (!scope) return Promise.resolve();
     if (flight.current?.scope === scope) return flight.current.promise;
-    setState(current => ({ scope, numbers: current.scope === scope ? current.numbers : [], busy: true, error: '' }));
+    setState(current => ({ scope, numbers: current.scope === scope ? current.numbers : [], dialing: current.scope === scope ? current.dialing : undefined, busy: true, error: '' }));
     const request = { scope, promise: Promise.resolve() };
-    request.promise = api('/api/telnyx/numbers').then(({ numbers }) => {
+    request.promise = api('/api/telnyx/numbers').then(({ numbers, dialing }) => {
       if (!Array.isArray(numbers) || numbers.some(number => !number || typeof number.id !== 'string' || typeof number.phone_number !== 'string')) throw new Error('Invalid number inventory.');
-      if (activeScope.current === scope && flight.current === request) setState({ scope, numbers, busy: false, error: '' });
+      if (activeScope.current === scope && flight.current === request) setState({ scope, numbers, dialing, busy: false, error: '' });
     }).catch(() => {
       if (activeScope.current === scope && flight.current === request) setState(current => ({ ...current, scope, busy: false, error: 'Could not refresh company numbers. Please try again.' }));
     }).finally(() => { if (flight.current === request) flight.current = null; });

@@ -72,3 +72,24 @@ when scope changes. Directory failure is retryable; it never sends a short
 extension to a carrier. Country selection defaults from the user's/caller's
 number or browser region and remains manually adjustable. The full-App browser
 harness covers automatic internal routing without a mode switch.
+# Assigned dialing and colleague presence
+
+The dial pad uses one number field and no caller-ID/country selectors. The
+numbers API publishes `dialing: { callerId, country }`; business calls use the
+administrator's per-user line or company default. No assignment means external
+dialing is unavailable, not a fallback to the first inventory number. National
+numbers use the assigned trunk's main-number country, falling back to the assigned
+E.164 line's country. Explicit `+`/`00` prefixes take precedence. Missing country
+requires an international number. Internal extensions remain tenant-directory
+matches and do not require an external line.
+
+`useVoicePresence` publishes authenticated device availability independently of
+registration and calling. The directory refreshes every 20 seconds. Green means
+a device reports registered/idle, amber means engaged, and gray means no current
+online lease. Titles/accessible labels expose the same states without relying on
+color. Presence is informational, not a route authorization or media-health claim.
+The SIP web engine retains its existing 486 Busy response for second invitations.
+
+Run `scripts/test-dialpad-ui.mjs` with the local Vite URL and Playwright; this mounts
+real components with isolated API/call fixtures and saves desktop/mobile screenshots.
+It does not place calls. Run the SIP lifecycle harness separately for Busy and teardown.

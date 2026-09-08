@@ -3,6 +3,7 @@ import { requireSession } from '../../auth/auth.js';
 import { assertCallerIdForSession } from '../../numbers/phone-number-access.js';
 import { CarrierTrunkError } from '../../numbers/carrier-trunk-store.js';
 import { resolveCarrierOutbound } from '../../numbers/carrier-runtime.js';
+import { dialingDefaults } from '../../numbers/dialing-defaults.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError } from '../../../shared/http.js';
 import { authorizeOutboundCall } from '../../billing/outbound-policy.js';
 import { getExtension, listExtensions } from '../../organizations/pbx.js';
@@ -69,7 +70,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!e164.test(destination)) return res.status(400).json({ error: 'Use a complete international destination beginning with +.' });
       const tenant = pbxForOrganization(config, organizationId);
       const profile = session.extensionId ? tenant.userProfiles[session.extensionId] : undefined;
-      const preferredCallerId = typeof req.body?.callerId === 'string' && req.body.callerId.trim()
+      const businessAccount = config.organizations.find(item => item.id === organizationId)?.accountType === 'business';
+      const preferredCallerId = businessAccount ? dialingDefaults(config, organizationId, session.extensionId).callerId : typeof req.body?.callerId === 'string' && req.body.callerId.trim()
         ? req.body.callerId
         : profile?.outboundCallerId || tenant.company.defaultCallerId;
       if (!preferredCallerId) return res.status(409).json({ error: 'No caller ID is assigned to this account. Ask your administrator to assign a phone number or verified caller ID.' });

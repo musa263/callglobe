@@ -28,6 +28,7 @@ import sipPrompt from './_lib/features/sip/routes/voice-sip-prompt.js';
 import sipVoicemail from './_lib/features/sip/routes/voice-sip-voicemail.js';
 import sipHangup from './_lib/features/sip/routes/voice-sip-hangup.js';
 import preferences from './_lib/features/calling/routes/voice-preferences.js';
+import presence from './_lib/features/calling/routes/voice-presence.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -61,6 +62,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   'sip-voicemail': sipVoicemail,
   'sip-hangup': sipHangup,
   preferences,
+  presence,
 });
 
 export default function handler(req: VercelRequest, res: VercelResponse) {

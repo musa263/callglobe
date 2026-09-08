@@ -6,6 +6,7 @@ import { organizationSettingsFrom, PbxConfigConflictError, pbxForOrganization, r
 import { listExtensions } from '../pbx.js';
 import { requireFeature } from '../saas-access.js';
 import { requestOrganizationId, TenantScopeError, writeTenantScopeError } from '../request-organization.js';
+import { validateOutgoingLine } from '../../numbers/dialing-defaults.js';
 
 function workspaceVersion(config: PbxConfig, organizationId: string, extensionIds: Set<string>) {
   const { ai: _ai, ...settings } = organizationSettingsFrom(pbxForOrganization(config, organizationId));
@@ -46,6 +47,14 @@ export function createAdminPbxHandler(dependencies = { requireAdmin, readPbxConf
         ...editable
       } = body;
       const currentTenant = pbxForOrganization(current, organizationId);
+      for (const [id, profile] of Object.entries(editable.userProfiles || {}) as Array<[string, { outboundCallerId?: unknown }]>) {
+        if (extensionIds.has(id) && profile?.outboundCallerId !== current.userProfiles[id]?.outboundCallerId) {
+          validateOutgoingLine(current, organizationId, profile?.outboundCallerId);
+        }
+      }
+      if (editable.company?.defaultCallerId !== undefined && editable.company.defaultCallerId !== currentTenant.company.defaultCallerId) {
+        validateOutgoingLine(current, organizationId, editable.company.defaultCallerId);
+      }
       if (!access.superadmin) {
         if (editable.outboundRules) await requireFeature(access.session, 'outboundCalling', current);
         if (editable.callHandling?.ringGroups?.length || editable.callHandling?.queues?.length) await requireFeature(access.session, 'queues', current);

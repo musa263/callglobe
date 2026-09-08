@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanCallInput, resolveCallDestination } from './callDestination.js';
 const company = { business: true, ownExtension: '2000', countryCode: 'SA', dialCode: '+966', directory: [{ id: 'user-3', extension: '2003', name: 'Colleague' }] };
+test('a missing assigned country requires an explicit international prefix', () => {
+  const unknown = { ...company, countryCode: undefined, dialCode: undefined };
+  assert.equal(resolveCallDestination('12025550123', unknown).kind, 'incomplete');
+  assert.equal(resolveCallDestination('+12025550123', unknown).number, '+12025550123');
+  assert.equal(resolveCallDestination('0012025550123', unknown).number, '+12025550123');
+  assert.equal(resolveCallDestination('2003', unknown).kind, 'internal');
+});
 test('detects company extensions, self calls and missing directory matches without carrier fallback', () => {
   assert.equal(resolveCallDestination('2003', company).kind, 'internal');
   assert.equal(resolveCallDestination('2000', company).kind, 'self');

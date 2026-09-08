@@ -1,14 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { ArrowLeft, ChevronDown, CircleDollarSign, Globe2, Minus, PhoneCall, Plus, RotateCw, Search, UserRound, UsersRound, X } from 'lucide-react-native';
+import { ArrowLeft, CircleDollarSign, Minus, PhoneCall, Plus, RotateCw, Search, UserRound, UsersRound, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PageHeading } from '../../../shared/components/PageHeading';
 import { useLocales } from 'expo-localization';
 import { useAuth } from '../../auth/AuthContext';
 import { api } from '../../../shared/api';
 import { colors } from '../../../shared/theme';
-import { RatePicker } from '../components/RatePicker';
-import { CallerIdPicker } from '../components/CallerIdPicker';
+import { PresenceDot } from '../components/PresenceDot';
 import { cleanDialInput, defaultDialRegion, dialRegion, resolveCallDestination } from '../state/dialNumber';
 import { useCallingDirectory } from '../state/useCallingDirectory';
 
@@ -20,14 +19,8 @@ export function ConferenceScreen({ onDirect, onWallet }: { onDirect: () => void;
   const insets = useSafeAreaInsets();
   const { profile, rates, callerNumbers } = useAuth();
   const locales = useLocales();
-  const [regionOverride, setRegionOverride] = useState<string>();
-  const region = dialRegion(regionOverride) || defaultDialRegion(locales[0]?.regionCode, profile?.mobile);
-  const [showCountries, setShowCountries] = useState(false);
-  const [showCallerIds, setShowCallerIds] = useState(false);
-  const [selectedCaller, setSelectedCaller] = useState(() => callerNumbers[0] ?? null);
-  useEffect(() => {
-    if (!selectedCaller || !callerNumbers.some((number) => number.id === selectedCaller.id)) setSelectedCaller(callerNumbers[0] ?? null);
-  }, [callerNumbers, selectedCaller]);
+  const region = dialRegion(profile?.dialing_country) || (profile?.account_type !== 'business' ? defaultDialRegion(locales[0]?.regionCode, profile?.mobile) : undefined);
+  const selectedCaller = callerNumbers.find(number => number.phone_number === profile?.outbound_caller_id) || (profile?.account_type !== 'business' ? callerNumbers[0] : null);
   const [participants, setParticipants] = useState<Participant[]>(() => [newParticipant(0), newParticipant(1)]);
   const [selectingId, setSelectingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -93,8 +86,8 @@ export function ConferenceScreen({ onDirect, onWallet }: { onDirect: () => void;
           </View>;
         })}
         {participants.length < 5 && <Pressable accessibilityRole="button" accessibilityLabel="Add participant" disabled={busy} onPress={() => setParticipants((rows) => [...rows, newParticipant(rows.length)])} style={styles.add}><Plus size={17} color={colors.mint} /><Text style={styles.addText}>Add participant</Text></Pressable>}
-        <View style={styles.preferences}><Pressable accessibilityRole="button" accessibilityLabel="Choose default country for local numbers" onPress={() => setShowCountries(true)} style={styles.country}><Globe2 size={16} color={colors.blue} /><Text style={styles.note}>{region || 'Country'}</Text><ChevronDown size={15} color={colors.textMuted} /></Pressable>
-          {hasExternal && <Pressable accessibilityRole="button" accessibilityLabel="Choose outgoing caller ID" onPress={() => setShowCallerIds(true)} style={styles.country}><PhoneCall size={16} color={colors.blue} /><Text numberOfLines={1} style={[styles.note, { flexShrink: 1 }]}>{selectedCaller?.label || selectedCaller?.phone_number || 'Choose a line'}</Text><ChevronDown size={15} color={colors.textMuted} /></Pressable>}
+        <View style={styles.preferences}>
+          {hasExternal && !selectedCaller && <Text style={styles.note}>Ask your administrator to assign an outgoing line.</Text>}
           {directory.status === 'failed' && <Pressable accessibilityRole="button" accessibilityLabel="Retry company directory" onPress={directory.retry} style={styles.country}><RotateCw size={16} color={colors.blue} /><Text style={styles.note}>Retry directory</Text></Pressable>}
         </View>
         {(error || duplicate) && <Text accessibilityRole="alert" style={styles.error}>{error || 'Each participant can only be added once.'}</Text>}
@@ -102,14 +95,12 @@ export function ConferenceScreen({ onDirect, onWallet }: { onDirect: () => void;
       </>}
     </ScrollView>
 
-    <RatePicker visible={showCountries} rates={rates} selected={rates.find((rate) => rate.country_code === region)} onSelect={(rate) => setRegionOverride(rate.country_code)} onClose={() => setShowCountries(false)} />
-    <CallerIdPicker visible={showCallerIds} numbers={callerNumbers} selected={selectedCaller} onSelect={setSelectedCaller} onClose={() => setShowCallerIds(false)} />
     <Modal visible={Boolean(selectingId)} transparent animationType="slide" onRequestClose={() => setSelectingId(null)}>
       <View style={styles.modalBackdrop}><View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) }]}>
         <View style={styles.modalHeader}><View><Text style={styles.modalEyebrow}>COMPANY DIRECTORY</Text><Text style={styles.modalTitle}>Choose a colleague</Text></View><Pressable accessibilityLabel="Close directory" onPress={() => setSelectingId(null)} style={styles.close}><X size={20} color={colors.text} /></Pressable></View>
         <View style={styles.search}><Search size={18} color={colors.textMuted} /><TextInput value={search} onChangeText={setSearch} autoCorrect={false} placeholder="Search name or extension" placeholderTextColor={colors.textFaint} style={styles.searchInput} /></View>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.directoryList}>
-          {loadingDirectory ? <ActivityIndicator color={colors.mint} /> : filteredDirectory.map((user) => <Pressable key={user.id} accessibilityRole="button" accessibilityLabel={`Choose ${user.name}`} onPress={() => { if (selectingId) update(selectingId, { number: user.extension }); setSelectingId(null); }} style={styles.directoryRow}><View style={styles.directoryAvatar}><Text style={styles.directoryInitial}>{user.name.slice(0, 1).toUpperCase()}</Text></View><View style={styles.directoryCopy}><Text style={styles.directoryName}>{user.name}</Text><Text style={styles.directoryMeta}>Extension {user.extension}{user.department ? ` · ${user.department}` : ''}</Text></View></Pressable>)}
+          {loadingDirectory ? <ActivityIndicator color={colors.mint} /> : filteredDirectory.map((user) => <Pressable key={user.id} accessibilityRole="button" accessibilityLabel={`Choose ${user.name}`} onPress={() => { if (selectingId) update(selectingId, { number: user.extension }); setSelectingId(null); }} style={styles.directoryRow}><View style={styles.directoryAvatar}><Text style={styles.directoryInitial}>{user.name.slice(0, 1).toUpperCase()}</Text></View><PresenceDot presence={user.presence} /><View style={styles.directoryCopy}><Text style={styles.directoryName}>{user.name}</Text><Text style={styles.directoryMeta}>Extension {user.extension}{user.department ? ` · ${user.department}` : ''}</Text></View></Pressable>)}
           {!loadingDirectory && !filteredDirectory.length && <Text style={styles.empty}>{directory.status === 'failed' ? 'Company directory unavailable' : 'No matching colleagues'}</Text>}
           {directory.status === 'failed' && <Pressable accessibilityRole="button" onPress={directory.retry} style={styles.add}><RotateCw size={18} color={colors.blue} /><Text style={styles.addText}>Retry</Text></Pressable>}
         </ScrollView>

@@ -66,3 +66,9 @@ or per-number caller IDs and destinations. `Add SIP trunk` opens the company
 carrier form; the separate external connection action is `Add PBX registration`.
 The scoped stylesheet keeps number rows readable on narrow screens. Confirm the
 saved entry remains visible after a fresh page load, including unassigned DIDs.
+# Outgoing user assignment
+
+Users > General > Outgoing line lists only enabled numbers in the selected
+customer workspace (carrier numbers only in carrier mode). Company default is
+the inherited option. A detached historical assignment is shown as unavailable,
+not silently substituted. Backend ownership checks and PBX CAS remain mandatory.

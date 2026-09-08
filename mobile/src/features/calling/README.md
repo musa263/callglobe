@@ -258,3 +258,24 @@ preservation fixes and tenant-carrier number support. The September 8 local iOS
 Release build is development-signed for the existing provisioned device; it is
 not a TestFlight distribution. Physical answer/recovery and live carrier audio
 acceptance remain separate from compilation and signature verification.
+# Assigned dialing and presence
+
+Dial Pad and Conference use `profile.outbound_caller_id` and `dialing_country`
+from authenticated bootstrap. Company admins assign each user's outgoing line
+in Users; company default is an administrator-controlled fallback. Users cannot
+override it. The dial pad has no line/country pickers. Explicit international
+prefixes and a contact's explicit country win over national-number defaults.
+Editing away from a selected contact clears its country override. Internal calls
+still require an unambiguous same-company directory match, not an outgoing line.
+
+`state/useVoicePresence` publishes registered/engaged states every 20 seconds,
+without blocking voice setup. Background idle devices report offline; this does
+not mean a valid VoIP push cannot wake them. A lost/killed device's lease expires
+after 60 seconds. Other screens show online/busy/offline indicators with accessible
+labels and refresh the directory on foreground entry. The existing transactional
+mobile call-waiting flow is retained; availability dots never authorize or reject
+calls. Signaling and physical multi-device behavior remain separate acceptance gates.
+
+Run mounted DialerScreen/ConferenceScreen tests, presence publisher tests and the
+full mobile suite. A new native distribution must include these source changes
+before physical iOS/Android acceptance; a Vercel deploy alone cannot ship them.

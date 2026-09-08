@@ -21,6 +21,7 @@ import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnectio
 import { useVoiceRegistration } from './engine/useVoiceRegistration';
 import { useAuth } from '../auth/AuthContext';
 import { routeCancellations } from './runtime/routeCancellation';
+import { useVoicePresence } from './state/useVoicePresence';
 
 /** A call that is over: nothing more will happen on it. */
 const isTerminalCall = (state: VoiceCallState) => isTerminalVoiceCallState(state);
@@ -49,6 +50,8 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [waitingCall, setWaitingCall] = useState<ActiveCall | null>(null);
   const [heldCall, setHeldCall] = useState<ActiveCall | null>(null);
+  useVoicePresence(isAuthenticated && profile?.account_type === 'business' && profile?.organization_id && profile?.id
+    ? JSON.stringify([profile.organization_id, profile.id]) : '', connection === ConnectionState.CONNECTED, Boolean(activeCall || waitingCall || heldCall));
   // Read by callbacks the subscription effect depends on. Listing `heldCall`
   // itself in their dependencies re-ran that effect on every change; the
   // calls subject replays on subscribe and the handler built a new object

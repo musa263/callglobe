@@ -14,7 +14,7 @@ jest.mock('../../src/shared/api', () => ({ api: {
   post: (...args: unknown[]) => mockPost(...args),
 } }));
 const mockPost = jest.fn<Promise<unknown>, unknown[]>();
-let mockProfile = { id: 'self', extension: '2000', organization_id: 'company', account_type: 'business' };
+let mockProfile = { id: 'self', extension: '2000', organization_id: 'company', account_type: 'business', outbound_caller_id: '+12025550123', dialing_country: 'AE' };
 import { ConferenceScreen } from '../../src/features/calling/screens/ConferenceScreen';
 
 let renderer: TestRenderer.ReactTestRenderer;

@@ -8,6 +8,7 @@ import { sessionOrganizationId } from '../../organizations/tenancy.js';
 import { carrierMode } from '../carrier-number-service.js';
 import { assignedNumbersForOrganization } from '../phone-number-access.js';
 import { carrierTrunks } from '../carrier-trunk-store.js';
+import { dialingDefaults } from '../dialing-defaults.js';
 
 type TelnyxNumber = {
   id: string;
@@ -28,7 +29,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const config = await readPbxConfig();
     const organizationId = session.sub === 'vocivo-owner' ? '' : sessionOrganizationId(session, config);
     res.setHeader('Cache-Control', 'private, no-store');
-    if (organizationId && carrierMode(config, organizationId)) return res.status(200).json({ numbers: assignedNumbersForOrganization(config, organizationId, await carrierTrunks.list(organizationId)) });
+    if (organizationId && carrierMode(config, organizationId)) {
+      const trunks = await carrierTrunks.list(organizationId);
+      return res.status(200).json({ numbers: assignedNumbersForOrganization(config, organizationId, trunks), dialing: dialingDefaults(config, organizationId, session.extensionId, trunks) });
+    }
     const connectionId = requiredEnv('TELNYX_CONNECTION_ID');
     const callControlApplicationId = requiredEnv('TELNYX_CALL_CONTROL_APP_ID');
     const pstnConnectionId = telnyxPstnConnectionId();
@@ -44,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       messaging_enabled: Boolean(number.messaging_profile_id),
       source: 'owned',
     }));
-    return res.status(200).json({ numbers });
+    return res.status(200).json({ numbers, dialing: organizationId ? dialingDefaults(config, organizationId, session.extensionId) : null });
   } catch (error) {
     if (writeAuthError(res, error)) return;
     return res.status(500).json({ error: publicError(error) });

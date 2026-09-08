@@ -4,6 +4,7 @@ import { api, clearSession, getStoredSession, storeSession } from "./shared/api"
 import { buildDialingDirectory } from "./features/numbers/countries";
 import { useCallerNumbers } from './features/numbers/useCallerNumbers';
 import { useVoice } from "./features/calling/hooks/useVoice";
+import { useVoicePresence } from './features/calling/hooks/useVoicePresence';
 import { readHistory, writeHistory } from "./features/calling/history/historyStorage.js";
 import { formatPhone } from "./features/calling/formatting.js";
 import { Login } from "./features/auth/Login.jsx";
@@ -45,6 +46,7 @@ export default function App() {
   const numberState = useCallerNumbers(session && profile && !profile.admin_only && !profile.force_password_change ? voiceSessionKey : '');
   const numbers = numberState.numbers;
   const voice = useVoice(voiceSessionKey, Boolean(session) && Boolean(profile) && profile?.admin_only !== true && !profile?.force_password_change, voiceIdentity, session);
+  useVoicePresence(session && profile?.account_type === 'business' && !profile?.admin_only && !profile?.force_password_change ? voiceSessionKey : '', voice.ready, Boolean(voice.active || voice.incomingCall || voice.callStarting));
 
   useEffect(() => {
     if (!session) return;
@@ -115,7 +117,10 @@ export default function App() {
   const shellData = useMemo(() => ({ profile, balance, rates, numbers, verifiedNumbers }), [profile, balance, rates, numbers, verifiedNumbers]);
   const canAdmin = ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(shellData.profile?.role || '');
   const callerNumbers = useMemo(() => [...shellData.numbers, ...shellData.verifiedNumbers], [shellData.numbers, shellData.verifiedNumbers]);
-  const currentCallerNumber = callerNumbers.find(number => number.phone_number === selectedNumber?.phone_number) || callerNumbers[0] || null;
+  const assignedCallerId = numberState.dialing ? numberState.dialing.callerId : profile?.outbound_caller_id;
+  const currentCallerNumber = profile?.account_type === 'business'
+    ? callerNumbers.find(number => number.phone_number === assignedCallerId) || null
+    : callerNumbers.find(number => number.phone_number === assignedCallerId) || callerNumbers[0] || null;
   useEffect(() => {
     if (view === 'admin' && profile && !canAdmin) setView('dialer');
   }, [canAdmin, profile, view]);

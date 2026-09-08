@@ -40,6 +40,7 @@ try {
         import {useSipVoice} from '/src/features/calling/hooks/useSipVoice.js';
         window.invites = 0;
         window.commands = [];
+        window.rejections = [];
         window.sessions = [];
         window.makeSession = (incoming) => {
           const listeners = new Set();
@@ -54,7 +55,7 @@ try {
             get listenerCount() {return listeners.size},
             accept: async () => {await new Promise(resolve=>window.finishAnswer=resolve);session.emit('Established')},
             bye: async () => {window.commands.push('BYE');session.emit('Terminated')},
-            reject: async () => {window.commands.push('REJECT');session.emit('Terminated')},
+            reject: async (options) => {window.rejections.push(options?.statusCode);window.commands.push('REJECT');session.emit('Terminated')},
           };
           if (!incoming) session.cancel=async()=>{window.commands.push('CANCEL');session.emit('Terminated')};
           window.sessions.push(session);
@@ -134,9 +135,14 @@ try {
     catch { return window.voice.state === 'active'; }
   }), true, 'unsupported hold must fail without changing live call state');
   assert.equal(await page.evaluate(() => window.tones.some(t => t.playing)), false);
+  await page.evaluate(() => window.sipInput.onInvite(window.makeSession(true)));
+  await page.waitForFunction(() => window.rejections.length === 1);
+  assert.equal(await page.evaluate(() => window.rejections[0]), 486);
+  assert.equal(await page.evaluate(() => window.voice.state === 'active' && window.lastSession.state === 'Established'), true);
+  console.log('PASS: a second incoming call receives 486 Busy without disturbing the established call');
   await page.getByRole('button', { name: 'End call', exact: true }).click();
   await page.waitForFunction(() => !window.voice.call);
-  assert.deepEqual(await page.evaluate(() => window.commands), ['BYE']);
+  assert.deepEqual(await page.evaluate(() => window.commands), ['REJECT', 'BYE']);
   assert.equal(await page.evaluate(() => window.sessions.every(session => session.listenerCount === 0)), true);
   console.log('PASS: established hangup sends exactly one BYE and removes listeners');
 

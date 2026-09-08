@@ -10,10 +10,11 @@ import type { ContactPhone } from '../../../shared/types';
 import { colors } from '../../../shared/theme';
 import { useAuth } from '../../auth/AuthContext';
 import { useCallingDirectory } from '../../calling/state/useCallingDirectory';
+import { dialRegion } from '../../calling/state/dialNumber';
+import { PresenceDot } from '../../calling/components/PresenceDot';
 
-const cleanNumber = (value: string) => {
+const cleanNumber = (value: string, region?: CountryCode) => {
   const trimmed = value.trim();
-  const region = getLocales()[0]?.regionCode as CountryCode | undefined;
   const parsed = parsePhoneNumberFromString(trimmed, region);
   if (parsed?.isPossible()) return parsed.number;
   const digits = trimmed.replace(/\D/g, '');
@@ -26,7 +27,7 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
   const [contacts, setContacts] = useState<ContactPhone[]>([]);
   const { profile } = useAuth();
   const directory = useCallingDirectory(profile?.account_type === 'business', profile?.organization_id, profile?.id);
-  const team = useMemo<ContactPhone[]>(() => directory.users.map((user) => ({ id: `team-${user.id}`, name: user.name, number: user.extension, extension: user.extension, photoUrl: user.photoUrl, label: user.department, internal: true })), [directory.users]);
+  const team = useMemo<ContactPhone[]>(() => directory.users.map((user) => ({ id: `team-${user.id}`, name: user.name, number: user.extension, extension: user.extension, photoUrl: user.photoUrl, label: user.department, internal: true, presence: user.presence })), [directory.users]);
   const [query, setQuery] = useState('');
   const searchRef = useRef<TextInput>(null);
 
@@ -41,14 +42,14 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
     const rows = result.data.flatMap((contact) => (contact.phoneNumbers ?? []).map((phone, index) => ({
       id: `${contact.id}-${phone.id ?? index}`,
       name: contact.name || phone.number || 'Unnamed contact',
-      number: cleanNumber(phone.number ?? ''),
+      number: cleanNumber(phone.number ?? '', dialRegion(phone.countryCode) || dialRegion(profile?.dialing_country) || (profile?.account_type !== 'business' ? dialRegion(getLocales()[0]?.regionCode) : undefined)),
       label: phone.label,
       countryCode: phone.countryCode,
       photoUrl: contact.image?.uri,
     }))).filter((contact) => contact.number.length >= 4);
     setContacts(rows);
     setPermission('granted');
-  }, []);
+  }, [profile?.dialing_country, profile?.account_type]);
 
   useEffect(() => { load().catch(() => setPermission('denied')); }, [load]);
 
@@ -78,7 +79,7 @@ export function ContactsScreen({ onCall, onMessage, onVideoMeeting }: { onCall: 
           renderItem={({ item }) => (
             <View style={styles.row}>
               {item.photoUrl ? <Image source={{ uri: item.photoUrl }} style={styles.avatarPhoto} /> : <View style={[styles.avatar, item.internal && styles.teamAvatar]}><Text style={styles.initial}>{item.name.charAt(0).toUpperCase()}</Text></View>}
-              <View style={styles.details}><Text numberOfLines={1} style={styles.name}>{item.name}</Text><Text numberOfLines={1} style={styles.number}>{item.internal ? `Extension ${item.extension} · ${item.label || 'Company'}` : `${item.number}${item.label ? `  ·  ${item.label}` : ''}`}</Text></View>
+              <View style={styles.details}><View style={{ flexDirection: 'row', alignItems: 'center' }}>{item.internal && <PresenceDot presence={item.presence} />}<Text numberOfLines={1} style={[styles.name, { flexShrink: 1 }]}>{item.name}</Text></View><Text numberOfLines={1} style={styles.number}>{item.internal ? `Extension ${item.extension} · ${item.label || 'Company'}` : `${item.number}${item.label ? `  ·  ${item.label}` : ''}`}</Text></View>
               <Pressable accessibilityLabel={`Message ${item.name}`} onPress={() => onMessage(item)} style={styles.action}><MessageSquareText size={19} color={colors.blue} /></Pressable>
               <Pressable accessibilityLabel={`Call ${item.name}`} onPress={() => onCall(item)} style={[styles.action, styles.callAction]}><Phone size={18} color={colors.mint} /></Pressable>
             </View>

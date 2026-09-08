@@ -1,7 +1,7 @@
 import { isSupportedCountry, parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/min';
 import type { CallRate } from '../../../shared/types';
 
-export type CallingColleague = { id: string; extension: string; name: string; department?: string; photoUrl?: string };
+export type CallingColleague = { id: string; extension: string; name: string; department?: string; photoUrl?: string; presence?: 'online' | 'busy' | 'offline' };
 
 export function dialRegion(value?: string | null): CountryCode | undefined {
   const region = value?.toUpperCase();
