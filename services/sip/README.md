@@ -210,6 +210,37 @@ and, where necessary, live media counters or a scoped capture.
 
 ## Shared carrier IP connectivity
 
+### Temporary carrier audio acceptance
+
+`tests/temporary_carrier_pbx.py` is an explicitly operated, isolated IP-auth
+carrier test. It does not activate a portal trunk, select a tenant, modify a
+firewall, or stop an existing PBX. `prepare` takes the real local public IP,
+carrier IP, one E.164 DID (digits), its national spelling, and an authorized
+caller ID. It downloads a checksum-pinned official Docker runtime into
+`/opt/vocivo-carrier-test`, starts a separate daemon without bridge/NAT/firewall
+changes, and pulls the digest-pinned FreeSWITCH image. It needs Linux x86_64,
+systemd, root and 12 GiB free. No platform/carrier credentials are used.
+
+`start` checks SIP 5062, loopback ESL 18021 and UDP 9900–9919 are free, then
+starts the test profile. Only the specified carrier IP and DID can enter the
+tone/echo dialplan. It has no outbound bridge or SIP registrations. ESL uses a
+random private password; files remain root-only. `call COUNTRY_CODE_DIGITS`
+places exactly one explicitly authorized outbound call; it never retries. The
+answer plays a short tone and echoes caller audio, ending after 35 seconds.
+`reports` prints selected call/RTP counters without telephone numbers; private
+CDRs remain on the host. A human must confirm audible tone/echo and caller ID.
+
+Use `status` and `reports`, then `stop` to stop the container and temporary
+daemon. The daemon also expires after two hours. Its private test directory
+is retained for inspection and must be removed after evidence retention is
+decided. There is no automatic 3CX cutover: inbound testing on occupied 5060
+requires a separately verified idle-call check and timed restoration procedure
+before any service interruption. Existing tenant destinations stay unassigned.
+
+Run `python3 -m unittest discover -s services/sip/tests -p 'test_*carrier*.py'`.
+These tests validate the restricted configuration and input contract. Local
+Docker SIP/RTP acceptance and actual carrier/handset acceptance are distinct.
+
 `Carrier connectivity diagnostics` accepts the carrier IPv4/UDP port and the
 customer's expected public IPv4. It sends at most two SIP OPTIONS requests per
 target from the deployed edge, reports the socket source address and matching
