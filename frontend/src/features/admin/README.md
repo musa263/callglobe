@@ -1,5 +1,11 @@
 # Administration UI
 
+Company user creation includes email and a temporary web sign-in password for
+employees as well as administrators. The users table shows whether web sign-in
+is enabled. Existing QR-only users can enable it through Edit; role permissions
+remain enforced by the API. `scripts/test-company-user-form.mjs` mounts the real
+form and verifies employee credentials without granting an admin role.
+
 `AdminConsole.jsx` owns navigation, profile/access loading and page composition.
 It is no longer the implementation of every admin screen. Page folders are:
 

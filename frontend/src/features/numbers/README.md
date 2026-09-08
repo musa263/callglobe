@@ -19,3 +19,10 @@ App bootstrap retains `source: carrier` entries in the caller-ID menu. Pending
 lines remain visible with their status; the dialer disables external calls for
 them while internal calls remain independent. The full-App startup browser
 harness covers all five imported DIDs, pending admission and ready selection.
+
+`useCallerNumbers.ts` refreshes the lightweight tenant number endpoint separately
+from wallet/rates bootstrap. It single-flights requests within the current
+account, ignores late responses from an old scope, and preserves loaded choices
+on temporary failure. The picker exposes loading, empty and retry states. A
+refresh does not change the SIP session identity or restart calling. The full-App
+test covers carrier selection and recovery from an inventory outage.

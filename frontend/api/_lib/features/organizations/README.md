@@ -92,3 +92,14 @@ New customer workspaces start in `company.callingMode: carrier`; existing
 workspaces retain their configured mode until an explicit carrier publication.
 Number assignments record trunk, configuration/connection revisions and national
 DID aliases. Disabled assignments are excluded from inbound tenant lookup.
+
+Company administrators can create employee or manager web logins through the
+existing user endpoint, using email and a temporary password. New business users
+require those fields; existing QR-only users can enable login by setting a
+password. Only owners can grant administrator roles. Account email uniqueness
+uses the existing global database constraint, and employee accounts do not count
+toward the last-administrator safeguard. The extension and account remain
+separate records: failed creation attempts compensate by deleting the new
+extension; an inconsistent edit fails current-identity authorization.
+The injectable admin-user handler tests tenant denial, credential validation,
+role escalation, reset and removal without touching production accounts.

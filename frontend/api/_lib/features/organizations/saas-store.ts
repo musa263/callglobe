@@ -1,3 +1,4 @@
+import { hasActiveAdministrator, isCompanyAccountRole, validCompanyPassword, type CompanyAccountRole } from '../auth/company-account.js';
 import { createDecipheriv, createHash, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import {
@@ -78,7 +79,7 @@ export type TenantAdminAccount = {
   organizationId: string;
   email: string;
   name: string;
-  role: 'company_owner' | 'company_admin';
+  role: CompanyAccountRole;
   passwordHash: string;
   status: 'active' | 'suspended';
   forcePasswordChange: boolean;
@@ -391,7 +392,7 @@ export async function authenticateTenantAdmin(email: string, password: string, c
 }
 
 function validPassword(password: string) {
-  return password.length >= 10 && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
+  return validCompanyPassword(password);
 }
 
 export async function saveTenantAdmin(input: Partial<TenantAdminAccount> & { password?: string }, config: PbxConfig) {
@@ -402,22 +403,24 @@ export async function saveTenantAdmin(input: Partial<TenantAdminAccount> & { pas
   const existing = input.id
     ? state.tenantAdmins.find((account) => account.id === input.id)
     : input.extensionId
-      ? state.tenantAdmins.find((account) => account.extensionId === input.extensionId) || state.tenantAdmins.find((account) => account.email === email)
+      ? state.tenantAdmins.find((account) => account.extensionId === input.extensionId)
       : state.tenantAdmins.find((account) => account.email === email);
-  if (!email || !/^\S+@\S+\.\S+$/.test(email)) throw new Error('Enter a valid administrator email.');
-  if (!name) throw new Error('Administrator name is required.');
+  if (input.id && !existing) throw new Error('Company account not found.');
+  if (input.role !== undefined && !isCompanyAccountRole(input.role)) throw new Error('Invalid company account role.');
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) throw new Error('Enter a valid company account email.');
+  if (!name) throw new Error('Name is required.');
   if (!config.organizations.some((organization) => organization.id === organizationId)) throw new Error('Administrator organization was not found.');
   if (!existing && !validPassword(input.password || '')) throw new Error('Temporary password must have 10 characters, upper and lowercase letters, and a number.');
   if (input.password && !validPassword(input.password)) throw new Error('Temporary password must have 10 characters, upper and lowercase letters, and a number.');
   const duplicate = await findTenantAdminByEmail(email, config);
-  if (duplicate && duplicate.id !== existing?.id) throw new Error('This email already belongs to another customer administrator.');
+  if (duplicate && duplicate.id !== existing?.id) throw new Error('This email already belongs to another company account.');
   const now = new Date().toISOString();
   const account: TenantAdminAccount = {
     id: existing?.id || randomUUID(),
     organizationId,
     email,
     name,
-    role: input.role === 'company_admin' || input.role === 'company_owner' ? input.role : existing?.role || 'company_owner',
+    role: isCompanyAccountRole(input.role) ? input.role : existing?.role || (input.extensionId ? 'user' : 'company_owner'),
     passwordHash: input.password ? await bcrypt.hash(input.password, 12) : existing?.passwordHash || '',
     status: input.status === 'suspended' || input.status === 'active' ? input.status : existing?.status || 'active',
     forcePasswordChange: input.password ? input.forcePasswordChange !== false : existing?.forcePasswordChange ?? true,
@@ -426,9 +429,10 @@ export async function saveTenantAdmin(input: Partial<TenantAdminAccount> & { pas
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };
+  if (!['company_owner', 'company_admin'].includes(account.role) && (!account.extensionId || !account.extension)) throw new Error('Employee web accounts require a company extension.');
   const tenantAdmins = [...state.tenantAdmins.filter((item) => item.id !== account.id), account];
   const organization = config.organizations.find((item) => item.id === organizationId);
-  if (organization?.accountType === 'business' && !tenantAdmins.some((item) => item.organizationId === organizationId && item.status === 'active')) throw new Error('Business customers require at least one active company administrator.');
+  if (organization?.accountType === 'business' && !hasActiveAdministrator(tenantAdmins)) throw new Error('Business customers require at least one active company administrator.');
   await upsertTenantSaasAdmin(organizationId, adminRow(account));
   return account;
 }
@@ -453,7 +457,7 @@ export async function removeTenantAdminForExtension(extensionId: string, organiz
   const removing = state.tenantAdmins.some((item) => item.extensionId === extensionId);
   const remaining = state.tenantAdmins.filter((item) => item.extensionId !== extensionId);
   const organization = config.organizations.find((item) => item.id === organizationId);
-  if (removing && organization?.accountType === 'business' && !remaining.some((item) => item.organizationId === organizationId && item.status === 'active')) throw new Error('Business customers require at least one active company administrator.');
+  if (removing && organization?.accountType === 'business' && !hasActiveAdministrator(remaining)) throw new Error('Business customers require at least one active company administrator.');
   await deleteTenantSaasAdminsForExtension(organizationId, extensionId);
 }
 
@@ -468,7 +472,7 @@ export async function removeTenantAdmin(accountId: string, organizationId: strin
   if (!account) return false;
   const remaining = state.tenantAdmins.filter((item) => item.id !== accountId);
   const organization = config.organizations.find((item) => item.id === organizationId);
-  if (organization?.accountType === 'business' && !remaining.some((item) => item.organizationId === organizationId && item.status === 'active')) throw new Error('Business customers require at least one active company administrator.');
+  if (organization?.accountType === 'business' && !hasActiveAdministrator(remaining)) throw new Error('Business customers require at least one active company administrator.');
   return deleteTenantSaasAdmin(organizationId, accountId);
 }
 

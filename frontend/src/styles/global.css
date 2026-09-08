@@ -87,7 +87,7 @@ audio { display: none; }
 .caller-trigger small,.balance-block small,.rate-strip small { color:#7a8580; font-size:9px; font-weight:700; letter-spacing:.8px; }
 .caller-trigger strong { font-size:13px; }
 .caller-number { color:var(--muted); font-size:13px; }
-.caller-menu { width:100%; position:absolute; top:calc(100% + 6px); left:0; padding:5px; border:1px solid #d7ded9; border-radius:6px; background:white; box-shadow:0 16px 34px rgba(24,40,34,.13); }
+.caller-menu { width:100%; max-height:min(360px,60vh); overflow-y:auto; position:absolute; top:calc(100% + 6px); left:0; padding:5px; border:1px solid #d7ded9; border-radius:6px; background:white; box-shadow:0 16px 34px rgba(24,40,34,.13); }
 .caller-menu button { width:100%; min-height:50px; padding:6px 10px; display:flex; justify-content:space-between; align-items:center; border:0; border-radius:4px; text-align:left; color:var(--ink); background:white; }
 .caller-menu button:hover,.country-list button:hover { background:var(--soft); }
 .caller-menu button span { display:grid; }

@@ -188,3 +188,9 @@ Bootstrap can return `source: carrier` numbers with `ready` or
 carrier number. The API authorizes its current trunk at call time; UI selection
 is not carrier activation. These client type/selection changes need a mobile
 release; backend number publication is available independently.
+
+Version 1.0.0 build 65 includes the current SIP credential-renewal/contact
+preservation fixes and tenant-carrier number support. The September 8 local iOS
+Release build is development-signed for the existing provisioned device; it is
+not a TestFlight distribution. Physical answer/recovery and live carrier audio
+acceptance remain separate from compilation and signature verification.

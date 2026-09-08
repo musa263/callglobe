@@ -1,3 +1,5 @@
+import { assertCompanyAccountIdentity } from '../company-account.js';
+import { readCurrentExtension } from '../../organizations/extension-identity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import bcrypt from 'bcryptjs';
 import { createSession, createTenantAdminSession, setSessionCookies } from '../auth.js';
@@ -70,6 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const account = await authenticateTenantAdmin(email, password, config);
     const organization = account ? config.organizations.find((item) => item.id === account.organizationId && item.status === 'active') : undefined;
     if (!account || !organization) return reject();
+    try { assertCompanyAccountIdentity(account, account.extensionId ? await readCurrentExtension(account.extensionId) : null); } catch { return reject(); }
     const access = effectiveEntitlements(await readTenantSaasState(organization.id, config), organization.id, organization.accountType);
     if (!access.serviceActive) return res.status(403).json({ error: 'This company subscription is not active. Contact Vocivo support.' });
     const token = await createTenantAdminSession(account);

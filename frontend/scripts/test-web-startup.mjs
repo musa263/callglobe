@@ -14,6 +14,7 @@ try {
   const requests = [];
   let sessionValid = true;
   let carrierReady = false;
+  let numberFailure = false;
   const carrierNumbers = () => [0, 1, 2, 3, 4].map(index => ({ id: `carrier-${index}`, source: 'carrier',
     phone_number: `+96613511000${index}`, label: index ? `Company carrier ${index + 1}` : 'Company carrier main line',
     status: carrierReady ? 'ready' : 'pending_activation', receives_calls: false }));
@@ -38,9 +39,12 @@ try {
       if (holdSession) await new Promise((resolve) => { releaseSession = resolve; });
       return route.fulfill({ status: sessionValid ? 200 : 401, json: sessionValid ? { profile } : { error: 'Session expired.' } });
     }
+    if (path === '/api/telnyx/numbers' && numberFailure) return route.fulfill({ status: 503, json: { error: 'Fixture inventory outage' } });
     if (path === '/api/mobile/bootstrap' && holdBootstrap) await new Promise((resolve) => { releaseBootstrap = resolve; });
     const data = {
-      '/api/mobile/bootstrap': { profile, account: { balance: 0, rates: [] }, numbers: carrierNumbers() },
+      '/api/mobile/bootstrap': { profile, account: { balance: 0, rates: [] }, numbers: [] },
+      '/api/telnyx/numbers': { numbers: carrierNumbers() },
+      '/api/voice/directory': { users: [{ id: 'qa-colleague', extension: '2003', name: 'QA Colleague' }] },
       '/api/voice/config': { provider: 'sip', voice_edge: 'sip' },
       '/api/voice/route': { destination: 'sip:qa-colleague@test.invalid', destinationName: 'QA Colleague', routeToken: 'fixture' },
       '/api/voice/sip-credentials': { username: 'qa', password: 'fixture', domain: 'test.invalid', wsUri: 'wss://test.invalid', expires_in: 3600 },
@@ -104,14 +108,24 @@ try {
   console.log('PASS: authenticated phone renders before bootstrap completes; only REGISTER acknowledgement makes it ready');
   assert.ok(requests.includes('/api/voice/sip-credentials'));
   await page.getByRole('button', { name: /CALLING FROM Company carrier main line/ }).click();
-  assert.equal(await page.locator('.caller-menu button').count(), 5);
-  assert.equal(await page.locator('.caller-menu button').filter({ hasText: 'Pending activation' }).count(), 5);
-  await page.locator('.caller-menu button').last().click();
-  await page.getByRole('textbox', { name: 'Phone number', exact: true }).fill('+12025550123');
+  assert.equal(await page.getByRole('option').count(), 5);
+  assert.equal(await page.getByRole('option').filter({ hasText: 'Pending activation' }).count(), 5);
+  await page.getByRole('option').last().click();
+  await page.getByRole('textbox', { name: 'Number to call', exact: true }).fill('+12025550123');
   assert.equal(await page.getByRole('button', { name: 'Call now', exact: true }).isDisabled(), true);
   await page.getByRole('status').filter({ hasText: 'This carrier line is pending activation.' }).waitFor();
   assert.equal(requests.includes('/api/voice/route'), false);
   console.log('PASS: all five carrier DIDs survive App bootstrap; pending lines stay visible and cannot start external calls');
+  numberFailure = true;
+  await page.locator('.caller-trigger').click();
+  await page.getByRole('alert').filter({ hasText: 'Could not refresh company numbers.' }).waitFor();
+  assert.equal(await page.getByRole('option').count(), 5, 'a temporary refresh failure retains the loaded inventory');
+  numberFailure = false;
+  await page.getByRole('button', { name: 'Refresh numbers', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: 'Could not refresh company numbers.' }).waitFor({ state: 'hidden' });
+  await page.getByRole('option').first().click();
+  console.log('PASS: number refresh failure is visible and retryable without losing caller IDs or restarting SIP');
+
   carrierReady = true;
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.sipInput);
@@ -120,9 +134,9 @@ try {
   assert.equal(await page.evaluate(() => 'token' in JSON.parse(localStorage.getItem('vocivo.session'))), false);
   console.log('PASS: full App starts and re-registers after reload without a stored bearer');
   await page.getByRole('button', { name: /CALLING FROM Company carrier main line/ }).waitFor();
-  await page.getByRole('textbox', { name: 'Phone number', exact: true }).fill('+12025550123');
+  await page.getByRole('textbox', { name: 'Number to call', exact: true }).fill('+12025550123');
   assert.equal(await page.getByRole('button', { name: 'Call now', exact: true }).isEnabled(), true);
-  await page.getByRole('textbox', { name: 'Phone number', exact: true }).fill('');
+  await page.getByRole('textbox', { name: 'Number to call', exact: true }).fill('');
 
   await page.evaluate(() => window.receiveCall());
   await page.getByText('QA Colleague', { exact: true }).waitFor();
@@ -152,8 +166,12 @@ try {
   console.log('PASS: unsupported SIP controls are disabled instead of simulating success');
   await page.screenshot({ path: '/tmp/vocivo-full-app-qa.png', fullPage: true });
   await page.getByRole('button', { name: 'End call', exact: true }).click();
-  await page.getByRole('button', { name: 'Extension', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Company extension', exact: true }).fill('2003');
+  assert.equal(await page.getByRole('button', { name: 'Extension', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'External', exact: true }).count(), 0);
+  await page.getByRole('textbox', { name: 'Number to call', exact: true }).fill('2004');
+  await page.getByText('No matching company extension', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Call now', exact: true }).isDisabled(), true);
+  await page.getByRole('textbox', { name: 'Number to call', exact: true }).fill('2003');
   await page.getByRole('button', { name: 'Call extension', exact: true }).click();
   await page.waitForFunction(() => !!window.rejectOutgoing);
   await page.evaluate(() => window.rejectOutgoing());

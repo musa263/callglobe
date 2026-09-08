@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Globe2, History, LogOut, Phone, Settings, ShieldCheck, WalletCards, X } from "lucide-react";
 import { api, clearSession, getStoredSession, storeSession } from "./shared/api";
 import { buildDialingDirectory } from "./features/numbers/countries";
+import { useCallerNumbers } from './features/numbers/useCallerNumbers';
 import { useVoice } from "./features/calling/hooks/useVoice";
 import { readHistory, writeHistory } from "./features/calling/history/historyStorage.js";
 import { formatPhone } from "./features/calling/formatting.js";
@@ -23,8 +24,7 @@ export default function App() {
   const [loading, setLoading] = useState(Boolean(initialSession));
   const [profile, setProfile] = useState(null);
   const [balance, setBalance] = useState(null);
-  const [rates, setRates] = useState([]);
-  const [numbers, setNumbers] = useState([]);
+  const [rates, setRates] = useState(() => buildDialingDirectory());
   const [verifiedNumbers, setVerifiedNumbers] = useState([]);
   const [selectedNumber, setSelectedNumber] = useState(null);
   const [view, setView] = useState(() => window.location.pathname.startsWith('/admin') ? 'admin' : 'dialer');
@@ -42,7 +42,9 @@ export default function App() {
   // Authentication is verified through the httpOnly cookie above. This key
   // identifies the verified account; a browser-stored bearer is not required.
   const voiceSessionKey = profile?.id ? JSON.stringify([profile.organization_id, profile.id]) : null;
-  const voice = useVoice(voiceSessionKey, Boolean(session) && Boolean(profile) && profile?.admin_only !== true, voiceIdentity);
+  const numberState = useCallerNumbers(session && profile && !profile.admin_only && !profile.force_password_change ? voiceSessionKey : '');
+  const numbers = numberState.numbers;
+  const voice = useVoice(voiceSessionKey, Boolean(session) && Boolean(profile) && profile?.admin_only !== true && !profile?.force_password_change, voiceIdentity);
 
   useEffect(() => {
     if (!session) return;
@@ -60,7 +62,7 @@ export default function App() {
         setHistory(readHistory(resolvedProfile.id || session.sub));
         setLoading(false);
         if (resolvedProfile.admin_only) {
-          setBalance(null); setRates([]); setNumbers([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
+          setBalance(null); setRates([]); setVerifiedNumbers([]); setSelectedNumber(null); setView('admin');
           return;
         }
         const { result: bootstrap, failure: loadError } = await bootstrapRequest;
@@ -70,14 +72,11 @@ export default function App() {
           return;
         }
         resolvedProfile = { ...resolvedProfile, ...bootstrap.profile };
-        const owned = (bootstrap.numbers || []).filter((number) => number.source === 'owned' || number.source === 'carrier');
         const verified = (bootstrap.numbers || []).filter((number) => number.source === 'verified');
         setProfile(resolvedProfile);
         setBalance(bootstrap.account?.balance == null ? null : Number(bootstrap.account.balance));
         setRates(buildDialingDirectory(bootstrap.account?.rates || []));
-        setNumbers(owned);
         setVerifiedNumbers(verified);
-        setSelectedNumber(owned[0] || verified[0] || null);
       } catch (sessionError) {
         if (!active) return;
         if ([401, 403].includes(sessionError?.status)) {
@@ -115,6 +114,7 @@ export default function App() {
   const shellData = useMemo(() => ({ profile, balance, rates, numbers, verifiedNumbers }), [profile, balance, rates, numbers, verifiedNumbers]);
   const canAdmin = ['superadmin', 'company_owner', 'company_admin', 'owner', 'admin'].includes(shellData.profile?.role || '');
   const callerNumbers = useMemo(() => [...shellData.numbers, ...shellData.verifiedNumbers], [shellData.numbers, shellData.verifiedNumbers]);
+  const currentCallerNumber = callerNumbers.find(number => number.phone_number === selectedNumber?.phone_number) || callerNumbers[0] || null;
   useEffect(() => {
     if (view === 'admin' && profile && !canAdmin) setView('dialer');
   }, [canAdmin, profile, view]);
@@ -127,6 +127,8 @@ export default function App() {
     clearSession();
     setSession(null);
     setProfile(null);
+    setVerifiedNumbers([]);
+    setSelectedNumber(null);
     setHistory([]);
     setPendingDial('');
   }
@@ -189,7 +191,7 @@ export default function App() {
       <main className="main-area">
         {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={15} /></button></div>}
         {profile?.force_password_change && <div className="modal-layer" role="dialog" aria-modal="true"><section className="modal"><header><div><h2>Update your password</h2><p>This account requires a new password before you can continue.</p></div></header><form className="modal-form" onSubmit={submitForcedPassword}><label>Current password<input type="password" autoComplete="current-password" value={passwordDraft.currentPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, currentPassword: event.target.value }))} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.newPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.confirmPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))} required /></label>{passwordError && <div className="form-error" role="alert">{passwordError}</div>}<button className="primary-button" type="submit" disabled={passwordBusy}>{passwordBusy ? 'Saving...' : 'Save password'}</button></form></section></div>}
-        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={selectedNumber} setSelectedNumber={setSelectedNumber} voice={voice} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} />}
+        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={currentCallerNumber} setSelectedNumber={setSelectedNumber} numberState={numberState} profile={shellData.profile} voice={voice} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} />}
         {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setPendingDial(value); setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
         {view === 'wallet' && <WalletView balance={shellData.balance} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}

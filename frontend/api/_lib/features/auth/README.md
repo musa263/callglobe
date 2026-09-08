@@ -38,3 +38,14 @@ SecureStore, and both use the Vercel API's signed `vocivo-vercel` sessions.
 Mobile bootstrap resolves current tenant carrier records when the company uses
 BYOC, exposing only its published numbers and connection status. No carrier
 password or Telnyx inventory lookup is part of that response.
+
+Company email/password accounts also support `user` and `manager` roles linked
+to a current company extension. The historical `vocivo_saas_admins` table and
+function names remain for compatibility; account presence never grants admin
+access. `requireAdmin` still permits only company owners/administrators or the
+platform owner. New account sessions bind to the current password hash, and
+employee sessions cannot omit that binding. Identity, active status, extension
+and role are rechecked; password resets invalidate new session generations.
+Existing administrator tokens without the binding retain their 12-hour expiry.
+Temporary passwords require the existing first-login password-change flow.
+Test `company-account.test.ts` and the complete repository gate.

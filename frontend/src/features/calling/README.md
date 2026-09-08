@@ -38,3 +38,12 @@ not physical Wi-Fi/5G handoff, killed-state operation, or two-way carrier audio.
 The dialer displays imported company carrier numbers and prevents external calls
 through a pending carrier line. Internal calling still uses the extension route.
 The server independently validates activation and ownership for every call.
+
+The web dialer has one number input. `engine/callDestination.ts` matches short
+numbers against the current company directory, rejects self/unknown/ambiguous
+extensions, and treats explicit international prefixes as public numbers.
+`hooks/useCallingDirectory.ts` hides the prior company's results immediately
+when scope changes. Directory failure is retryable; it never sends a short
+extension to a carrier. Country selection defaults from the user's/caller's
+number or browser region and remains manually adjustable. The full-App browser
+harness covers automatic internal routing without a mode switch.
