@@ -20,6 +20,7 @@
     "@telnyx/webrtc": "^2.27.10",
     "@vercel/functions": "^3.9.5",
     "bcryptjs": "^3.0.2",
+    "ics": "3.8.1",
     "jose": "^6.1.2",
     "libphonenumber-js": "^1.13.11",
     "lucide-react": "^1.33.0",

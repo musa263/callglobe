@@ -22,6 +22,7 @@ test('uses signed internal-call headers instead of exposing a SIP address', () =
     number: 'Extension 2000',
     internal: true,
     photoUrl: '',
+    address: 'sip:generated-user@sip.telnyx.com',
   });
 });
 
@@ -29,10 +30,11 @@ test('incoming SIP invitations do not expose the registrar URI', () => {
   assert.deepEqual(describeIncoming({
     remoteIdentity: { displayName: 'Mousa - Extension 2000', uri: 'sip:gencredabc@sip.vocivo.app' },
   }), {
-    name: 'Mousa - Extension 2000',
+    name: 'Mousa',
     number: 'Extension 2000',
     internal: true,
     photoUrl: '',
+    address: 'sip:gencredabc@sip.vocivo.app',
   });
 });
 
@@ -42,8 +44,9 @@ test('normalizes an unlabelled SIP caller without leaking protocol details', () 
     options: { remoteCallerNumber: 'sip:user@sip.telnyx.com' },
   }), {
     name: 'Phone call',
-    number: 'Internal call',
+    number: 'Unknown caller',
     internal: false,
     photoUrl: '',
+    address: 'sip:user@sip.telnyx.com',
   });
 });

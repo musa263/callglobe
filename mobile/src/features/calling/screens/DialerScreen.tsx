@@ -13,6 +13,8 @@ import { colors } from '../../../shared/theme';
 import { cleanDialInput, defaultDialRegion, dialRegion, resolveCallDestination, resolveDialNumber } from '../state/dialNumber';
 import { useCallingDirectory } from '../state/useCallingDirectory';
 import { PresenceDot } from '../components/PresenceDot';
+import { findPhoneContact } from '../../contacts/contactDirectory';
+import { visibleCallerName } from '../engine/callIdentity';
 
 export function DialerScreen({ onWallet, onConference, target }: {
   onWallet: () => void; onConference: () => void; target: NavigationTarget | null;
@@ -29,6 +31,7 @@ export function DialerScreen({ onWallet, onConference, target }: {
   const [callError, setCallError] = useState('');
   const [contactName, setContactName] = useState<string>();
   const [contactPhotoUrl, setContactPhotoUrl] = useState<string>();
+  const [matchedContact, setMatchedContact] = useState<{ number: string; name: string; photoUrl?: string } | null>(null);
   const [starting, setStarting] = useState(false);
   const startingRef = useRef(false);
   const businessAccount = profile?.account_type === 'business' && Boolean(profile.extension);
@@ -39,7 +42,9 @@ export function DialerScreen({ onWallet, onConference, target }: {
   const { destination } = route;
   const internal = route.kind === 'internal';
   const shortNumber = internal || route.kind === 'unknown-extension' || route.kind === 'self';
-  const displayName = route.colleague?.name || contactName;
+  const match = matchedContact?.number === destination.number ? matchedContact : null;
+  const displayName = visibleCallerName(route.colleague?.name) || visibleCallerName(contactName) || visibleCallerName(match?.name);
+  const photoUrl = contactPhotoUrl || match?.photoUrl;
   const balance = profile?.balance == null ? null : Number(profile.balance);
   const canCall = internal
     ? true
@@ -53,6 +58,20 @@ export function DialerScreen({ onWallet, onConference, target }: {
     setNumber(cleanDialInput(target.number));
     setCallError('');
   }, [target]);
+
+  useEffect(() => {
+    if (route.kind !== 'external' || !destination.number) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      void findPhoneContact(destination.number, region).then(contact => {
+        if (current) setMatchedContact(contact ? { ...contact, number: destination.number } : null);
+      }).catch(() => {
+        if (current) setMatchedContact(null);
+        console.warn('[contacts] Dial pad contact lookup unavailable.');
+      });
+    }, 120);
+    return () => { current = false; clearTimeout(timer); };
+  }, [route.kind, destination.number, region]);
 
   const editNumber = (value: string) => {
     setContactName(undefined); setContactPhotoUrl(undefined); setCallError('');
@@ -70,7 +89,7 @@ export function DialerScreen({ onWallet, onConference, target }: {
     setStarting(true); setCallError(''); Keyboard.dismiss();
     try {
       if (internal) await startInternalCall('', route.input, displayName || `Extension ${route.input}`, route.colleague?.photoUrl || contactPhotoUrl);
-      else await startCall(destination.number, destination.rate, selectedCaller, contactName, contactPhotoUrl);
+      else await startCall(destination.number, destination.rate, selectedCaller, displayName || undefined, photoUrl);
     } catch (failure) {
       setCallError(failure instanceof Error ? failure.message : 'The call could not be started.');
     } finally {
@@ -89,8 +108,8 @@ export function DialerScreen({ onWallet, onConference, target }: {
       <View style={styles.numberRow}>
         <TextInput accessibilityLabel="Number to call" value={number} onChangeText={editNumber}
           keyboardType="phone-pad" showSoftInputOnFocus={false} autoCorrect={false} autoComplete="off"
-          placeholder={businessAccount ? 'Number or extension' : 'Phone number'} placeholderTextColor={colors.textFaint} style={styles.numberInput} />
-        <Pressable accessibilityRole="button" accessibilityLabel="Delete last digit" onPress={() => editNumber(number.slice(0, -1))} onLongPress={() => editNumber('')} style={styles.iconButton}><Delete size={23} color={number ? colors.textMuted : colors.textFaint} /></Pressable>
+          style={styles.numberInput} />
+        {!!number && <Pressable accessibilityRole="button" accessibilityLabel="Delete last digit" onPress={() => editNumber(number.slice(0, -1))} onLongPress={() => editNumber('')} style={styles.iconButton}><Delete size={23} color={colors.textMuted} /></Pressable>}
       </View>
       {shortNumber && <View style={styles.routeDetail} accessibilityLiveRegion="polite">
         <Text style={[styles.internalNote, !internal && styles.notice]}>{internal ? `Extension ${route.input} · Free team call` : route.kind === 'self' ? 'This is your extension' : directory.status === 'loading' ? 'Finding colleague...' : directory.status === 'failed' ? 'Company directory unavailable' : 'No matching company extension'}</Text>
@@ -117,7 +136,7 @@ const styles = StyleSheet.create({
   balanceText: { color: colors.textMuted, fontSize: 12, fontWeight: '700' },
   identity: { paddingTop: 16 },
   contactName: { height: 24, textAlign: 'center', color: colors.textMuted, fontSize: 14 },
-  numberRow: { height: 64, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: colors.line },
+  numberRow: { height: 64, flexDirection: 'row', alignItems: 'center' },
   numberInput: { flex: 1, minWidth: 0, color: colors.text, fontSize: 27, fontWeight: '500', paddingVertical: 0, fontVariant: ['tabular-nums'] },
   routeDetail: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   internalNote: { flexShrink: 1, textAlign: 'center', color: colors.mint, fontSize: 12 },

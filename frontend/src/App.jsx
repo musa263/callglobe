@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { Globe2, History, LogOut, Phone, Settings, ShieldCheck, WalletCards, X } from "lucide-react";
+import { CalendarDays, Globe2, History, LogOut, Phone, Settings, ShieldCheck, Video, Voicemail, WalletCards, X } from "lucide-react";
 import { api, clearSession, getStoredSession, storeSession } from "./shared/api";
 import { buildDialingDirectory } from "./features/numbers/countries";
 import { useCallerNumbers } from './features/numbers/useCallerNumbers';
@@ -13,11 +13,17 @@ import { ActiveCall } from "./features/calling/components/ActiveCall.jsx";
 import { Dialer } from "./features/calling/components/Dialer.jsx";
 import { WalletView } from "./features/billing/WalletView.jsx";
 import { HistoryView } from "./features/calling/history/HistoryView.jsx";
+import { historyEntry } from './features/calling/history/historyIdentity.js';
 import { RatesView } from "./features/numbers/RatesView.jsx";
 import { SettingsView } from "./features/settings/SettingsView.jsx";
 import { OpeningScreen } from './shared/components/OpeningScreen.jsx';
+import './features/meetings/communications.css';
 
 const AdminConsole = lazy(() => import('./features/admin/AdminConsole'));
+const MeetingsView = lazy(() => import('./features/meetings/MeetingsView.jsx'));
+const VideoLobby = lazy(() => import('./features/video/VideoLobby.jsx'));
+const VoicemailView = lazy(() => import('./features/calling/voicemail/VoicemailView.jsx'));
+const linkedRoom = new URLSearchParams(location.search).get('meeting') || '';
 
 export default function App() {
   const initialSession = getStoredSession();
@@ -28,7 +34,9 @@ export default function App() {
   const [rates, setRates] = useState(() => buildDialingDirectory());
   const [verifiedNumbers, setVerifiedNumbers] = useState([]);
   const [selectedNumber, setSelectedNumber] = useState(null);
-  const [view, setView] = useState(() => window.location.pathname.startsWith('/admin') ? 'admin' : 'dialer');
+  const [view, setView] = useState(() => window.location.pathname.startsWith('/admin') ? 'admin' : linkedRoom ? 'history' : 'dialer');
+  const [callsTab, setCallsTab] = useState(linkedRoom ? 'video' : 'recent');
+  const [meetingRoom, setMeetingRoom] = useState(linkedRoom);
   const [history, setHistory] = useState([]);
   const [pendingDial, setPendingDial] = useState('');
   const [passwordDraft, setPasswordDraft] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -46,6 +54,9 @@ export default function App() {
   const numberState = useCallerNumbers(session && profile && !profile.admin_only && !profile.force_password_change ? voiceSessionKey : '');
   const numbers = numberState.numbers;
   const voice = useVoice(voiceSessionKey, Boolean(session) && Boolean(profile) && profile?.admin_only !== true && !profile?.force_password_change, voiceIdentity, session);
+  const voiceBusy = Boolean(voice.active || voice.incomingCall || voice.callStarting);
+  const openCalls = tab => { setCallsTab(tab); setView('history'); };
+  const openCall = number => { setPendingDial(number); setView('dialer'); };
   useVoicePresence(session && profile?.account_type === 'business' && !profile?.admin_only && !profile?.force_password_change ? voiceSessionKey : '', voice.ready, Boolean(voice.active || voice.incomingCall || voice.callStarting));
 
   useEffect(() => {
@@ -109,7 +120,8 @@ export default function App() {
     if (!voice.endedCall) return;
     const userId = profile?.id || session?.sub;
     setHistory((current) => {
-      const next = [{ id: voice.endedCall.id || `${Date.now()}`, number: voice.endedCall.number, direction: voice.endedCall.direction, duration: Number(voice.endedCall.duration) || 0, date: new Date().toISOString() }, ...current].slice(0, 40);
+      const entry = historyEntry(voice.endedCall);
+      const next = [entry, ...current.filter(item => item.id !== entry.id)].slice(0, 40);
       writeHistory(userId, next);
       return next;
     });
@@ -197,8 +209,13 @@ export default function App() {
       <main className="main-area">
         {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={15} /></button></div>}
         {profile?.force_password_change && <div className="modal-layer" role="dialog" aria-modal="true"><section className="modal"><header><div><h2>Update your password</h2><p>This account requires a new password before you can continue.</p></div></header><form className="modal-form" onSubmit={submitForcedPassword}><label>Current password<input type="password" autoComplete="current-password" value={passwordDraft.currentPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, currentPassword: event.target.value }))} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.newPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={10} value={passwordDraft.confirmPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))} required /></label>{passwordError && <div className="form-error" role="alert">{passwordError}</div>}<button className="primary-button" type="submit" disabled={passwordBusy}>{passwordBusy ? 'Saving...' : 'Save password'}</button></form></section></div>}
-        {view === 'dialer' && <Dialer balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={currentCallerNumber} setSelectedNumber={setSelectedNumber} numberState={numberState} profile={shellData.profile} voice={voice} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} />}
-        {view === 'history' && <HistoryView history={history} onCallAgain={(value) => { setPendingDial(value); setView('dialer'); setNotice(`Ready to call ${formatPhone(value)} from the dialer.`); }} />}
+        {view === 'dialer' && <Dialer onOpenCalls={openCalls} balance={shellData.balance} rates={shellData.rates} numbers={callerNumbers} selectedNumber={currentCallerNumber} setSelectedNumber={setSelectedNumber} numberState={numberState} profile={shellData.profile} voice={voice} accountType={shellData.profile?.account_type || 'individual'} initialNumber={pendingDial} />}
+        {view === 'history' && <><div className="call-workspace-tabs" role="tablist" aria-label="Call workspace">{[['recent', History, 'Recents'], ['voicemail', Voicemail, 'Voicemail'], ['schedule', CalendarDays, 'Schedule'], ['video', Video, 'Video']].map(([id, Icon, label]) => <button key={id} role="tab" aria-selected={callsTab === id} onClick={() => setCallsTab(id)}><Icon />{label}</button>)}</div><Suspense fallback={<p className="workspace-message" role="status">Loading...</p>}>
+          {callsTab === 'recent' && <HistoryView profile={shellData.profile} history={history} onCallAgain={openCall} />}
+          {callsTab === 'voicemail' && <VoicemailView key={voiceSessionKey} profile={shellData.profile} onCallAgain={openCall} voiceBusy={voiceBusy} />}
+          {callsTab === 'schedule' && <MeetingsView key={voiceSessionKey} onCall={openCall} onVideo={room => { setMeetingRoom(room); setCallsTab('video'); }} voiceBusy={voiceBusy} />}
+          {callsTab === 'video' && <VideoLobby key={voiceSessionKey} initialRoom={meetingRoom} voiceBusy={voiceBusy} />}
+        </Suspense></>}
         {view === 'wallet' && <WalletView balance={shellData.balance} />}
         {view === 'rates' && <RatesView rates={shellData.rates} />}
         {view === 'settings' && <SettingsView profile={shellData.profile} ownedNumbers={shellData.numbers} verifiedNumbers={shellData.verifiedNumbers} voice={voice} verification={{ pending: verificationPending, busy: verificationBusy, error: verificationError, request: requestVerification, verify: confirmVerification, remove: removeVerifiedNumber, cancel: () => { setVerificationPending(null); setVerificationError(''); } }} onLogout={logout} />}

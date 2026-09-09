@@ -302,12 +302,16 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
         const writeDroppedHistory = (callId, call, identityOverride) => {
           if (!callId || endedIdRef.current === callId) return;
           endedIdRef.current = callId;
-          const identity = identityOverride || callIdentityRef.current.get(callId);
+          const identity = identityOverride || callIdentityRef.current.get(callId) || describeRemote(call);
           const direction = String(call?.direction || '').toLowerCase() === 'inbound' ? 'incoming' : 'outgoing';
           const connectedAt = connectedAtByCallIdRef.current.get(callId);
           setEndedCall({
             id: callId,
             number: identity?.number || 'Unknown',
+            name: identity?.name,
+            internal: identity?.internal,
+            address: identity?.address,
+            answered: Boolean(connectedAt),
             direction,
             duration: connectedAt ? Math.max(0, Math.floor((Date.now() - connectedAt) / 1000)) : 0,
           });
@@ -367,12 +371,16 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
             const connectedAt = connectedAtByCallIdRef.current.get(callId);
             const duration = connectedAt ? Math.max(0, Math.floor((Date.now() - connectedAt) / 1000)) : 0;
             connectedAtByCallIdRef.current.delete(callId);
-            const localIdentity = callIdentityRef.current.get(callId) || heldCallRef.current?.identity;
+            const localIdentity = callIdentityRef.current.get(callId) || heldCallRef.current?.identity || describeRemote(updatedCall);
             if (endedIdRef.current !== callId) {
               endedIdRef.current = callId;
               setEndedCall({
                 id: callId,
                 number: localIdentity?.number || 'Unknown',
+                name: localIdentity?.name,
+                internal: localIdentity?.internal,
+                address: localIdentity?.address,
+                answered: Boolean(connectedAt),
                 direction: String(updatedCall.direction || '').toLowerCase() === 'inbound' ? 'incoming' : 'outgoing',
                 duration,
               });
@@ -443,7 +451,9 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
             const number = localIdentity?.number || (direction === 'inbound'
               ? updatedCall.options?.remoteCallerNumber || updatedCall.options?.callerNumber
               : updatedCall.options?.destinationNumber || updatedCall.options?.remoteCallerNumber);
-            setEndedCall({ id: endedCallId, number: number || 'Unknown', direction: direction === 'inbound' ? 'incoming' : 'outgoing', duration });
+            const identity = localIdentity || describeRemote(updatedCall);
+            setEndedCall({ id: endedCallId, number: number || identity.number, name: identity.name, internal: identity.internal, address: identity.address,
+              answered: Boolean(connectedAt), direction: direction === 'inbound' ? 'incoming' : 'outgoing', duration });
           }
           callRef.current = null;
           incomingCallRef.current = null;

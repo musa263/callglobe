@@ -1,10 +1,10 @@
 import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { resolveDialedNumber } from './dialedNumber.js';
 
-export type CallingColleague = { id: string; extension: string; name: string; presence?: 'online' | 'busy' | 'offline' };
+export type CallingColleague = { id: string; extension: string; name: string; sipUsername?: string; presence?: 'online' | 'busy' | 'offline' };
 
 export function cleanCallInput(value: string) {
-  if (/\bsips?:/i.test(value)) return '';
+  if (/[a-z@]/i.test(value)) return '';
   return value.replace(/[\u0660-\u0669\u06f0-\u06f9]/g, digit => String(digit.charCodeAt(0) % 16))
     .replace(/[^0-9+]/g, '').replace(/(?!^)\+/g, '').slice(0, 22);
 }

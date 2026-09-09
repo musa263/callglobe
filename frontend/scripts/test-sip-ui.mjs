@@ -100,6 +100,8 @@ try {
   await page.evaluate(() => window.lastSession.emit('Terminated'));
   await page.waitForFunction(() => !window.voice.incoming && !window.voice.call);
   assert.equal(await page.evaluate(() => window.lastSession.listenerCount), 0);
+  assert.deepEqual(await page.evaluate(() => ({ number: window.voice.endedCall.number, name: window.voice.endedCall.name, internal: window.voice.endedCall.internal, answered: window.voice.endedCall.answered })),
+    { number: 'Extension 2001', name: 'Colleague', internal: true, answered: false });
   console.log('PASS: remote CANCEL removes incoming UI and all call listeners');
 
   await page.evaluate(() => window.sipInput.onInvite(window.lastSession = window.makeSession(true)));

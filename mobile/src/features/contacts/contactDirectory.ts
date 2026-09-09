@@ -1,7 +1,9 @@
 import * as Contacts from 'expo-contacts';
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/min';
 
 type ContactIdentity = { name: string; photoUrl?: string };
-let directoryPromise: Promise<Array<{ digits: string; identity: ContactIdentity }>> | null = null;
+let directoryPromise: Promise<Array<{ number: string; digits: string; identity: ContactIdentity }>> | null = null;
+let expiresAt = 0;
 
 function digits(value: string) {
   return value.replace(/\D/g, '');
@@ -14,6 +16,7 @@ async function loadDirectory() {
     fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Image],
   });
   return result.data.flatMap((contact) => (contact.phoneNumbers || []).map((phone) => ({
+    number: phone.number || '',
     digits: digits(phone.number || ''),
     identity: {
       name: contact.name || phone.number || 'Phone call',
@@ -22,23 +25,26 @@ async function loadDirectory() {
   }))).filter((entry) => entry.digits.length >= 7);
 }
 
-export async function findPhoneContact(number: string): Promise<ContactIdentity | null> {
+export async function findPhoneContact(number: string, region?: CountryCode): Promise<ContactIdentity | null> {
   const target = digits(number);
   if (target.length < 7) return null;
-  if (!directoryPromise) {
+  if (!directoryPromise || Date.now() >= expiresAt) {
     const pending = loadDirectory();
     directoryPromise = pending;
-    pending.then(() => {
-      setTimeout(() => { directoryPromise = null; }, 60_000);
-    }, () => {
+    expiresAt = Date.now() + 60_000;
+    pending.catch(() => {
       // Retry on the next lookup instead of caching the failure for a minute.
       if (directoryPromise === pending) directoryPromise = null;
     });
   }
   const entries = await directoryPromise;
-  const exact = entries.find((entry) => entry.digits === target);
-  if (exact) return exact.identity;
-  const suffixLength = Math.min(10, target.length);
-  const suffix = target.slice(-suffixLength);
-  return entries.find((entry) => entry.digits.slice(-suffixLength) === suffix)?.identity || null;
+  const parsed = parsePhoneNumberFromString(number, region);
+  const canonical = parsed?.isValid() ? parsed.number : null;
+  const matches = entries.filter(entry => {
+    const candidate = parsePhoneNumberFromString(entry.number, parsed?.country || region);
+    return canonical ? candidate?.isValid() && candidate.number === canonical : entry.digits === target;
+  });
+  // A shared suffix is not identity: two countries can have the same national digits.
+  return matches.length && matches.every(entry => entry.identity.name === matches[0]!.identity.name)
+    ? matches[0]!.identity : null;
 }

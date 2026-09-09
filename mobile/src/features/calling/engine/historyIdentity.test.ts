@@ -35,3 +35,14 @@ test('keeps public phone numbers and known extension numbers dialable', () => {
   assert.equal(canRedialHistory(external), true);
   assert.equal(normalizeHistoryIdentity({ ...call, destination_number: '2000', internal: true }).destination_number, '2000');
 });
+
+test('extension labels and numeric SIP addresses stay exact, never grouped or credential digits', () => {
+  for (const address of ['Extension 2000', 'sips:2000@example.test']) {
+    assert.equal(normalizeHistoryIdentity({ ...call, destination_number: address }, directory).destination_number, '2000');
+  }
+  const raw = 'gencredx7a6b1c6';
+  const matching = [{ ...directory[0]!, sipUsername: raw }];
+  assert.equal(normalizeHistoryIdentity({ ...call, destination_number: raw }, matching).destination_number, '2000');
+  assert.equal(normalizeHistoryIdentity({ ...call, destination_number: raw }).destination_number, '');
+  assert.equal(normalizeHistoryIdentity({ ...call, destination_number: raw }, [...matching, { ...matching[0]!, extension: '2001' }]).destination_number, '');
+});

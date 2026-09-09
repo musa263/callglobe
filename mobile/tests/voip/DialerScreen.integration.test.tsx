@@ -7,6 +7,7 @@ jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({
 jest.mock('expo-localization', () => ({ useLocales: () => [{ regionCode: 'AE' }] }));
 jest.mock('expo-haptics', () => ({ impactAsync: jest.fn(async () => undefined), ImpactFeedbackStyle: { Light: 'light' } }));
 jest.mock('../../src/features/calling/components/NetworkStrength', () => ({ NetworkStrength: () => null }));
+jest.mock('../../src/features/contacts/contactDirectory', () => ({ findPhoneContact: (...args: unknown[]) => mockContact(...args) }));
 jest.mock('../../src/shared/api', () => ({ api: { get: (...args: unknown[]) => mockDirectory(...args) } }));
 jest.mock('../../src/features/auth/AuthContext', () => ({ useAuth: () => ({
   profile: mockProfile,
@@ -19,6 +20,7 @@ jest.mock('../../src/features/calling/VoiceContext', () => ({ useVoice: () => ({
 const mockStartCall = jest.fn<Promise<void>, any[]>();
 const mockStartInternalCall = jest.fn<Promise<void>, any[]>();
 const mockDirectory = jest.fn<Promise<any>, unknown[]>();
+const mockContact = jest.fn<Promise<any>, unknown[]>();
 let mockProfile = { id: 'self', organization_id: 'company-a', extension: '2000', account_type: 'business', organization_name: 'Test Company', balance: null, outbound_caller_id: '+12025550123', dialing_country: 'SA' };
 import { DialerScreen } from '../../src/features/calling/screens/DialerScreen';
 
@@ -30,12 +32,42 @@ const button = (label: string) => {
   return found;
 };
 beforeEach(() => {
+  mockContact.mockReset().mockResolvedValue(null);
   mockProfile = { ...mockProfile, id: 'self', organization_id: 'company-a', account_type: 'business', outbound_caller_id: '+12025550123', dialing_country: 'SA' };
   mockDirectory.mockReset().mockResolvedValue({ users: [
     { id: 'colleague', extension: '2001', name: 'Colleague' },
     { id: 'second', extension: '2002', name: 'Second Colleague' },
   ] });
   mockStartCall.mockReset().mockResolvedValue(undefined); mockStartInternalCall.mockReset().mockResolvedValue(undefined);
+});
+
+test('empty dial pad has no placeholder or delete arrow; credential input cannot become digits', async () => {
+  await act(async () => { renderer = TestRenderer.create(<DialerScreen {...props} />); });
+  expect(renderer.root.findByType(TextInput).props.placeholder).toBeUndefined();
+  expect(renderer.root.findAll(item => item.props.accessibilityLabel === 'Delete last digit')).toHaveLength(0);
+  act(() => renderer.root.findByType(TextInput).props.onChangeText('gencredx7a6b1c6'));
+  expect(renderer.root.findByType(TextInput).props.value).toBe('');
+  expect(button('Start call').props.disabled).toBe(true);
+});
+
+test('typed contact resolves asynchronously and stale results cannot replace a colleague', async () => {
+  jest.useFakeTimers();
+  try {
+    let resolve!: (contact: any) => void;
+    mockContact.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    await act(async () => { renderer = TestRenderer.create(<DialerScreen {...props} />); });
+    act(() => renderer.root.findByType(TextInput).props.onChangeText('+442079460018'));
+    await act(async () => { jest.advanceTimersByTime(120); });
+    act(() => renderer.root.findByType(TextInput).props.onChangeText('2001'));
+    await act(async () => { resolve({ name: 'Wrong late contact' }); });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('Wrong late contact');
+    mockContact.mockResolvedValue({ name: 'Alex' });
+    act(() => renderer.root.findByType(TextInput).props.onChangeText('+442079460018'));
+    await act(async () => { jest.advanceTimersByTime(120); });
+    expect(JSON.stringify(renderer.toJSON())).toContain('Alex');
+    await act(async () => { await button('Start call').props.onPress(); });
+    expect(mockStartCall.mock.calls[0]?.[3]).toBe('Alex');
+  } finally { jest.useRealTimers(); }
 });
 afterEach(() => { if (renderer) act(() => renderer.unmount()); });
 

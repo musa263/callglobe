@@ -14,7 +14,7 @@ import { CallLifecycleRegistry, isSettledLocalHangupError, isTerminalCallState, 
 import { attachIceFailureListener, isSetupSignalingBlip, isTransportNetworkMigration, isVoiceSessionFresh, VoiceMediaRecoveryCoordinator, waitForBidirectionalMedia } from './media/voiceRecovery';
 import { ensureCallMicrophonePermission } from './media/callAudioPermission';
 import type { ActiveCall, CallerNumber, CallRate, MergedConference } from '../../shared/types';
-import { inviteHeader, visibleCallAddress } from './engine/callIdentity';
+import { identityExtension, inviteHeader, visibleCallAddress, visibleCallerName } from './engine/callIdentity';
 import { toLifecycleState, toUiCallPhase, waitForCallState } from './engine/callState';
 import type { VoiceContextValue, VoiceLoginConfig, VoiceTokenResponse } from './engine/contracts';
 import { createRouteId, outboundHeaders, voiceLoginConfig, waitForVoiceConnection, waitForVoicePushToken } from './engine/session';
@@ -176,18 +176,17 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
   const describeCall = useCallback((call: VoiceCall): ActiveCall => {
     const meta = callMetaRef.current.get(call.callId) ?? {};
     const displayMatch = call.callerName?.trim().match(/^(.+?)\s*-\s*Ext(?:ension)?\s+(\d{2,5})$/i);
-    const internalExtension = inviteHeader(call, 'X-Vocivo-Caller-Extension') || displayMatch?.[2];
+    const internalExtension = identityExtension(inviteHeader(call, 'X-Vocivo-Caller-Extension') || '') || displayMatch?.[2];
     const internalName = inviteHeader(call, 'X-Vocivo-Caller-Name') || displayMatch?.[1];
     const isInternal = Boolean(internalExtension || inviteHeader(call, 'X-Vocivo-Call-Type') === 'internal' || meta.destinationCountry === 'Internal');
     const fallbackNumber = call.isIncoming ? call.callerNumber : call.destination;
-    const usableCallerName = call.callerName && !/^(?:unknown caller|vocivo)$/i.test(call.callerName.trim()) && !/^sip:/i.test(call.callerName)
-      ? call.callerName
-      : '';
+    const usableCallerName = /^vocivo$/i.test(call.callerName?.trim() || '') ? '' : visibleCallerName(call.callerName);
     const fallbackName = usableCallerName || (isInternal ? 'Company colleague' : visibleCallAddress(call.destination));
     return {
       id: call.callId,
       number: meta.number || internalExtension || visibleCallAddress(fallbackNumber),
-      displayName: meta.displayName || internalName || fallbackName,
+      displayName: visibleCallerName(meta.displayName) || visibleCallerName(internalName) || fallbackName,
+      identityAddress: fallbackNumber,
       destinationCountry: meta.destinationCountry || (isInternal ? 'Internal' : undefined),
       countryCode: meta.countryCode,
       ratePerMinute: meta.ratePerMinute,
@@ -221,7 +220,7 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
     const totalCost = snapshot.ratePerMinute ? Math.ceil(seconds / 60) * snapshot.ratePerMinute : 0;
     const historyEntry = {
       id,
-      destination_number: snapshot.number,
+      destination_number: snapshot.number === 'Internal call' ? snapshot.identityAddress || snapshot.number : snapshot.number,
       destination_name: snapshot.displayName !== snapshot.destinationCountry ? snapshot.displayName : undefined,
       destination_country: snapshot.destinationCountry,
       duration_seconds: seconds,

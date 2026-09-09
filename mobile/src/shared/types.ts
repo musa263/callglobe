@@ -107,6 +107,8 @@ export type ActiveCall = {
   id?: string;
   number: string;
   displayName: string;
+  /** Protocol address for tenant-directory history resolution, never UI text. */
+  identityAddress?: string;
   destinationCountry?: string;
   countryCode?: string;
   ratePerMinute?: number;

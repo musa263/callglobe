@@ -8,6 +8,7 @@ import { observeSipSession, terminateSipSession } from '../engine/sipCallLifecyc
 import { monitorSipCall, restartSipMedia } from '../engine/sipCallHealth';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../engine/sipSession';
 import { browserSipDeviceId, revokeBrowserSipCredential } from '../engine/sipDevice';
+import { describeIncoming } from '../engine/callIdentity.js';
 
 export function useSipVoice(token, enabled, identity = {}) {
   const displayNameRef = useRef(identity.name);
@@ -55,6 +56,10 @@ export function useSipVoice(token, enabled, identity = {}) {
     setEndedCall({
       id: sipSessionId(session) || meta.id,
       number: meta.number,
+      name: meta.identity?.name,
+      internal: meta.identity?.internal,
+      address: meta.identity?.address,
+      answered: Boolean(meta.connectedAt),
       direction: meta.direction,
       duration: meta.connectedAt ? Math.max(0, Math.round((Date.now() - meta.connectedAt) / 1000)) : 0,
     });
@@ -80,9 +85,8 @@ export function useSipVoice(token, enabled, identity = {}) {
     navigator.vibrate?.([450, 250, 450, 650]);
     let notification = null;
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      const who = incomingCall.remoteIdentity?.displayName || 'Incoming Vocivo call';
-      const from = sipUserFromUri(String(incomingCall.remoteIdentity?.uri || ''));
-      notification = new Notification(who, { body: from ? `Extension ${from}` : 'Open Vocivo to answer', icon: '/vocivo-icon-192.png', tag: `vocivo-incoming-${sipSessionId(incomingCall) || 'call'}`, requireInteraction: true });
+      const peer = describeIncoming(incomingCall);
+      notification = new Notification(peer.name, { body: peer.number, icon: '/vocivo-icon-192.png', tag: `vocivo-incoming-${sipSessionId(incomingCall) || 'call'}`, requireInteraction: true });
       notification.onclick = () => { window.focus(); notification.close(); };
     }
     const stop = () => { stopped = true; tone.pause(); tone.currentTime = 0; notification?.close?.(); navigator.vibrate?.(0); };
@@ -317,15 +321,10 @@ export function useSipVoice(token, enabled, identity = {}) {
             return;
           }
           incomingRef.current = invitation;
-          const fromUser = sipUserFromUri(String(invitation.remoteIdentity?.uri || '')) || String(invitation.remoteIdentity?.uri || '');
-          callMetaRef.current = { id: sipSessionId(invitation), number: fromUser, direction: 'incoming', connectedAt: null, recorded: false };
+          const peer = describeIncoming(invitation);
+          callMetaRef.current = { id: sipSessionId(invitation), number: peer.number, identity: peer, direction: 'incoming', connectedAt: null, recorded: false };
           setIncomingCall(invitation);
-          setRemoteIdentity({
-            name: invitation.remoteIdentity?.displayName || 'Incoming call',
-            number: fromUser,
-            internal: true,
-            photoUrl: '',
-          });
+          setRemoteIdentity(peer);
           watchSession(invitation, true);
         },
       });
@@ -438,7 +437,7 @@ export function useSipVoice(token, enabled, identity = {}) {
       return;
     }
     sessionRef.current = session;
-    callMetaRef.current = { id: sipSessionId(session), number: options.dialedNumber || destination, direction: 'outgoing', connectedAt: null, recorded: false };
+    callMetaRef.current = { id: sipSessionId(session), number: options.dialedNumber || destination, identity: options.identity, direction: 'outgoing', connectedAt: null, recorded: false };
     setCall(session);
     setDialedNumber(options.dialedNumber || destination);
     setRemoteIdentity(options.identity);

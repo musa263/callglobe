@@ -19,6 +19,7 @@ where they implement the same domain; they are not separate copies of one module
 | AI receptionist, voices, transfer | [ai](../frontend/api/_lib/features/ai/README.md) | Admin/ai | Business settings |
 | Enrollment | [enrollment](../frontend/api/_lib/features/enrollment/README.md) | [enrollment](../frontend/src/features/enrollment/README.md) | Auth |
 | Video | [video](../frontend/api/_lib/features/video/README.md) | [video](../frontend/src/features/video/README.md) | [video](../mobile/src/features/video/README.md) |
+| Scheduled meetings/calls | [meetings](../frontend/api/_lib/features/meetings/README.md) | [meetings](../frontend/src/features/meetings/README.md) | Web calendar export |
 | Platform API keys, diagnostics | [platform](../frontend/api/_lib/features/platform/README.md) | Admin/platform | Not a mobile feature |
 | Settings | Auth/organizations/calling | [settings](../frontend/src/features/settings/README.md) | [settings](../mobile/src/features/settings/README.md) |
 | Contacts | Organizations directory | Calling directory | [contacts](../mobile/src/features/contacts/README.md) |

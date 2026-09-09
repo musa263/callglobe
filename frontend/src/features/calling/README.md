@@ -93,3 +93,19 @@ The SIP web engine retains its existing 486 Busy response for second invitations
 Run `scripts/test-dialpad-ui.mjs` with the local Vite URL and Playwright; this mounts
 real components with isolated API/call fixtures and saves desktop/mobile screenshots.
 It does not place calls. Run the SIP lifecycle harness separately for Busy and teardown.
+
+## Caller identity and voicemail
+
+`history/historyIdentity` resolves exact SIP usernames against the current tenant
+directory. `formatting` never extracts phone digits from an opaque credential.
+Both engines preserve caller name, protocol address (for lookup only), direction,
+answered state and internal identity when writing history. SIP extension headers
+and display-name metadata take precedence over raw From usernames. Unknown or
+ambiguous identities are not redialable; already destroyed identifiers cannot be
+reverse-mapped by guessing. Extension numbers are never grouped as phone numbers.
+
+`voicemail/VoicemailView` uses the existing organization mailbox API for list,
+audio and delete. Audio object URLs are revoked on replacement/unmount, and
+playback stops for incoming/active phone calls. Callback resolves the same safe
+directory/number identity as Recents. Company voicemail is a company mailbox,
+not a newly introduced private per-user mailbox.

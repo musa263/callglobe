@@ -13,7 +13,7 @@ export function defaultDialRegion(localeRegion?: string | null, profileNumber?: 
 }
 
 export function cleanDialInput(value: string) {
-  if (/\bsips?:/i.test(value)) return '';
+  if (/[a-z@]/i.test(value)) return '';
   const normalized = value.replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) % 16));
   return normalized.replace(/[^0-9+]/g, '').replace(/(?!^)\+/g, '').slice(0, 20);
 }

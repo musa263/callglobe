@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Delete, Phone, PhoneOff, UsersRound, Wifi, WifiOff } from 'lucide-react';
+import { CalendarPlus, Delete, Phone, PhoneOff, UsersRound, Video, Voicemail, Wifi, WifiOff } from 'lucide-react';
 import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { cleanCallInput, resolveCallDestination } from '../engine/callDestination';
 import { useCallingDirectory } from '../hooks/useCallingDirectory';
@@ -10,7 +10,7 @@ export const KEYS = [
   ['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ'], ['*', ''], ['0', '+'], ['#', ''],
 ];
 
-export function Dialer({ rates, selectedNumber, voice, accountType, initialNumber, profile, numberState }) {
+export function Dialer({ rates, selectedNumber, voice, accountType, initialNumber, profile, numberState, onOpenCalls }) {
   const [number, setNumber] = useState(initialNumber || '');
   const [teamOpen, setTeamOpen] = useState(false);
   const [callError, setCallError] = useState('');
@@ -45,6 +45,7 @@ export function Dialer({ rates, selectedNumber, voice, accountType, initialNumbe
   return (
     <section className="dialer-workspace simple-dialer">
       <header className="workspace-header"><h1>Dial Pad</h1><div className="dialer-header-actions">
+        {onOpenCalls && <><button className="icon-button" title="Schedule a call" aria-label="Schedule a call" onClick={() => onOpenCalls('schedule')}><CalendarPlus size={20} /></button><button className="icon-button" title="Video calls" aria-label="Video calls" onClick={() => onOpenCalls('video')}><Video size={20} /></button><button className="icon-button" title="Voicemail" aria-label="Voicemail" onClick={() => onOpenCalls('voicemail')}><Voicemail size={20} /></button></>}
         {business && <button className="icon-button" aria-label="Company colleagues" title="Company colleagues" aria-expanded={teamOpen} onClick={() => setTeamOpen(value => !value)}><UsersRound size={22} /></button>}
         <div className={`status-badge ${voice.ready ? 'online' : ''}`}>{voice.ready ? <Wifi size={15} /> : <WifiOff size={15} />}{voice.ready ? 'Ready for calls' : voice.statusLabel}</div>
       </div></header>

@@ -279,3 +279,17 @@ calls. Signaling and physical multi-device behavior remain separate acceptance g
 Run mounted DialerScreen/ConferenceScreen tests, presence publisher tests and the
 full mobile suite. A new native distribution must include these source changes
 before physical iOS/Android acceptance; a Vercel deploy alone cannot ship them.
+
+## Clean dialing and history identity
+
+The idle dial pad keeps stable keypad spacing but has no placeholder, underline
+or delete control. Digits and delete appear after entry. Granted device contacts
+are looked up asynchronously after 120ms, without delaying call setup; exact
+company directory matches take precedence. Old lookup results cannot replace
+an edited number. Protocol usernames are rejected as dial input, never reduced
+to their digits. Names suppress raw SIP/credential strings.
+
+`historyIdentity` resolves only an unambiguous same-company SIP username or exact
+extension. The VoiceContext keeps a protocol address separate from visible text
+until AuthContext resolves it for history; no raw credential label is rendered.
+Run the history identity, DialerScreen and ContactDirectory regression suites.
