@@ -1,0 +1,13 @@
+.user-numbers { display: grid; gap: 20px; min-width: 0; }
+.user-numbers .section-title { margin: 0; }
+.inbound-number-list { border: 0; padding: 0; margin: 0; min-width: 0; }
+.inbound-number-list legend { font-weight: 600; margin-bottom: 12px; }
+.inbound-number-list > label { display: flex; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border, #d5e1e9); }
+.inbound-number-list input { width: 18px; height: 18px; flex: 0 0 18px; }
+.inbound-number-list strong, .inbound-number-list small { display: block; overflow-wrap: anywhere; }
+.inbound-number-list small { margin-top: 4px; color: var(--muted, #607487); }
+.number-editor-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.number-assignment-cell { min-width: 170px; }
+.number-assignment-cell span { display: block; white-space: nowrap; }
+.number-routing-page .table-shell { overflow-x: auto; }
+@media (max-width: 600px) { .user-numbers .section-title { align-items: flex-start; gap: 12px; flex-wrap: wrap; } }

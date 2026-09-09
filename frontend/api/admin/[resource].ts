@@ -9,12 +9,13 @@ import pbx from '../_lib/features/organizations/routes/admin-pbx.js';
 import ai from '../_lib/features/ai/routes/admin-ai.js';
 import events from '../_lib/features/platform/routes/admin-events.js';
 import numbers from '../_lib/features/numbers/routes/admin-numbers.js';
+import numberRouting from '../_lib/features/numbers/routes/admin-number-routing.js';
 import voices from '../_lib/features/ai/routes/admin-voices.js';
 import apiKeys from '../_lib/features/platform/routes/admin-api-keys.js';
 import saas from '../_lib/features/organizations/routes/admin-saas.js';
 import wallets from '../_lib/features/billing/routes/admin-wallets.js';
 
-const routes = { background, extensions, overview, trunks, enrollments, pbx, ai, events, numbers, voices, saas, wallets, 'api-keys': apiKeys, 'carrier-trunks': carrierTrunks } as const;
+const routes = { background, extensions, overview, trunks, enrollments, pbx, ai, events, numbers, voices, saas, wallets, 'api-keys': apiKeys, 'carrier-trunks': carrierTrunks, 'number-routing': numberRouting } as const;
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   const resource = Array.isArray(req.query.resource) ? req.query.resource[0] : req.query.resource;

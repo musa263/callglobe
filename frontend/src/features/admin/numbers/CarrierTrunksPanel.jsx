@@ -49,7 +49,7 @@ export function CarrierTrunksPanel({ api, config, extensions, onInventoryChange 
     finally { setBusy(false); }
   }
   return <section className="band carrier-trunks-panel">
-    <div className="section-title"><div><h2>Company SIP trunks</h2><p>All carrier entries, connection details and DID destinations for {config.company.name}.</p></div><button className="primary" disabled={loading} onClick={() => { setError(''); setDraft(newDraft()); }}><Plus /> Add SIP trunk</button></div>
+    <div className="section-title"><div><h2>Company SIP trunks</h2><p>Carrier connections and available DID numbers for {config.company.name}.</p></div><button className="primary" disabled={loading} onClick={() => { setError(''); setDraft(newDraft()); }}><Plus /> Add SIP trunk</button></div>
     {error && <div className="error-banner" role="alert">{error}</div>}
     {notice && <p role="status">{notice}</p>}
     {loading ? <p role="status">Loading carrier trunks…</p> : trunks.length ? trunks.map(item =>
@@ -75,11 +75,11 @@ export function CarrierTrunksPanel({ api, config, extensions, onInventoryChange 
       <h3 className="wide carrier-editor-heading">Options</h3>
       <Field label="Simultaneous call limit" help="Saved carrier capacity; applied when the trunk is activated."><input type="number" min={1} max={10000} value={draft.channelLimit ?? ''} onChange={e => field('channelLimit', e.target.value === '' ? null : Number(e.target.value))} placeholder="Not specified" /></Field>
       {[['inboundEnabled', 'Inbound calls'], ['outboundEnabled', 'Outbound calls']].map(([key, label]) => <Field key={key} label={label}><select value={draft[key] == null ? '' : String(draft[key])} onChange={e => field(key, e.target.value === '' ? null : e.target.value === 'true')}><option value="">Not specified</option><option value="true">Allowed</option><option value="false">Disabled</option></select></Field>)}
-      <div className="wide"><div className="section-title"><div><h3>DID numbers and destinations</h3><p>Keep destinations unassigned until you are ready to configure them.</p></div><button type="button" className="secondary" onClick={() => field('numbers', [...draft.numbers, emptyNumber()])}>Add number</button></div>
+      <div className="wide"><div className="section-title"><div><h3>Carrier DID inventory</h3></div><button type="button" className="secondary" onClick={() => field('numbers', [...draft.numbers, emptyNumber()])}>Add number</button></div>
       {draft.numbers.map((number, index) => <div className="form-grid carrier-number-editor" key={index}>
         <Field label={`Inbound number ${index + 1}`}><input required value={number.inboundNumber} onChange={e => numberField(index, { inboundNumber: e.target.value })} /></Field>
         <Field label={`Outbound caller ID ${index + 1}`} help="International format, including country code."><input required value={number.callerId} onChange={e => numberField(index, { callerId: e.target.value })} /></Field>
-        <Field label={`Destination ${index + 1}`}><select value={number.destinationId ? `${number.destinationType}:${number.destinationId}` : number.destinationType} onChange={e => { const [destinationType, ...id] = e.target.value.split(':'); numberField(index, { destinationType, destinationId: id.join(':') }); }}>{targets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+
         <button type="button" className="secondary" onClick={() => setDraft(current => ({ ...current, mainNumber: current.mainNumber === number.inboundNumber.replace(/^\+/, '') ? '' : current.mainNumber, numbers: current.numbers.filter((_, i) => i !== index) }))}>Remove number {index + 1}</button>
       </div>)}</div>
       <Field wide label="Carrier notes"><input maxLength={500} value={draft.notes} onChange={e => field('notes', e.target.value)} /></Field>

@@ -1,9 +1,11 @@
 # Tenant-owned SIP trunks
 
-Company admins add their carrier account and existing DIDs in **Phone numbers**
-or **SIP trunks**, then select **Use these carrier numbers**. Every DID can stay
-unassigned or have its own company extension, group, queue, IVR or main-line/AI
-destination. Editing a published trunk applies the new destinations on save.
+Company admins add their carrier account and existing DIDs in **SIP trunks**,
+then select **Use these carrier numbers**. Configure each published DID in
+**Phone numbers**, or assign a user's direct inbound and outbound numbers under
+**Users > Edit > Numbers**. Shared destinations include a group, queue, IVR or
+main-line/receptionist. Trunk edits preserve live routing; new DIDs remain
+unassigned until explicitly routed.
 New companies default to carrier mode; existing companies adopt it explicitly.
 
 Carrier mode lists imported numbers in web/mobile, skips Telnyx inventory and
@@ -85,12 +87,15 @@ It makes no paid calls and does not prove live carriers, TLS/REGISTER, inbound
 activation or physical devices. Hash limits are per FreeSWITCH process; use a
 shared backend before distributing one trunk across multiple switches.
 
-The browser fixture (all API calls intercepted) checks all five DIDs, destination
-editing, selection, removal and absence of purchase controls. Start Vite on 5191,
+The carrier browser fixture checks all five DIDs, inventory editing, explicit
+selection and absence of purchase controls. The user-number fixture checks both
+admin roles, direct/shared routing and stale-edit rejection using real handlers
+with isolated persistence. Start Vite on 5191,
 then from `frontend` run:
 
 ```sh
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-carrier-admin.mjs
+VOCIVO_TEST_ORIGIN=http://127.0.0.1:5191 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node --import tsx scripts/test-user-number-routing.mjs
 ```
 
 Reference: [FreeSWITCH gateways](https://developer.signalwire.com/freeswitch/FreeSWITCH-Explained/Configuration/Sofia-SIP-Stack/Gateways-Configuration_7144069).

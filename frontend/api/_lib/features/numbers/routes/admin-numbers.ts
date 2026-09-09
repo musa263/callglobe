@@ -11,7 +11,7 @@ import { getExtension } from '../../organizations/pbx.js';
 import { requireFeature } from '../../organizations/saas-access.js';
 import { invalidatePhoneNumberCache } from '../phone-number-access.js';
 import { requestOrganizationId, writeTenantScopeError } from '../../organizations/request-organization.js';
-import { carrierMode, carrierNumberInventory } from '../carrier-number-service.js';
+import { carrierMode, carrierNumberInventory, withLiveNumberRoutes } from '../carrier-number-service.js';
 import { carrierTrunks } from '../carrier-trunk-store.js';
 
 function text(value: unknown, max: number) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
@@ -71,7 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'GET' && ownCarrier) {
       const trunks = await carrierTrunks.list(activeOrganizationId);
       return res.status(200).json({ callingMode: 'carrier',
-        numbers: carrierNumberInventory(trunks).map(item => ({ id: item.id, phoneNumber: item.phone_number,
+        numbers: carrierNumberInventory(trunks.map(trunk => withLiveNumberRoutes(trunk, config))).map(item => ({ id: item.id, phoneNumber: item.phone_number,
           source: 'carrier', status: item.status, provider: trunks.find(trunk => trunk.id === item.carrier_trunk_id)?.provider,
           assignment: { organizationId: activeOrganizationId, destinationType: item.destination_type, destinationId: item.destination_id } })),
         legacyNumbers: Object.entries(config.numberAssignments)

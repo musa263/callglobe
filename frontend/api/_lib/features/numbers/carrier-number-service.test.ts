@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { applyCarrierNumbers, carrierNumberInventory, detachCompanyNumber } from './carrier-number-service.js';
+import { applyCarrierNumbers, carrierNumberInventory, detachCompanyNumber, withLiveNumberRoutes } from './carrier-number-service.js';
 import { normalizeCarrierTrunk, type CarrierTrunk } from './carrier-trunk-store.js';
 import { defaultPbxConfig, mergePbxConfig, pbxForOrganization } from '../organizations/pbx-config-store.js';
 
@@ -56,4 +56,16 @@ test('republishing an edited trunk disables removed DIDs without touching anothe
   assert.equal(next.numberAssignments['+966135110001'].disabled, true);
   assert.equal(next.numberAssignments['+966135110000'].carrierTrunkRevision, 2);
   assert.deepEqual(next.numberAssignments['+12025550123'], initial.numberAssignments['+12025550123']);
+});
+
+test('trunk republication cannot overwrite destinations assigned through Users or Phone numbers', () => {
+  const saved = trunk(), config = defaultPbxConfig();
+  Object.assign(config, applyCarrierNumbers(config, 'primary', saved));
+  const number = saved.numbers[0].callerId;
+  config.numberAssignments[number] = { ...config.numberAssignments[number], destinationType: 'extension', destinationId: 'user-2001' };
+  const next = applyCarrierNumbers(config, 'primary', { ...saved, revision: 2 });
+  assert.equal(next.numberAssignments[number].destinationId, 'user-2001');
+  assert.equal(next.numberAssignments[number].carrierTrunkRevision, 2);
+  assert.equal(withLiveNumberRoutes(saved, config).numbers[0].destinationId, 'user-2001');
+  assert.equal(saved.numbers[0].destinationType, 'unassigned', 'legacy inventory is not mutated');
 });

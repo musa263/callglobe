@@ -7,6 +7,15 @@ export function carrierMode(config: PbxConfig, organizationId: string) {
   return pbxForOrganization(config, organizationId).company.callingMode === 'carrier';
 }
 
+/** Published routing lives in PBX assignments, not in the carrier form snapshot. */
+export function withLiveNumberRoutes(trunk: CarrierTrunk, config: PbxConfig): CarrierTrunk {
+  return { ...trunk, numbers: trunk.numbers.map(number => {
+    const assignment = config.numberAssignments[number.callerId];
+    if (!assignment || assignment.organizationId !== trunk.organizationId || assignment.carrierTrunkId !== trunk.id) return number;
+    return { ...number, destinationType: assignment.disabled ? 'unassigned' : assignment.destinationType || 'unassigned', destinationId: assignment.disabled ? '' : assignment.destinationId || '' };
+  }) };
+}
+
 /** A saved provider form is inventory, never proof that its gateway is deployed. */
 export function carrierNumberInventory(trunks: CarrierTrunk[]) {
   return trunks.flatMap(trunk => trunk.numbers.map(number => ({
@@ -49,7 +58,7 @@ export function applyCarrierNumbers(config: PbxConfig, organizationId: string, t
       carrierConnectionRevision: trunk.connectionRevision || trunk.revision,
       label: `${trunk.name}${trunk.mainNumber === number.inboundNumber ? ' main line' : ''}`,
       disabled: false, messagingEnabled: false,
-      ...(number.destinationType === 'unassigned' ? {} : {
+      ...(current ? { destinationType: current.destinationType, destinationId: current.destinationId } : number.destinationType === 'unassigned' ? {} : {
         destinationType: number.destinationType, destinationId: number.destinationId,
       }),
     };

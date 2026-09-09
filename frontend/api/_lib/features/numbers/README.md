@@ -26,7 +26,7 @@ Malformed or moved encrypted data fails closed instead of resetting configuratio
 
 An unpublished record remains a draft. PATCH `use-carrier-numbers` atomically
 publishes its DIDs and sets company carrier mode. PUT edits to a published trunk
-also update its destinations. Passwords remain encrypted; company responses expose
+update inventory metadata but preserve canonical destinations. Passwords remain encrypted; company responses expose
 only `hasPassword`. No company request can authorize a carrier source or declare
 a gateway deployed. Connection status comes from the operator deployment record.
 The existing `/api/admin/trunks` Telnyx external-PBX registration contract is separate.
@@ -66,3 +66,41 @@ for business calls. Mobile bootstrap and number inventory publish these defaults
 `voice-route` chooses them server-side, and `assertCallerIdForSession` also rejects
 unassigned overrides on conference/call paths. Admin PBX saves validate changed
 user/default lines against current ownership before the existing CAS save.
+
+## Canonical user and shared routing
+
+`number-routing.ts` owns scoped routing snapshots and pure mutation validation;
+`routes/admin-number-routing.ts` exposes GET/PUT through `/api/admin/[resource]`.
+Every request requires verified administrator access and the phoneNumbers
+entitlement. Superadmin must select a workspace explicitly. Responses whitelist
+number/user/target fields, never directory SIP credentials or another tenant.
+
+PUT carries `version`, `organizationId` and one action:
+
+- `user`: `extensionId`, `inboundNumbers`, `outboundCallerId`, and explicit
+  `confirmReassignment` when taking a number with another live destination.
+  Saves direct routes and caller ID in one PBX transaction, preserving other
+  profile fields. Deselected direct DIDs return to `main`; blank outbound inherits.
+- `route`: `number`, `destinationType`, `destinationId`. Edits the same records
+  used by the user screen and SIP/managed inbound routers. Targets must be active
+  same-tenant users or the tenant's configured ring groups, queues or IVRs.
+- `remove`: `number`. Leaves a disabled tombstone, clears matching user/default
+  caller IDs, and keeps the carrier asset. It does not release or purchase numbers.
+
+The version covers tenant numbers, outgoing assignments and valid destinations.
+It is checked against the latest config **inside** `savePbxConfig`'s existing
+transaction. Invalid inputs or stale versions do not partially write. The tenant
+mutation lease also serializes these writes with administrator user deletion.
+Verified-only numbers cannot receive calls, and carrier mode rejects managed lines.
+Missing legacy source with no destination is treated conservatively as verified,
+consistent with the existing phone-number access layer.
+
+`withLiveNumberRoutes` overlays canonical assignments on carrier read responses.
+`applyCarrierNumbers` only seeds destinations on first publication; republishing
+must not restore an older carrier-form route. This changes neither SIP transport
+nor the carrier activation contract. Existing `profile.did` values are not migrated
+into routes: that field never proved number ownership or caller intent.
+
+Validation: `number-routing.test.ts`, `carrier-number-service.test.ts`, the browser
+regression in the admin README, and root `bash verify.sh`. These prove local route
+selection and isolation with fixtures, not live carrier reachability or audio.

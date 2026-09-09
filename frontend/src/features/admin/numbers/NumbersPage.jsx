@@ -1,45 +1,63 @@
 import { useState } from 'react';
-import { PhoneIncoming, RefreshCw, Trash2 } from 'lucide-react';
-import { Empty, Modal, PageHeader } from '../components/ui.jsx';
-import { CarrierTrunksPanel } from './CarrierTrunksPanel.jsx';
+import { Network, PhoneIncoming, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { Empty, Field, Modal, PageHeader } from '../components/ui.jsx';
+import { routeLabel, useNumberRouting } from './useNumberRouting.js';
+import './number-routing.css';
 
-export function NumbersPage({ data, config, extensions, onRefresh, api }) {
-  const [removing, setRemoving] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const ownCarrier = data?.callingMode === 'carrier' || config.company.callingMode === 'carrier';
-  const legacyNumbers = ownCarrier ? data?.legacyNumbers || [] : data?.numbers || [];
-  async function removeNumber() {
-    setBusy(true); setError('');
-    try {
-      await api('/api/admin/carrier-trunks', { method: 'PATCH', body: {
-        action: 'remove-company-number', phoneNumber: removing.phoneNumber,
-      } });
-      setRemoving(null);
-      await onRefresh();
-    } catch (failure) { setError(failure.message); }
-    finally { setBusy(false); }
+export function NumbersPage({ config, onRefresh, onOpenTrunks, api }) {
+  const { data, error, busy, load, save } = useNumberRouting(api, config.activeOrganizationId);
+  const [draft, setDraft] = useState(null), [removing, setRemoving] = useState(null), [removeBusy, setRemoveBusy] = useState(false);
+  const [notice, setNotice] = useState(''), [failure, setFailure] = useState('');
+  async function refreshParent() {
+    try { await onRefresh?.(); }
+    catch { setFailure('Saved. Refresh the workspace to update the remaining views.'); }
   }
-  return <div className="page">
-    <PageHeader eyebrow="NUMBER MANAGEMENT" title="Phone numbers" subtitle="Bring your carrier's SIP trunk and numbers, then choose a destination for each line.">
-      <button className="secondary" onClick={onRefresh}><RefreshCw /> Refresh</button>
+  async function saveRoute(event) {
+    event.preventDefault(); setNotice(''); setFailure('');
+    const [destinationType, ...id] = draft.target.split(':');
+    const result = await save({ action: 'route', number: draft.number, destinationType, destinationId: id.join(':') });
+    if (result) { setDraft(null); setNotice('Inbound destination saved.'); await refreshParent(); }
+  }
+  async function removeNumber() {
+    setRemoveBusy(true); setFailure('');
+    try {
+      const result = await save({ action: 'remove', number: removing.number });
+      if (result) { setRemoving(null); await refreshParent(); }
+    } catch (error) { setFailure(error.message); }
+    finally { setRemoveBusy(false); }
+  }
+  return <div className="page number-routing-page">
+    <PageHeader eyebrow="ROUTING" title="Phone numbers" subtitle="Direct lines, shared numbers and inbound destinations.">
+      {onOpenTrunks && <button className="secondary" onClick={onOpenTrunks}><Network /> SIP trunks</button>}
+      <button className="secondary" disabled={busy || removeBusy} onClick={() => { setDraft(null); setFailure(''); setNotice(''); void load(); }}><RefreshCw /> Refresh</button>
     </PageHeader>
-    {error && <div className="error-banner" role="alert">{error}</div>}
-    <CarrierTrunksPanel api={api} config={config} extensions={extensions} onInventoryChange={onRefresh} />
-    {legacyNumbers.length > 0 && <section className="band">
-      <div className="section-title"><div><h2>{ownCarrier ? 'Previous company numbers' : 'Existing company numbers'}</h2>
-        <p>{ownCarrier ? 'These numbers are excluded from calling through your own carrier.' : 'Numbers already assigned to this workspace.'}</p></div></div>
-      <div className="table-shell"><table><thead><tr><th>Number</th><th>Company</th><th>Calling route</th><th /></tr></thead>
-        <tbody>{legacyNumbers.map(item => <tr key={item.id}><td><strong>{item.phoneNumber}</strong></td><td>{config.company.name}</td>
-          <td>{ownCarrier ? 'Not selected' : 'Existing managed service'}</td><td><button className="secondary" disabled={busy}
-            onClick={() => { setError(''); setRemoving(item); }} aria-label={`Remove ${item.phoneNumber} from company`}><Trash2 /> Remove from company</button></td></tr>)}</tbody>
-      </table></div>
-    </section>}
-    {!legacyNumbers.length && !data?.numbers?.length && <Empty icon={PhoneIncoming} title="Add your existing carrier numbers" copy="Enter your provider's SIP details and DID numbers above. Each number can have its own destination." />}
-    {removing && <Modal title="Remove company number" onClose={() => { if (!busy) setRemoving(null); }}>
-      <p>Remove <strong>{removing.phoneNumber}</strong> from this company's caller IDs and inbound routing?</p>
-      <p>The carrier account keeps the number. This does not purchase or release a carrier number.</p>
-      {error && <div className="error-banner" role="alert">{error}</div>}
-      <footer><button className="secondary" disabled={busy} onClick={() => setRemoving(null)}>Cancel</button>
-        <button className="danger" disabled={busy} onClick={removeNumber}>{busy ? 'Removing…' : 'Remove number'}</button></footer>
+    {(error || failure) && <div className="error-banner" role="alert">{error || failure}</div>}
+    {notice && <p role="status">{notice}</p>}
+    {!data ? <p role="status">{busy ? 'Loading number routes...' : 'Number routes unavailable.'}</p> : !data.numbers.length ?
+      <Empty icon={PhoneIncoming} title="No company numbers" copy="No numbers are published in this workspace." /> :
+      <div className="table-shell"><table><thead><tr><th>Number</th><th>Label</th><th>Inbound destination</th><th>Source</th><th /></tr></thead>
+        <tbody>{data.numbers.map(item => <tr key={item.number}><td><strong>{item.number}</strong></td><td>{item.label || '-'}</td>
+          <td>{routeLabel(item, data.targets)}</td><td>{item.source === 'carrier' ? 'Company carrier' : item.source === 'verified' ? 'Verified caller ID' : 'Managed number'}</td>
+          <td><div className="row-actions"><button disabled={busy || removeBusy || !item.available || item.source === 'verified'} onClick={() => {
+            setFailure(''); setNotice(''); setDraft({ number: item.number, current: routeLabel(item, data.targets), target: item.destinationType === 'unassigned' ? '' : item.destinationType + ':' + item.destinationId });
+          }} aria-label={'Route ' + item.number}>Edit route</button>
+            <button className="danger" disabled={busy || removeBusy} title="Remove from company" aria-label={'Remove ' + item.number + ' from company'} onClick={() => { setFailure(''); setRemoving(item); }}><Trash2 /></button>
+          </div></td></tr>)}</tbody></table></div>}
+    {draft && <Modal title="Inbound destination" subtitle={draft.number} onClose={() => { if (!busy) setDraft(null); }}>
+      <form className="modal-form" onSubmit={saveRoute}>
+        <p>Current destination: {draft.current}</p>
+        <Field label="New destination"><select aria-label="New destination" required disabled={busy} value={draft.target} onChange={event => setDraft({ ...draft, target: event.target.value })}>
+          <option value="" disabled>Select destination</option>{data.targets.map(target => <option key={target.type + ':' + target.id} value={target.type + ':' + target.id}>{target.label}</option>)}
+        </select></Field>
+        {error && <div role="alert" className="error-banner">{error}</div>}
+        <footer><button type="button" className="secondary" disabled={busy} onClick={() => setDraft(null)}>Cancel</button><button className="primary" disabled={busy}><Save /> Save route</button></footer>
+      </form>
+    </Modal>}
+    {removing && <Modal title="Remove company number" onClose={() => { if (!removeBusy) setRemoving(null); }}>
+      <p>Remove <strong>{removing.number}</strong> from this company's caller IDs and inbound routing?</p>
+      <p>The carrier account keeps the number. This does not release a carrier number.</p>
+      {(error || failure) && <div role="alert" className="error-banner">{error || failure}</div>}
+      <footer><button className="secondary" disabled={removeBusy} onClick={() => setRemoving(null)}>Cancel</button><button className="danger" disabled={removeBusy} onClick={removeNumber}>Remove number</button></footer>
     </Modal>}
   </div>;
 }

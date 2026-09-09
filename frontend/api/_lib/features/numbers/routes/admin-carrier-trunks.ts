@@ -6,7 +6,7 @@ import { requestOrganizationId, writeTenantScopeError } from '../../organization
 import { requireFeature } from '../../organizations/saas-access.js';
 import { listExtensions } from '../../organizations/pbx.js';
 import { carrierTrunks, CarrierTrunkError, normalizeCarrierTrunk } from '../carrier-trunk-store.js';
-import { removeCompanyNumber, useCarrierNumbers } from '../carrier-number-service.js';
+import { removeCompanyNumber, useCarrierNumbers, withLiveNumberRoutes } from '../carrier-number-service.js';
 import { carrierReadiness } from '../carrier-runtime.js';
 
 export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig, requireFeature, listExtensions, store: carrierTrunks }, numberOps = { removeCompanyNumber, useCarrierNumbers }) {
@@ -21,7 +21,7 @@ export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig,
       res.setHeader('Cache-Control', 'no-store');
       if (req.method === 'GET') return res.status(200).json({ trunks: (await deps.store.list(organizationId)).map(trunk => {
         const { status, reason } = carrierReadiness(trunk);
-        return { ...trunk, connectionStatus: status, connectionMessage: reason };
+        return { ...withLiveNumberRoutes(trunk, config), connectionStatus: status, connectionMessage: reason };
       }), callingMode: pbxForOrganization(config, organizationId).company.callingMode || 'managed' });
       if (req.body?.organizationId && req.body.organizationId !== organizationId) throw new CarrierTrunkError(409, 'This trunk belongs to another workspace.');
       if (req.method === 'PATCH') {
@@ -38,6 +38,13 @@ export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig,
         throw new CarrierTrunkError(400, 'Choose a supported carrier-number action.');
       }
       const draft = normalizeCarrierTrunk(req.body || {}, organizationId);
+      for (const number of draft.numbers) {
+        const live = config.numberAssignments[number.callerId];
+        if (live?.organizationId === organizationId && live.carrierTrunkId === draft.id
+          && (number.destinationType !== (live.destinationType || 'unassigned') || number.destinationId !== (live.destinationId || ''))) {
+          throw new CarrierTrunkError(409, 'Routing changed. Manage published destinations in Phone numbers or Users, then reload this trunk.');
+        }
+      }
       const pbx = pbxForOrganization(config, organizationId);
       const extensions = draft.numbers.some(item => item.destinationType === 'extension') ? await deps.listExtensions(organizationId) : [];
       for (const number of draft.numbers) {
@@ -48,14 +55,14 @@ export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig,
         if (targets && !targets.some(item => item.id === number.destinationId)) throw new CarrierTrunkError(400, 'Choose a destination from this company.');
       }
       const trunk = await deps.store.save(organizationId, { ...draft, password: req.body.password, revision: req.body.revision });
-      // Updating a published trunk also updates its per-number destinations.
+      // Publication updates inventory metadata without replacing live destinations.
       // Connection edits still require a matching operator deployment record.
       if (Object.values(config.numberAssignments).some(item => item.organizationId === organizationId && item.carrierTrunkId === trunk.id && !item.disabled)) {
         const subscription = await deps.requireFeature({ ...access.session, organizationId }, 'phoneNumbers', config);
         await numberOps.useCarrierNumbers(organizationId, trunk.id, trunk.revision, subscription.superadmin ? 10000 : subscription.plan!.limits.phoneNumbers);
       }
       const { status, reason } = carrierReadiness(trunk);
-      return res.status(200).json({ trunk: { ...trunk, connectionStatus: status, connectionMessage: reason } });
+      return res.status(200).json({ trunk: { ...withLiveNumberRoutes(trunk, await deps.readPbxConfig()), connectionStatus: status, connectionMessage: reason } });
     } catch (error) {
       if (writeTenantScopeError(res, error) || writeAuthError(res, error)) return;
       if (error instanceof CarrierTrunkError) return res.status(error.status).json({ error: error.message });

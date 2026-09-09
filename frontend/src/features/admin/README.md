@@ -52,12 +52,12 @@ verify this dependency order and checks the shared top brand on all viewport siz
 
 `numbers/CarrierTrunksPanel.jsx` adds editable company carrier configuration to
 SIP trunks. It uses the captured workspace API and remounts when the company
-changes. Each number has its own destination selector and can remain unassigned.
+changes. Carrier forms edit inventory and connection settings, not published routing.
 The panel labels saved configuration **Pending activation** because this form
 does not provision the SIP edge. Authentication is explicitly unconfirmed until
 the administrator selects the provider's method; the account reference is separate.
-Browser acceptance covers create, reopen, edit and retention of independent
-number destinations. Carrier call acceptance remains a separate gate.
+Browser acceptance covers create, reopen, edit and retention of live destinations.
+Carrier call acceptance remains a separate gate.
 
 `CarrierTrunkDetails.jsx` displays every saved company carrier entry with General,
 Options and a complete DID table directly on the SIP trunks page. No edit dialog
@@ -66,9 +66,36 @@ or per-number caller IDs and destinations. `Add SIP trunk` opens the company
 carrier form; the separate external connection action is `Add PBX registration`.
 The scoped stylesheet keeps number rows readable on narrow screens. Confirm the
 saved entry remains visible after a fresh page load, including unassigned DIDs.
-# Outgoing user assignment
+## User and shared number assignments
 
-Users > General > Outgoing line lists only enabled numbers in the selected
-customer workspace (carrier numbers only in carrier mode). Company default is
-the inherited option. A detached historical assignment is shown as unavailable,
-not silently substituted. Backend ownership checks and PBX CAS remain mandatory.
+- **Users > Edit > Numbers**: `users/UserNumbers.jsx` assigns zero or more direct
+  inbound numbers and a separate outbound caller ID. Blank outgoing selection
+  explicitly inherits the company default. Create the user first, then assign
+  numbers. The Users table and search include both assignments.
+- **Phone numbers**: `numbers/NumbersPage.jsx` edits each published number's
+  extension, main/receptionist, ring group, queue or IVR destination. This is also
+  the shared-routing view, not a second carrier configuration form.
+- **SIP trunks**: provider credentials, connection settings and DID inventory.
+  Published destinations are read-only here and cannot be overwritten by an old
+  carrier draft. Activation status remains distinct from number assignment.
+
+Both routing editors use `numbers/useNumberRouting.js` and the tenant-scoped
+`/api/admin/number-routing` endpoint. Inbound assignments are derived from live
+`numberAssignments`; there is no duplicate user DID list. The old `profile.did`
+metadata field is no longer editable and is cleared on a number-assignment save.
+The editor confirms reassignment from another destination; removing a direct
+number from a user returns that number to main/receptionist routing. This does
+not detach the number from the company. Explicit company removal is a separate,
+confirmed action on Phone numbers.
+
+Numbers save independently of identity/preferences. `AdminConsole.saveUser`
+retains fresh routing fields when saving General, avoiding stale-profile undo.
+Routing mutations carry a snapshot version; a conflict keeps the editor open
+and requires Reload numbers. No carrier activation or call is performed by save.
+
+Regression: `node --import tsx scripts/test-user-number-routing.mjs` mounts the
+real console with real route handlers and isolated persistence/auth fixtures.
+It exercises company admin and superadmin workflows, tenant filtering, distinct
+lines, shared routing, stale edits and narrow layouts. The carrier form regression
+remains `node scripts/test-carrier-admin.mjs`. Set `VOCIVO_TEST_ORIGIN` and
+`PLAYWRIGHT_MODULE` for the local environment.
